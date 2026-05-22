@@ -45,7 +45,7 @@ class SongSelectScene(BaseScene):
                     self.selected_map = beatmap
 
                     self.game.scene_manager.set_scene(
-                        GameplayScene(self.game)
+                        GameplayScene(self.game, self.selected_map)
                     )
 
     def update(self, dt):

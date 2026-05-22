@@ -15,9 +15,9 @@ class Game:
     def __init__(self):
 
         pygame.init()
-
-        from core.beatmap_loader import BeatmapLoader
+        pygame.mixer.init()
         
+        from core.beatmap_loader import BeatmapLoader
         self.beatmap_loader = BeatmapLoader()
         self.beatmaps = self.beatmap_loader.load_songs()
         self.screen = pygame.display.set_mode(
