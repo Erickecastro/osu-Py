@@ -1,9 +1,10 @@
 import pygame
 
 from scenes.base_scene import BaseScene
+from scenes.gameplay_scene import GameplayScene
 
 
-class GameplayScene(BaseScene):
+class SongSelectScene(BaseScene):
 
     def __init__(self, game):
 
@@ -16,7 +17,13 @@ class GameplayScene(BaseScene):
 
     def handle_event(self, event):
 
-        pass
+        if event.type == pygame.KEYDOWN:
+
+            if event.key == pygame.K_SPACE:
+
+                self.game.scene_manager.set_scene(
+                    GameplayScene(self.game)
+                )
 
     def update(self, dt):
 
@@ -24,12 +31,12 @@ class GameplayScene(BaseScene):
 
     def render(self, screen):
 
-        screen.fill((10, 10, 10))
+        screen.fill((40, 40, 60))
 
         text = self.font.render(
-            "Gameplay",
+            "Song Select - SPACE para jogar",
             True,
             (255, 255, 255)
         )
 
-        screen.blit(text, (540, 320))
+        screen.blit(text, (250, 300))
