@@ -15,3 +15,6 @@ class BaseScene:
     def render(self, screen):
 
         pass
+
+    def destroy(self):
+        pass

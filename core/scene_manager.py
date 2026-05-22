@@ -6,6 +6,11 @@ class SceneManager:
 
     def set_scene(self, scene):
 
+        if self.current_scene:
+
+            if hasattr(self.current_scene, "destroy"):
+                self.current_scene.destroy()
+
         self.current_scene = scene
 
     def handle_event(self, event):
