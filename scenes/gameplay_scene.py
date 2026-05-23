@@ -23,11 +23,22 @@ class GameplayScene(BaseScene):
         self.notes = beatmap["notes"]
 
         self.active_notes = []
+
         self.cs = self.beatmap["difficulty"]["CS"]
+        self.ar = self.beatmap["difficulty"]["AR"]
 
         self.circle_radius = int(
             54.4 - (4.48 * self.cs)
         )
+
+        if self.ar < 5:
+
+            self.approach_time = 1800 - (120 * self.ar)
+
+        else:
+
+            self.approach_time = 1200 - (150 * (self.ar - 5))
+
         self.find_audio()
 
     # -------------------------
@@ -76,7 +87,13 @@ class GameplayScene(BaseScene):
 
         for note in self.notes:
 
-            if (not note["active"]) and self.current_time >= note["time"]:
+            if (
+                (not note["active"])
+                and
+                self.current_time >= (
+                    note["time"] - self.approach_time
+                )
+            ):
 
                 note["active"] = True
                 self.active_notes.append(note)
@@ -142,6 +159,29 @@ class GameplayScene(BaseScene):
             # HIT CIRCLE
             if note["type"] == "circle":
 
+                time_left = note["time"] - self.current_time
+
+                progress = max(
+                    0,
+                    min(
+                        1,
+                        time_left / self.approach_time
+                    )
+                )
+
+                approach_radius = int(
+                    self.circle_radius +
+                    (progress * self.circle_radius * 3)
+                )
+
+                pygame.draw.circle(
+                    screen,
+                    (255, 255, 255),
+                    (scaled_x, scaled_y),
+                    approach_radius,
+                    3
+                )
+
                 pygame.draw.circle(
                     screen,
                     (0, 150, 255),
@@ -151,6 +191,29 @@ class GameplayScene(BaseScene):
 
             # SLIDER
             elif note["type"] == "slider":
+
+                time_left = note["time"] - self.current_time
+
+                progress = max(
+                    0,
+                    min(
+                        1,
+                        time_left / self.approach_time
+                    )
+                )
+
+                approach_radius = int(
+                    self.circle_radius +
+                    (progress * self.circle_radius * 3)
+                )
+
+                pygame.draw.circle(
+                    screen,
+                    (255, 255, 255),
+                    (scaled_x, scaled_y),
+                    approach_radius,
+                    3
+                )
 
                 # desenha linhas do slider
                 previous_x = scaled_x
@@ -171,7 +234,7 @@ class GameplayScene(BaseScene):
                         (255, 100, 255),
                         (previous_x, previous_y),
                         (point_x, point_y),
-                        12
+                        self.circle_radius * 2
                     )
 
                     previous_x = point_x
