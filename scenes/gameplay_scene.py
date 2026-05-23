@@ -11,6 +11,7 @@ class GameplayScene(BaseScene):
         super().__init__(game)
 
         self.beatmap = beatmap
+        print(self.beatmap["difficulty"])
 
         self.font = pygame.font.SysFont("arial", 40)
 
@@ -138,9 +139,56 @@ class GameplayScene(BaseScene):
                 offset_y + (note["y"] * scale)
             )
 
-            pygame.draw.circle(
-                screen,
-                (0, 150, 255),
-                (scaled_x, scaled_y),
-                30
-            )
+            # HIT CIRCLE
+            if note["type"] == "circle":
+
+                pygame.draw.circle(
+                    screen,
+                    (0, 150, 255),
+                    (scaled_x, scaled_y),
+                    30
+                )
+
+            # SLIDER
+            elif note["type"] == "slider":
+
+                # desenha linhas do slider
+                previous_x = scaled_x
+                previous_y = scaled_y
+
+                for point in note["curve_points"]:
+
+                    point_x = int(
+                        offset_x + (point["x"] * scale)
+                    )
+
+                    point_y = int(
+                        offset_y + (point["y"] * scale)
+                    )
+
+                    pygame.draw.line(
+                        screen,
+                        (255, 100, 255),
+                        (previous_x, previous_y),
+                        (point_x, point_y),
+                        12
+                    )
+
+                    previous_x = point_x
+                    previous_y = point_y
+
+                # cabeça do slider
+                pygame.draw.circle(
+                    screen,
+                    (255, 100, 255),
+                    (scaled_x, scaled_y),
+                    30
+                )
+
+                pygame.draw.circle(
+                    screen,
+                    (255, 255, 255),
+                    (scaled_x, scaled_y),
+                    30,
+                    4
+                )
