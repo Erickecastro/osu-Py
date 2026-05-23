@@ -11,8 +11,7 @@ class GameplayScene(BaseScene):
         super().__init__(game)
 
         self.beatmap = beatmap
-        print(self.beatmap["difficulty"])
-
+        
         self.font = pygame.font.SysFont("arial", 40)
 
         self.music_started = False
@@ -24,7 +23,11 @@ class GameplayScene(BaseScene):
         self.notes = beatmap["notes"]
 
         self.active_notes = []
+        self.cs = self.beatmap["difficulty"]["CS"]
 
+        self.circle_radius = int(
+            54.4 - (4.48 * self.cs)
+        )
         self.find_audio()
 
     # -------------------------
@@ -114,10 +117,7 @@ class GameplayScene(BaseScene):
         playfield_height = 384
 
         # calcula escala proporcional
-        scale = min(
-            1280 / playfield_width,
-            720 / playfield_height
-        )
+        scale = 720 / playfield_height
 
         # centraliza o playfield
         offset_x = (
@@ -146,7 +146,7 @@ class GameplayScene(BaseScene):
                     screen,
                     (0, 150, 255),
                     (scaled_x, scaled_y),
-                    30
+                    self.circle_radius
                 )
 
             # SLIDER
@@ -182,13 +182,13 @@ class GameplayScene(BaseScene):
                     screen,
                     (255, 100, 255),
                     (scaled_x, scaled_y),
-                    30
+                    self.circle_radius
                 )
 
                 pygame.draw.circle(
                     screen,
                     (255, 255, 255),
                     (scaled_x, scaled_y),
-                    30,
+                    self.circle_radius,
                     4
                 )
