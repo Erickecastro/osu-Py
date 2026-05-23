@@ -4,7 +4,6 @@ import pygame_gui
 from scenes.base_scene import BaseScene
 from scenes.song_select_scene import SongSelectScene
 
-
 class MainMenuScene(BaseScene):
 
     def __init__(self, game):
@@ -37,7 +36,7 @@ class MainMenuScene(BaseScene):
 
             if event.ui_element == self.play_button:
 
-                self.game.scene_manager.set_scene(
+                self.game.scene_manager.push_scene(
                     SongSelectScene(self.game)
                 )
 

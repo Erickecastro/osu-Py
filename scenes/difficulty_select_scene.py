@@ -2,16 +2,16 @@ import pygame
 import pygame_gui
 
 from scenes.base_scene import BaseScene
-from scenes.difficulty_select_scene import (
-    DifficultySelectScene
-)
+from scenes.gameplay_scene import GameplayScene
 
 
-class SongSelectScene(BaseScene):
+class DifficultySelectScene(BaseScene):
 
-    def __init__(self, game):
+    def __init__(self, game, beatmap):
 
         super().__init__(game)
+
+        self.beatmap = beatmap
 
         self.buttons = []
 
@@ -22,37 +22,52 @@ class SongSelectScene(BaseScene):
     # -------------------------
     def create_ui(self):
 
-        # evita duplicação
-        self.destroy()
+        # limpa referências antigas
+        self.buttons.clear()
 
-        # centralização automática
-        button_width = 500
-        button_height = 55
+        y = 150
 
-        x = (
-            self.game.WIDTH - button_width
-        ) // 2
+        for difficulty in self.beatmap["difficulties"]:
 
-        y = 120
+            version_name = difficulty["metadata"].get(
+                "Version",
+                "Unknown"
+            )
 
-        beatmaps = self.game.beatmaps
+            od = difficulty["difficulty"].get(
+                "OD",
+                0
+            )
 
-        for beatmap in beatmaps:
+            ar = difficulty["difficulty"].get(
+                "AR",
+                0
+            )
+
+            cs = difficulty["difficulty"].get(
+                "CS",
+                0
+            )
 
             btn = pygame_gui.elements.UIButton(
 
                 relative_rect=pygame.Rect(
-                    (x, y),
-                    (button_width, button_height)
+                    (390, y),
+                    (500, 50)
                 ),
 
-                text=beatmap["name"],
+                text=(
+                    f"{version_name}  |  "
+                    f"CS:{cs}  "
+                    f"AR:{ar}  "
+                    f"OD:{od}"
+                ),
 
                 manager=self.game.ui_manager
             )
 
             self.buttons.append(
-                (btn, beatmap)
+                (btn, difficulty)
             )
 
             y += 70
@@ -62,7 +77,7 @@ class SongSelectScene(BaseScene):
     # -------------------------
     def handle_event(self, event):
 
-        # voltar para menu principal
+        # voltar
         if event.type == pygame.KEYDOWN:
 
             if event.key == pygame.K_ESCAPE:
@@ -72,15 +87,15 @@ class SongSelectScene(BaseScene):
         # clique nos botões
         if event.type == pygame_gui.UI_BUTTON_PRESSED:
 
-            for btn, beatmap in self.buttons:
+            for btn, difficulty in self.buttons:
 
                 if event.ui_element == btn:
 
                     self.game.scene_manager.push_scene(
 
-                        DifficultySelectScene(
+                        GameplayScene(
                             self.game,
-                            beatmap
+                            difficulty
                         )
                     )
 
@@ -96,28 +111,7 @@ class SongSelectScene(BaseScene):
     # -------------------------
     def render(self, screen):
 
-        screen.fill((40, 40, 60))
-
-        # título
-        font = pygame.font.SysFont(
-            "arial",
-            48
-        )
-
-        text = font.render(
-            "Select Song",
-            True,
-            (255, 255, 255)
-        )
-
-        screen.blit(
-            text,
-            (
-                self.game.WIDTH // 2
-                - text.get_width() // 2,
-                40
-            )
-        )
+        screen.fill((25, 25, 40))
 
     # -------------------------
     # DESTROY

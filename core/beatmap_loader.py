@@ -5,55 +5,187 @@ class BeatmapLoader:
 
     SONGS_PATH = "songs"
 
+    # -------------------------
+    # LOAD SONGS
+    # -------------------------
     def load_songs(self):
 
         beatmaps = []
 
+        # cria pasta songs caso não exista
         if not os.path.exists(self.SONGS_PATH):
+
+            os.makedirs(self.SONGS_PATH)
+
             return beatmaps
 
+        # percorre todas as músicas
         for folder in os.listdir(self.SONGS_PATH):
 
-            path = os.path.join(self.SONGS_PATH, folder)
+            path = os.path.join(
+                self.SONGS_PATH,
+                folder
+            )
 
-            if os.path.isdir(path):
+            if not os.path.isdir(path):
 
-                beatmap_data = {
-                    "name": folder,
-                    "path": path,
-                    "notes": [],
-                    "difficulty": {}
-                }
+                continue
 
-                osu_file = self.find_osu_file(path)
+            beatmap_data = {
+                "name": folder,
+                "path": path,
+                "difficulties": []
+            }
 
-                if osu_file:
+            osu_files = self.find_osu_files(path)
 
-                    notes = self.parse_hitobjects(osu_file)
-                    difficulty = self.parse_difficulty(osu_file)
-                    beatmap_data["difficulty"] = difficulty
-                    
-                    beatmap_data["notes"] = notes
+            # sem .osu
+            if len(osu_files) == 0:
+
+                continue
+
+            # carrega dificuldades
+            for osu_file in osu_files:
+
+                try:
+
+                    notes = self.parse_hitobjects(
+                        osu_file
+                    )
+
+                    difficulty = self.parse_difficulty(
+                        osu_file
+                    )
+
+                    metadata = self.parse_metadata(
+                        osu_file
+                    )
+
+                    difficulty_data = {
+                        "name": folder,
+                        "path": path,
+                        "osu_file": osu_file,
+                        "notes": notes,
+                        "metadata": metadata,
+                        "difficulty": difficulty
+                    }
+
+                    beatmap_data[
+                        "difficulties"
+                    ].append(
+                        difficulty_data
+                    )
+
+                except Exception as e:
+
+                    print(
+                        f"Erro ao carregar {osu_file}"
+                    )
+
+                    print(e)
+
+            # adiciona apenas se houver dificuldades
+            if len(
+                beatmap_data["difficulties"]
+            ) > 0:
 
                 beatmaps.append(beatmap_data)
 
+        # ordena alfabeticamente
+        beatmaps.sort(
+            key=lambda x: x["name"].lower()
+        )
+
         return beatmaps
 
-    def find_osu_file(self, path):
+    # -------------------------
+    # METADATA
+    # -------------------------
+    def parse_metadata(self, osu_file):
+
+        metadata = {
+            "Title": "Unknown",
+            "Artist": "Unknown",
+            "Creator": "Unknown",
+            "Version": "Unknown"
+        }
+
+        with open(
+            osu_file,
+            "r",
+            encoding="utf-8",
+            errors="ignore"
+        ) as file:
+
+            lines = file.readlines()
+
+        metadata_section = False
+
+        for line in lines:
+
+            line = line.strip()
+
+            if line == "[Metadata]":
+
+                metadata_section = True
+
+                continue
+
+            if (
+                metadata_section
+                and
+                line.startswith("[")
+            ):
+
+                break
+
+            if metadata_section:
+
+                if ":" not in line:
+
+                    continue
+
+                key, value = line.split(
+                    ":",
+                    1
+                )
+
+                metadata[
+                    key.strip()
+                ] = value.strip()
+
+        return metadata
+
+    # -------------------------
+    # FIND .OSU FILES
+    # -------------------------
+    def find_osu_files(self, path):
+
+        osu_files = []
 
         for file in os.listdir(path):
 
             if file.endswith(".osu"):
 
-                return os.path.join(path, file)
+                osu_files.append(
+                    os.path.join(path, file)
+                )
 
-        return None
+        return osu_files
 
+    # -------------------------
+    # HITOBJECTS
+    # -------------------------
     def parse_hitobjects(self, osu_file):
 
         notes = []
 
-        with open(osu_file, "r", encoding="utf-8") as file:
+        with open(
+            osu_file,
+            "r",
+            encoding="utf-8",
+            errors="ignore"
+        ) as file:
 
             lines = file.readlines()
 
@@ -64,72 +196,157 @@ class BeatmapLoader:
             line = line.strip()
 
             if line == "[HitObjects]":
+
                 hitobjects_section = True
+
                 continue
 
-            if hitobjects_section:
+            if not hitobjects_section:
 
-                if line == "":
-                    continue
+                continue
 
-                parts = line.split(",")
+            if line == "":
 
-                if len(parts) >= 4:
+                continue
 
-                    x = int(parts[0])
-                    y = int(parts[1])
-                    time = int(parts[2])
+            parts = line.split(",")
 
-                    object_type = int(parts[3])
+            if len(parts) < 4:
 
-                    # -------------------------
-                    # HIT CIRCLE
-                    # -------------------------
-                    if object_type & 1:
+                continue
 
-                        notes.append({
-                            "type": "circle",
-                            "x": x,
-                            "y": y,
-                            "time": time,
-                            "active": False
-                        })
+            try:
 
-                    # -------------------------
-                    # SLIDER
-                    # -------------------------
-                    elif object_type & 2:
+                x = int(parts[0])
+                y = int(parts[1])
+                time = int(parts[2])
 
-                        curve_points = []
+                object_type = int(parts[3])
 
-                        if len(parts) > 5:
+            except:
 
-                            curve_data = parts[5]
+                continue
 
-                            curve_parts = curve_data.split("|")
+            # -------------------------
+            # HIT CIRCLE
+            # -------------------------
+            if object_type & 1:
 
-                            for point in curve_parts[1:]:
+                notes.append({
+                    "type": "circle",
+                    "x": x,
+                    "y": y,
+                    "time": time,
+                    "active": False
+                })
 
-                                if ":" in point:
+            # -------------------------
+            # SLIDER
+            # -------------------------
+            elif object_type & 2:
 
-                                    px, py = point.split(":")
+                curve_points = []
 
-                                    curve_points.append({
-                                        "x": int(px),
-                                        "y": int(py)
-                                    })
+                if len(parts) > 5:
 
-                        notes.append({
-                            "type": "slider",
-                            "x": x,
-                            "y": y,
-                            "time": time,
-                            "curve_points": curve_points,
-                            "active": False
-                        })
+                    curve_data = parts[5]
+
+                    curve_parts = curve_data.split("|")
+
+                    for point in curve_parts[1:]:
+
+                        if ":" in point:
+
+                            try:
+
+                                px, py = point.split(":")
+
+                                curve_points.append({
+                                    "x": int(px),
+                                    "y": int(py)
+                                })
+
+                            except:
+
+                                pass
+
+                # suaviza slider
+                curve_points = (
+                    self.generate_slider_path(
+                        curve_points
+                    )
+                )
+
+                notes.append({
+                    "type": "slider",
+                    "x": x,
+                    "y": y,
+                    "time": time,
+                    "curve_points": curve_points,
+                    "active": False
+                })
+
+        # ordena notas por tempo
+        notes.sort(
+            key=lambda note: note["time"]
+        )
 
         return notes
-    
+
+    # -------------------------
+    # SLIDER SMOOTHING
+    # -------------------------
+    def generate_slider_path(self, points):
+
+        smooth_points = []
+
+        if len(points) < 2:
+
+            return points
+
+        for i in range(len(points) - 1):
+
+            start = points[i]
+            end = points[i + 1]
+
+            steps = 20
+
+            for step in range(steps):
+
+                t = step / steps
+
+                x = (
+                    start["x"]
+                    +
+                    (
+                        end["x"]
+                        - start["x"]
+                    ) * t
+                )
+
+                y = (
+                    start["y"]
+                    +
+                    (
+                        end["y"]
+                        - start["y"]
+                    ) * t
+                )
+
+                smooth_points.append({
+                    "x": x,
+                    "y": y
+                })
+
+        smooth_points.append(
+            points[-1]
+        )
+
+        return smooth_points
+
+    # -------------------------
+    # DIFFICULTY
+    # -------------------------
     def parse_difficulty(self, osu_file):
 
         difficulty = {
@@ -141,7 +358,12 @@ class BeatmapLoader:
             "SliderTickRate": 1
         }
 
-        with open(osu_file, "r", encoding="utf-8") as file:
+        with open(
+            osu_file,
+            "r",
+            encoding="utf-8",
+            errors="ignore"
+        ) as file:
 
             lines = file.readlines()
 
@@ -152,44 +374,67 @@ class BeatmapLoader:
             line = line.strip()
 
             if line == "[Difficulty]":
+
                 difficulty_section = True
+
                 continue
 
-            # terminou seção
-            if difficulty_section and line.startswith("["):
+            if (
+                difficulty_section
+                and
+                line.startswith("[")
+            ):
+
                 break
 
-            if difficulty_section:
+            if not difficulty_section:
 
-                if ":" not in line:
-                    continue
+                continue
 
-                key, value = line.split(":", 1)
+            if ":" not in line:
 
-                key = key.strip()
-                value = value.strip()
+                continue
 
-                try:
+            key, value = line.split(
+                ":",
+                1
+            )
 
-                    if key == "CircleSize":
-                        difficulty["CS"] = float(value)
+            key = key.strip()
+            value = value.strip()
 
-                    elif key == "ApproachRate":
-                        difficulty["AR"] = float(value)
+            try:
 
-                    elif key == "OverallDifficulty":
-                        difficulty["OD"] = float(value)
+                if key == "CircleSize":
 
-                    elif key == "HPDrainRate":
-                        difficulty["HP"] = float(value)
+                    difficulty["CS"] = float(value)
 
-                    elif key == "SliderMultiplier":
-                        difficulty["SliderMultiplier"] = float(value)
+                elif key == "ApproachRate":
 
-                    elif key == "SliderTickRate":
-                        difficulty["SliderTickRate"] = float(value)
+                    difficulty["AR"] = float(value)
 
-                except:
-                    pass
+                elif key == "OverallDifficulty":
+
+                    difficulty["OD"] = float(value)
+
+                elif key == "HPDrainRate":
+
+                    difficulty["HP"] = float(value)
+
+                elif key == "SliderMultiplier":
+
+                    difficulty[
+                        "SliderMultiplier"
+                    ] = float(value)
+
+                elif key == "SliderTickRate":
+
+                    difficulty[
+                        "SliderTickRate"
+                    ] = float(value)
+
+            except:
+
+                pass
 
         return difficulty
