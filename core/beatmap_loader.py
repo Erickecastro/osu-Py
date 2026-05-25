@@ -245,6 +245,7 @@ class BeatmapLoader:
             # -------------------------
             elif object_type & 2:
 
+                curve_type = "L"
                 curve_points = []
 
                 if len(parts) > 5:
@@ -253,6 +254,11 @@ class BeatmapLoader:
 
                     curve_parts = curve_data.split("|")
 
+                    # extrai tipo de curva (L, B, C, P)
+                    if len(curve_parts) > 0:
+                        curve_type = curve_parts[0]
+
+                    # extrai pontos de controle
                     for point in curve_parts[1:]:
 
                         if ":" in point:
@@ -270,10 +276,11 @@ class BeatmapLoader:
 
                                 pass
 
-                # suaviza slider
-                curve_points = (
+                # gera pontos suavizados baseado no tipo
+                smooth_points = (
                     self.generate_slider_path(
-                        curve_points
+                        curve_points,
+                        curve_type
                     )
                 )
 
@@ -282,7 +289,8 @@ class BeatmapLoader:
                     "x": x,
                     "y": y,
                     "time": time,
-                    "curve_points": curve_points,
+                    "curve_points": smooth_points,
+                    "curve_type": curve_type,
                     "active": False
                 })
 
@@ -294,54 +302,81 @@ class BeatmapLoader:
         return notes
 
     # -------------------------
-    # SLIDER SMOOTHING
+    # BEZIER CURVE
     # -------------------------
-    def generate_slider_path(self, points):
+    def bezier_point(self, points, t):
+        """Calcula um ponto em uma curva Bezier usando De Casteljau (iterativo)"""
+        # cópia dos pontos para não modificar original
+        current_points = [{"x": p["x"], "y": p["y"]} for p in points]
+        
+        # aplica interpolação linear até restar um ponto
+        while len(current_points) > 1:
+            new_points = []
+            for i in range(len(current_points) - 1):
+                x = current_points[i]["x"] + (current_points[i + 1]["x"] - current_points[i]["x"]) * t
+                y = current_points[i]["y"] + (current_points[i + 1]["y"] - current_points[i]["y"]) * t
+                new_points.append({"x": x, "y": y})
+            current_points = new_points
+        
+        return current_points[0]
 
+    # -------------------------
+    # LINEAR CURVE
+    # -------------------------
+    def generate_linear_path(self, points, steps=25):
+        """Gera uma linha reta entre os pontos"""
         smooth_points = []
-
-        if len(points) < 2:
-
-            return points
-
+        
         for i in range(len(points) - 1):
-
             start = points[i]
             end = points[i + 1]
-
-            steps = 20
-
+            
             for step in range(steps):
-
                 t = step / steps
+                
+                x = int(start["x"] + (end["x"] - start["x"]) * t)
+                y = int(start["y"] + (end["y"] - start["y"]) * t)
+                
+                smooth_points.append({"x": x, "y": y})
+        
+        smooth_points.append({
+            "x": int(points[-1]["x"]),
+            "y": int(points[-1]["y"])
+        })
+        
+        return smooth_points
 
-                x = (
-                    start["x"]
-                    +
-                    (
-                        end["x"]
-                        - start["x"]
-                    ) * t
-                )
-
-                y = (
-                    start["y"]
-                    +
-                    (
-                        end["y"]
-                        - start["y"]
-                    ) * t
-                )
-
+    # -------------------------
+    # SLIDER SMOOTHING (MAIN)
+    # -------------------------
+    def generate_slider_path(self, points, curve_type="L"):
+        """Gera caminho suavizado do slider baseado no tipo de curva"""
+        
+        smooth_points = []
+        
+        if len(points) < 1:
+            return smooth_points
+        
+        if len(points) == 1:
+            return points
+        
+        # tipos de curva: L (Linear), B (Bezier), C (Catmull), P (Perfect Circle)
+        if curve_type in ["B", "P", "C"]:
+            # Bezier, Perfect Circle e Catmull usam interpolação suave
+            # Reduzido para 25 passos para performance
+            steps = 25
+            for step in range(steps + 1):
+                t = step / steps
+                point = self.bezier_point(points, t)
                 smooth_points.append({
-                    "x": x,
-                    "y": y
+                    "x": int(point["x"]),
+                    "y": int(point["y"])
                 })
-
-        smooth_points.append(
-            points[-1]
-        )
-
+        
+        else:
+            # Linear ou desconhecido
+            smooth_points = self.generate_linear_path(points, steps=25)
+        
         return smooth_points
 
     # -------------------------

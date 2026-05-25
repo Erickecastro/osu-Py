@@ -451,106 +451,139 @@ class GameplayScene(BaseScene):
                         "y": note["y"]
                     }
 
-                ] + note["curve_points"]
+                ] + note.get("curve_points", [])
 
+                # valida e converte pontos
                 for point in all_points:
 
-                    point_x, point_y = (
-                        self.scale_position(
-                            point["x"],
-                            point["y"]
+                    try:
+
+                        point_x, point_y = (
+                            self.scale_position(
+                                point["x"],
+                                point["y"]
+                            )
                         )
+
+                        # garante inteiros
+                        point_x = int(point_x)
+                        point_y = int(point_y)
+
+                        slider_points.append(
+                            (point_x, point_y)
+                        )
+
+                    except (ValueError, TypeError, KeyError):
+
+                        continue
+
+                # desenha corpo do slider
+                if len(slider_points) > 1:
+
+                    # largura da linha (aumentada para melhor visibilidade)
+                    border_width = max(
+                        3,
+                        int(self.scaled_radius * 1.8)
                     )
 
-                    slider_points.append(
-                        (point_x, point_y)
+                    body_width = max(
+                        2,
+                        int(self.scaled_radius * 1.2)
                     )
 
-                # -------------------------
-                # SLIDER BODY
-                # -------------------------
-                for point in slider_points:
+                    # desenha border (cinza escuro)
+                    for i in range(
+                        len(slider_points) - 1
+                    ):
 
-                    # outline
+                        pygame.draw.line(
+
+                            screen,
+
+                            (40, 40, 40),
+
+                            slider_points[i],
+
+                            slider_points[i + 1],
+
+                            border_width
+                        )
+
+                    # desenha body (rosa)
+                    for i in range(
+                        len(slider_points) - 1
+                    ):
+
+                        pygame.draw.line(
+
+                            screen,
+
+                            (255, 105, 180),
+
+                            slider_points[i],
+
+                            slider_points[i + 1],
+
+                            body_width
+                        )
+
+                # desenha head (início)
+                if len(slider_points) > 0:
+
+                    head_pos = slider_points[0]
+
                     pygame.draw.circle(
 
                         screen,
 
-                        (25, 25, 25),
+                        (0, 150, 255),
 
-                        point,
+                        head_pos,
 
-                        self.scaled_radius * 0.92
+                        self.scaled_radius
                     )
 
-                    # corpo
                     pygame.draw.circle(
 
                         screen,
 
-                        (255, 105, 180),
+                        (255, 255, 255),
 
-                        point,
+                        head_pos,
 
-                        int(
-                            self.scaled_radius
-                            * 0.74
-                        )
+                        self.scaled_radius,
+
+                        3
                     )
 
-                # -------------------------
-                # SLIDER HEAD
-                # -------------------------
-                pygame.draw.circle(
+                # desenha tail (fim)
+                if len(slider_points) > 0:
 
-                    screen,
+                    tail_pos = slider_points[-1]
 
-                    (255, 105, 180),
+                    pygame.draw.circle(
 
-                    slider_points[0],
+                        screen,
 
-                    self.scaled_radius
-                )
+                        (0, 150, 255),
 
-                pygame.draw.circle(
+                        tail_pos,
 
-                    screen,
+                        self.scaled_radius
+                    )
 
-                    (255, 255, 255),
+                    pygame.draw.circle(
 
-                    slider_points[0],
+                        screen,
 
-                    self.scaled_radius,
+                        (255, 255, 255),
 
-                    3
-                )
+                        tail_pos,
 
-                # -------------------------
-                # SLIDER TAIL
-                # -------------------------
-                pygame.draw.circle(
+                        self.scaled_radius,
 
-                    screen,
-
-                    (255, 105, 180),
-
-                    slider_points[-1],
-
-                    self.scaled_radius
-                )
-
-                pygame.draw.circle(
-
-                    screen,
-
-                    (255, 255, 255),
-
-                    slider_points[-1],
-
-                    self.scaled_radius,
-
-                    3
-                )
+                        3
+                    )
 
     # -------------------------
     # DESTROY
