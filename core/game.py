@@ -3,9 +3,7 @@ import pygame_gui
 
 from core.beatmap_loader import BeatmapLoader
 from core.scene_manager import SceneManager
-
 from scenes.main_menu_scene import MainMenuScene
-
 
 class Game:
 
@@ -92,12 +90,10 @@ class Game:
 
         self.create_window()
 
-        # recria UI manager
         self.ui_manager = pygame_gui.UIManager(
             (self.WIDTH, self.HEIGHT)
         )
 
-        # recria UI da cena atual
         current_scene = (
             self.scene_manager.current_scene
         )

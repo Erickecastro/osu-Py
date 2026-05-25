@@ -12,20 +12,46 @@ class MainMenuScene(BaseScene):
 
         self.font = pygame.font.SysFont("arial", 60)
 
+        self.play_button = None
+        self.settings_button = None
+        self.exit_button = None
+
+        self.create_ui()
+
+    # -------------------------
+    # UI
+    # -------------------------
+    def create_ui(self):
+
+        # Limpar botões antigos
+        self.destroy()
+
+        # Dimensões dos botões
+        button_width = 200
+        button_height = 60
+        button_spacing = 20
+
+        # Calcular posição X centralizada
+        button_x = (self.game.WIDTH - button_width) // 2
+
+        # Calcular posição Y centralizada
+        total_buttons_height = (button_height * 3) + (button_spacing * 2)
+        button_y = (self.game.HEIGHT - total_buttons_height) // 2
+
         self.play_button = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((540, 250), (200, 60)),
+            relative_rect=pygame.Rect((button_x, button_y), (button_width, button_height)),
             text="PLAY",
             manager=self.game.ui_manager
         )
 
         self.settings_button = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((540, 330), (200, 60)),
+            relative_rect=pygame.Rect((button_x, button_y + button_height + button_spacing), (button_width, button_height)),
             text="SETTINGS",
             manager=self.game.ui_manager
         )
 
         self.exit_button = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((540, 410), (200, 60)),
+            relative_rect=pygame.Rect((button_x, button_y + (button_height + button_spacing) * 2), (button_width, button_height)),
             text="EXIT",
             manager=self.game.ui_manager
         )
@@ -59,9 +85,21 @@ class MainMenuScene(BaseScene):
             (255, 255, 255)
         )
 
-        screen.blit(title, (520, 120))
+        # Centralizar título horizontalmente
+        title_x = (self.game.WIDTH - title.get_width()) // 2
+        title_y = 60
+
+        screen.blit(title, (title_x, title_y))
     def destroy(self):
 
-        self.play_button.kill()
-        self.settings_button.kill()
-        self.exit_button.kill()
+        if self.play_button:
+            self.play_button.kill()
+            self.play_button = None
+
+        if self.settings_button:
+            self.settings_button.kill()
+            self.settings_button = None
+
+        if self.exit_button:
+            self.exit_button.kill()
+            self.exit_button = None
