@@ -7,6 +7,9 @@ from scenes.base_scene import BaseScene
 
 class GameplayScene(BaseScene):
 
+    MAX_SLIDER_SURFACE_SIZE = 4096
+    MAX_SLIDER_POINTS = 4000
+
     def __init__(self, game, beatmap):
 
         super().__init__(game)
@@ -14,44 +17,28 @@ class GameplayScene(BaseScene):
         self.game = game
         self.beatmap = beatmap
 
-        # -------------------------
-        # CURSOR
-        # -------------------------
         pygame.mouse.set_visible(False)
 
-        # -------------------------
-        # FONT
-        # -------------------------
         self.font = pygame.font.SysFont(
             "arial",
             32
         )
 
-        # -------------------------
-        # AUDIO
-        # -------------------------
         self.music_started = False
         self.music_path = None
 
         self.start_time = None
         self.current_time = 0
 
-        # -------------------------
-        # NOTES
-        # -------------------------
         self.notes = copy.deepcopy(
             beatmap["notes"]
         )
 
         for note in self.notes:
-
             note["active"] = False
 
         self.active_notes = []
 
-        # -------------------------
-        # DIFFICULTY
-        # -------------------------
         self.cs = self.beatmap[
             "difficulty"
         ]["CS"]
@@ -60,16 +47,10 @@ class GameplayScene(BaseScene):
             "difficulty"
         ]["AR"]
 
-        # -------------------------
-        # CIRCLE SIZE
-        # -------------------------
         self.circle_radius = (
             54.4 - (4.48 * self.cs)
         )
 
-        # -------------------------
-        # APPROACH RATE
-        # -------------------------
         if self.ar < 5:
 
             self.approach_time = (
@@ -84,9 +65,6 @@ class GameplayScene(BaseScene):
                 )
             )
 
-        # -------------------------
-        # PLAYFIELD
-        # -------------------------
         self.playfield_width = 512
         self.playfield_height = 384
 
@@ -99,7 +77,6 @@ class GameplayScene(BaseScene):
             / self.playfield_height
         )
 
-        # centralização
         self.offset_x = (
             self.game.WIDTH
             - (
@@ -116,9 +93,6 @@ class GameplayScene(BaseScene):
             )
         ) / 2
 
-        # -------------------------
-        # NOTE SIZE
-        # -------------------------
         self.scaled_radius = int(
             self.circle_radius
             * self.scale
@@ -126,10 +100,8 @@ class GameplayScene(BaseScene):
         )
 
         if self.scaled_radius < 40:
-
             self.scaled_radius = 40
 
-        # margem de segurança
         self.safe_margin = (
             self.scaled_radius + 16
         )
@@ -146,15 +118,11 @@ class GameplayScene(BaseScene):
 
         self.find_audio()
 
-    # -------------------------
-    # AUDIO
-    # -------------------------
     def find_audio(self):
 
         if not os.path.exists(
             self.beatmap["path"]
         ):
-
             return
 
         for file in os.listdir(
@@ -196,15 +164,8 @@ class GameplayScene(BaseScene):
 
             except Exception as e:
 
-                print(
-                    "Erro ao tocar música:"
-                )
-
                 print(e)
 
-    # -------------------------
-    # EVENTS
-    # -------------------------
     def handle_event(self, event):
 
         if event.type == pygame.KEYDOWN:
@@ -215,9 +176,6 @@ class GameplayScene(BaseScene):
 
                 self.game.scene_manager.pop_scene()
 
-    # -------------------------
-    # UPDATE
-    # -------------------------
     def update(self, dt):
 
         if not self.music_started:
@@ -233,7 +191,6 @@ class GameplayScene(BaseScene):
                 - self.start_time
             )
 
-        # ativa notas
         for note in self.notes:
 
             if (
@@ -251,7 +208,6 @@ class GameplayScene(BaseScene):
                     note
                 )
 
-        # remove expiradas
         self.active_notes = [
 
             note
@@ -265,9 +221,6 @@ class GameplayScene(BaseScene):
             )
         ]
 
-    # -------------------------
-    # SCALE POSITION
-    # -------------------------
     def scale_position(self, x, y):
 
         scaled_x = int(
@@ -290,16 +243,221 @@ class GameplayScene(BaseScene):
 
         return scaled_x, scaled_y
 
-    # -------------------------
-    # RENDER
-    # -------------------------
+    def _build_slider_points(self, note):
+
+        all_points = [
+            {
+                "x": note["x"],
+                "y": note["y"]
+            }
+        ] + note.get("curve_points", [])
+
+        scaled_points = []
+
+        for point in all_points:
+
+            try:
+
+                scaled_x, scaled_y = (
+                    self.scale_position(
+                        point["x"],
+                        point["y"]
+                    )
+                )
+
+                scaled_points.append(
+                    (
+                        int(round(scaled_x)),
+                        int(round(scaled_y))
+                    )
+                )
+
+            except:
+                continue
+
+        filtered_points = []
+
+        for point in scaled_points:
+
+            if (
+                not filtered_points
+                or
+                point != filtered_points[-1]
+            ):
+
+                filtered_points.append(point)
+
+        if len(filtered_points) > self.MAX_SLIDER_POINTS:
+            filtered_points = filtered_points[
+                ::2
+            ]
+
+        return filtered_points
+
+    def _draw_slider(self, screen, slider_points):
+
+        if len(slider_points) < 2:
+            return
+
+        min_x = min(p[0] for p in slider_points)
+        max_x = max(p[0] for p in slider_points)
+
+        min_y = min(p[1] for p in slider_points)
+        max_y = max(p[1] for p in slider_points)
+
+        padding = int(
+            self.scaled_radius * 2
+        )
+
+        width = int(
+            (max_x - min_x)
+            + padding * 2
+        )
+
+        height = int(
+            (max_y - min_y)
+            + padding * 2
+        )
+
+        if width <= 0 or height <= 0:
+            return
+
+        width = min(
+            width,
+            self.MAX_SLIDER_SURFACE_SIZE
+        )
+
+        height = min(
+            height,
+            self.MAX_SLIDER_SURFACE_SIZE
+        )
+
+        try:
+
+            slider_surface = pygame.Surface(
+                (width, height),
+                pygame.SRCALPHA
+            )
+
+        except:
+            return
+
+        local_points = []
+
+        for point in slider_points:
+
+            local_x = int(
+                point[0]
+                - min_x
+                + padding
+            )
+
+            local_y = int(
+                point[1]
+                - min_y
+                + padding
+            )
+
+            if (
+                -100 <= local_x <= width + 100
+                and
+                -100 <= local_y <= height + 100
+            ):
+
+                local_points.append(
+                    (local_x, local_y)
+                )
+
+        outline_radius = int(
+            self.scaled_radius * 1.18
+        )
+
+        body_radius = int(
+            self.scaled_radius * 0.88
+        )
+
+        outline_color = (
+            30,
+            30,
+            30,
+            220
+        )
+
+        body_color = (
+            255,
+            105,
+            180,
+            255
+        )
+
+        step = 1
+
+        if len(local_points) > 2000:
+            step = 2
+
+        for point in local_points[::step]:
+
+            pygame.draw.circle(
+                slider_surface,
+                outline_color,
+                point,
+                outline_radius
+            )
+
+        for point in local_points[::step]:
+
+            pygame.draw.circle(
+                slider_surface,
+                body_color,
+                point,
+                body_radius
+            )
+
+        screen.blit(
+            slider_surface,
+            (
+                min_x - padding,
+                min_y - padding
+            )
+        )
+
+        head_pos = slider_points[0]
+        tail_pos = slider_points[-1]
+
+        pygame.draw.circle(
+            screen,
+            (0, 150, 255),
+            head_pos,
+            self.scaled_radius
+        )
+
+        pygame.draw.circle(
+            screen,
+            (255, 255, 255),
+            head_pos,
+            self.scaled_radius,
+            3
+        )
+
+        pygame.draw.circle(
+            screen,
+            (0, 150, 255),
+            tail_pos,
+            self.scaled_radius
+        )
+
+        pygame.draw.circle(
+            screen,
+            (255, 255, 255),
+            tail_pos,
+            self.scaled_radius,
+            3
+        )
+
     def render(self, screen):
 
         screen.fill((10, 10, 10))
 
-        # -------------------------
-        # TEXT
-        # -------------------------
         title = self.beatmap[
             "metadata"
         ].get(
@@ -336,9 +494,6 @@ class GameplayScene(BaseScene):
             (20, 60)
         )
 
-        # -------------------------
-        # PLAYFIELD BORDER
-        # -------------------------
         pygame.draw.rect(
 
             screen,
@@ -357,9 +512,6 @@ class GameplayScene(BaseScene):
             3
         )
 
-        # -------------------------
-        # DRAW NOTES
-        # -------------------------
         for note in self.active_notes:
 
             scaled_x, scaled_y = (
@@ -369,9 +521,6 @@ class GameplayScene(BaseScene):
                 )
             )
 
-            # -------------------------
-            # APPROACH CIRCLE
-            # -------------------------
             time_left = (
                 note["time"]
                 - self.current_time
@@ -408,9 +557,6 @@ class GameplayScene(BaseScene):
                 2
             )
 
-            # -------------------------
-            # HIT CIRCLE
-            # -------------------------
             if note["type"] == "circle":
 
                 pygame.draw.circle(
@@ -437,161 +583,15 @@ class GameplayScene(BaseScene):
                     3
                 )
 
-            # -------------------------
-            # SLIDER
-            # -------------------------
             elif note["type"] == "slider":
 
-                slider_points = []
+                slider_points = self._build_slider_points(note)
 
-                all_points = [
+                self._draw_slider(
+                    screen,
+                    slider_points
+                )
 
-                    {
-                        "x": note["x"],
-                        "y": note["y"]
-                    }
-
-                ] + note.get("curve_points", [])
-
-                # valida e converte pontos
-                for point in all_points:
-
-                    try:
-
-                        point_x, point_y = (
-                            self.scale_position(
-                                point["x"],
-                                point["y"]
-                            )
-                        )
-
-                        # garante inteiros
-                        point_x = int(point_x)
-                        point_y = int(point_y)
-
-                        slider_points.append(
-                            (point_x, point_y)
-                        )
-
-                    except (ValueError, TypeError, KeyError):
-
-                        continue
-
-                # desenha corpo do slider (apenas se há pontos válidos)
-                if len(slider_points) > 1:
-
-                    # largura da linha (aumentada para melhor visibilidade)
-                    border_width = max(
-                        3,
-                        int(self.scaled_radius * 1.8)
-                    )
-
-                    body_width = max(
-                        2,
-                        int(self.scaled_radius * 1.2)
-                    )
-
-                    # desenha border (cinza escuro)
-                    for i in range(
-                        len(slider_points) - 1
-                    ):
-
-                        pygame.draw.line(
-
-                            screen,
-
-                            (40, 40, 40),
-
-                            slider_points[i],
-
-                            slider_points[i + 1],
-
-                            border_width
-                        )
-
-                    # desenha body (rosa)
-                    for i in range(
-                        len(slider_points) - 1
-                    ):
-
-                        pygame.draw.line(
-
-                            screen,
-
-                            (255, 105, 180),
-
-                            slider_points[i],
-
-                            slider_points[i + 1],
-
-                            body_width
-                        )
-
-                # desenha head (início)
-                if len(slider_points) > 0:
-
-                    head_pos = slider_points[0]
-
-                    # aumenta levemente o raio do head para sliders muito pequenos
-                    head_extra = max(2, int(self.scaled_radius * 0.12))
-                    head_radius = self.scaled_radius + head_extra
-
-                    pygame.draw.circle(
-
-                        screen,
-
-                        (0, 150, 255),
-
-                        head_pos,
-
-                        head_radius
-                    )
-
-                    pygame.draw.circle(
-
-                        screen,
-
-                        (255, 255, 255),
-
-                        head_pos,
-
-                        head_radius,
-
-                        3
-                    )
-
-                # desenha tail (fim)
-                if len(slider_points) > 0:
-
-                    tail_pos = slider_points[-1]
-
-                    pygame.draw.circle(
-
-                        screen,
-
-                        (0, 150, 255),
-
-                        tail_pos,
-
-                        self.scaled_radius
-                    )
-
-                    pygame.draw.circle(
-
-                        screen,
-
-                        (255, 255, 255),
-
-                        tail_pos,
-
-                        self.scaled_radius,
-
-                        3
-                    )
-
-    # -------------------------
-    # DESTROY
-    # -------------------------
     def destroy(self):
 
         pygame.mixer.music.stop()

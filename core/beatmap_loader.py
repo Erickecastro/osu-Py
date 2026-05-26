@@ -1,6 +1,7 @@
 import os
 import hashlib
 import math
+from bisect import bisect_right
 
 
 class BeatmapLoader:
@@ -612,13 +613,56 @@ class BeatmapLoader:
         for point in points:
             x = point.get("x", 0)
             y = point.get("y", 0)
-            
+
             # Apenas converte para int, permite pontos fora dos limites
             # (pygame fará clipping na renderização)
             validated.append({"x": int(x), "y": int(y)})
-        
+
         return validated
-    
+
+    def _resample_slider_path(self, points, min_points=24, spacing=3.5):
+        """Reamostra o caminho do slider com densidade mínima para evitar buracos."""
+        if len(points) < 2:
+            return points
+
+        total_length = 0.0
+        cumulative = [0.0]
+
+        for i in range(len(points) - 1):
+            dx = points[i + 1]["x"] - points[i]["x"]
+            dy = points[i + 1]["y"] - points[i]["y"]
+            segment = math.hypot(dx, dy)
+            total_length += segment
+            cumulative.append(total_length)
+
+        if total_length <= 0:
+            return points
+
+        target_count = max(min_points, min(320, int(total_length / spacing)))
+
+        if len(points) >= target_count:
+            return points
+
+        resampled = []
+        for i in range(target_count):
+            target_distance = cumulative[-1] * (i / (target_count - 1))
+            idx = bisect_right(cumulative, target_distance) - 1
+            idx = max(0, min(idx, len(points) - 2))
+
+            start = points[idx]
+            end = points[idx + 1]
+            segment_start = cumulative[idx]
+            segment_end = cumulative[idx + 1]
+            segment_length = max(segment_end - segment_start, 1e-6)
+            t = (target_distance - segment_start) / segment_length
+            t = max(0.0, min(1.0, t))
+
+            x = start["x"] + (end["x"] - start["x"]) * t
+            y = start["y"] + (end["y"] - start["y"]) * t
+            resampled.append({"x": int(round(x)), "y": int(round(y))})
+
+        return self._validate_slider_points(resampled)
+
     def generate_slider_path(self, points, curve_type="L"):
         """Gera caminho suavizado do slider com interpolacao adaptativa"""
         
@@ -688,10 +732,13 @@ class BeatmapLoader:
         
         # Valida pontos para garantir que não saem do playfield
         smooth_points = self._validate_slider_points(smooth_points)
-        
+
+        # Reamostra o caminho para evitar gaps visíveis em sliders longos
+        smooth_points = self._resample_slider_path(smooth_points)
+
         # Armazena no cache
         self._curve_cache[cache_key] = smooth_points
-        
+
         return smooth_points
 
     # -------------------------
@@ -788,3 +835,140 @@ class BeatmapLoader:
                 pass
 
         return difficulty
+    
+
+    def _densify_uniform(self, points, spacing=6.0):
+
+        if len(points) < 2:
+            return points
+
+        densified = []
+
+        for i in range(len(points) - 1):
+
+            p1 = points[i]
+            p2 = points[i + 1]
+
+            dx = p2["x"] - p1["x"]
+            dy = p2["y"] - p1["y"]
+
+            dist = math.hypot(dx, dy)
+
+            if dist <= 0:
+                continue
+
+            steps = max(
+                1,
+                int(dist / spacing)
+            )
+
+            for s in range(steps):
+
+                if len(densified) > 5000:
+                    break
+
+                t = s / steps
+
+                x = p1["x"] + dx * t
+                y = p1["y"] + dy * t
+
+                densified.append({
+                    "x": int(round(x)),
+                    "y": int(round(y))
+                })
+
+        densified.append(points[-1])
+
+        return densified
+
+
+
+    def generate_slider_path(self, points, curve_type="L"):
+
+        smooth_points = []
+
+        if len(points) < 1:
+            return smooth_points
+
+        if len(points) == 1:
+            return points
+
+        cache_key = self._curve_hash(
+            points,
+            curve_type
+        )
+
+        if cache_key in self._curve_cache:
+            return self._curve_cache[
+                cache_key
+            ]
+
+        if curve_type == "B":
+
+            smooth_points = (
+                self.generate_bezier_path_adaptive(
+                    points,
+                    tol=0.6,
+                    max_depth=14
+                )
+            )
+
+        elif curve_type == "C":
+
+            smooth_points = (
+                self.generate_catmull_path(
+                    points,
+                    steps=10
+                )
+            )
+
+        elif curve_type == "P":
+
+            smooth_points = (
+                self.generate_perfect_path(
+                    points,
+                    steps_per_rad=10
+                )
+            )
+
+        else:
+
+            smooth_points = (
+                self.generate_linear_path(
+                    points,
+                    steps=24
+                )
+            )
+
+        smooth_points = (
+            self._validate_slider_points(
+                smooth_points
+            )
+        )
+
+        smooth_points = (
+            self._densify_uniform(
+                smooth_points,
+                spacing=6.0
+            )
+        )
+
+        smooth_points = (
+            self._resample_slider_path(
+                smooth_points,
+                min_points=32,
+                spacing=5.0
+            )
+        )
+
+        if len(smooth_points) > 2500:
+
+            smooth_points = smooth_points[
+                ::2
+            ]
+
+        self._curve_cache[
+            cache_key
+        ] = smooth_points
+
+        return smooth_points
