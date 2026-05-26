@@ -468,19 +468,10 @@ class GameplayScene(BaseScene):
                         # garante inteiros
                         point_x = int(point_x)
                         point_y = int(point_y)
-                        
-                        # Proteção contra pontos inválidos
-                        # Limita a área visível com margem
-                        screen_width = self.game.screen.get_width()
-                        screen_height = self.game.screen.get_height()
-                        
-                        # Aceita pontos um pouco fora da tela (para renderização de linhas)
-                        MARGIN = 500
-                        if (-MARGIN <= point_x <= screen_width + MARGIN and
-                            -MARGIN <= point_y <= screen_height + MARGIN):
-                            slider_points.append(
-                                (point_x, point_y)
-                            )
+
+                        slider_points.append(
+                            (point_x, point_y)
+                        )
 
                     except (ValueError, TypeError, KeyError):
 
@@ -541,6 +532,10 @@ class GameplayScene(BaseScene):
 
                     head_pos = slider_points[0]
 
+                    # aumenta levemente o raio do head para sliders muito pequenos
+                    head_extra = max(2, int(self.scaled_radius * 0.12))
+                    head_radius = self.scaled_radius + head_extra
+
                     pygame.draw.circle(
 
                         screen,
@@ -549,7 +544,7 @@ class GameplayScene(BaseScene):
 
                         head_pos,
 
-                        self.scaled_radius
+                        head_radius
                     )
 
                     pygame.draw.circle(
@@ -560,7 +555,7 @@ class GameplayScene(BaseScene):
 
                         head_pos,
 
-                        self.scaled_radius,
+                        head_radius,
 
                         3
                     )

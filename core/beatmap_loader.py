@@ -1,5 +1,6 @@
 import os
 import hashlib
+import math
 
 
 class BeatmapLoader:
@@ -358,6 +359,220 @@ class BeatmapLoader:
         return result
 
 
+    def _distance(self, p1, p2):
+        return math.hypot(p1.get("x", 0) - p2.get("x", 0), p1.get("y", 0) - p2.get("y", 0))
+
+
+    def _adaptive_subdivide(self, points, t0, t1, p0, p1, tol, depth, max_depth):
+        """Subdivide curve between t0 and t1 until flatness <= tol.
+
+        Returns a list of points approximating the curve segment.
+        """
+        tm = (t0 + t1) / 2.0
+        pm = self.bezier_point(points, tm)
+
+        # mid point of chord
+        mid_chord = {"x": (p0["x"] + p1["x"]) / 2.0, "y": (p0["y"] + p1["y"]) / 2.0}
+
+        # flatness measure: distance between real midpoint and chord midpoint
+        d = self._distance(pm, mid_chord)
+
+        if d <= tol or depth >= max_depth:
+            return [p0, p1]
+
+        left = self._adaptive_subdivide(points, t0, tm, p0, pm, tol, depth + 1, max_depth)
+        right = self._adaptive_subdivide(points, tm, t1, pm, p1, tol, depth + 1, max_depth)
+
+        # combine, avoiding duplicate midpoint
+        return left[:-1] + right
+
+
+    def generate_bezier_path_adaptive(self, points, tol=0.5, max_depth=16):
+        """Generate an adaptive polyline approximation for a Bezier-like curve.
+
+        Uses recursive subdivision based on midpoint chord error. Returns list of int points.
+        """
+        if not points:
+            return []
+
+        p0 = self.bezier_point(points, 0.0)
+        p1 = self.bezier_point(points, 1.0)
+
+        pts = self._adaptive_subdivide(points, 0.0, 1.0, p0, p1, tol, 0, max_depth)
+
+        # convert to integer coords and remove consecutive duplicates
+        out = []
+        prev = None
+        for p in pts:
+            ip = {"x": int(round(p["x"])), "y": int(round(p["y"]))}
+            if prev is None or ip["x"] != prev["x"] or ip["y"] != prev["y"]:
+                out.append(ip)
+                prev = ip
+
+        return out
+
+
+    def generate_catmull_path(self, points, steps=16):
+        """Generate Catmull-Rom spline through the given points."""
+        if not points:
+            return []
+
+        def catmull_rom(p0, p1, p2, p3, t):
+            t2 = t * t
+            t3 = t2 * t
+            x = 0.5 * ((2 * p1["x"]) + (-p0["x"] + p2["x"]) * t + (2*p0["x"] - 5*p1["x"] + 4*p2["x"] - p3["x"]) * t2 + (-p0["x"] + 3*p1["x"] - 3*p2["x"] + p3["x"]) * t3)
+            y = 0.5 * ((2 * p1["y"]) + (-p0["y"] + p2["y"]) * t + (2*p0["y"] - 5*p1["y"] + 4*p2["y"] - p3["y"]) * t2 + (-p0["y"] + 3*p1["y"] - 3*p2["y"] + p3["y"]) * t3)
+            return {"x": x, "y": y}
+
+        out = []
+        n = len(points)
+        # duplicate endpoints for natural extension
+        pts = [points[0]] + points + [points[-1]]
+        for i in range(0, n - 1):
+            p0 = pts[i]
+            p1 = pts[i+1]
+            p2 = pts[i+2]
+            p3 = pts[i+3]
+            for s in range(steps):
+                t = s / steps
+                p = catmull_rom(p0, p1, p2, p3, t)
+                out.append({"x": int(round(p["x"])), "y": int(round(p["y"]))})
+        out.append({"x": int(points[-1]["x"]), "y": int(points[-1]["y"])})
+        # remove consecutive duplicates
+        filtered = []
+        prev = None
+        for p in out:
+            if prev is None or p["x"] != prev["x"] or p["y"] != prev["y"]:
+                filtered.append(p)
+                prev = p
+        return filtered
+
+
+    def _rdp(self, points, epsilon=1.0):
+        """Ramer-Douglas-Peucker algorithm for polyline simplification."""
+        if not points:
+            return []
+
+        def perp_dist(a, b, c):
+            # distance from c to line a-b
+            ax, ay = a['x'], a['y']
+            bx, by = b['x'], b['y']
+            cx, cy = c['x'], c['y']
+            dx = bx - ax
+            dy = by - ay
+            if dx == 0 and dy == 0:
+                return math.hypot(cx - ax, cy - ay)
+            return abs(dy*cx - dx*cy + bx*ay - by*ax) / math.hypot(dx, dy)
+
+        def rdp_rec(pts):
+            if len(pts) < 3:
+                return pts
+            maxd = 0.0
+            idx = 0
+            for i in range(1, len(pts)-1):
+                d = perp_dist(pts[0], pts[-1], pts[i])
+                if d > maxd:
+                    maxd = d
+                    idx = i
+            if maxd > epsilon:
+                left = rdp_rec(pts[:idx+1])
+                right = rdp_rec(pts[idx:])
+                return left[:-1] + right
+            else:
+                return [pts[0], pts[-1]]
+
+        return rdp_rec(points)
+
+
+    def generate_perfect_path(self, points, steps_per_rad=10):
+        """Approximate perfect-circle (arc) sliders by fitting circles through triples of points and sampling arcs.
+
+        If points < 3 fallback to linear/bezier.
+        """
+        if not points:
+            return []
+        if len(points) < 3:
+            # fallback to bezier sampling
+            return self.generate_bezier_path_adaptive(points)
+
+        def circle_from_three(a, b, c):
+            # returns (cx, cy, r) or None if collinear
+            ax, ay = a["x"], a["y"]
+            bx, by = b["x"], b["y"]
+            cx, cy = c["x"], c["y"]
+            d = 2 * (ax*(by-cy) + bx*(cy-ay) + cx*(ay-by))
+            if abs(d) < 1e-6:
+                return None
+            ux = ((ax*ax+ay*ay)*(by-cy) + (bx*bx+by*by)*(cy-ay) + (cx*cx+cy*cy)*(ay-by)) / d
+            uy = ((ax*ax+ay*ay)*(cx-bx) + (bx*bx+by*by)*(ax-cx) + (cx*cx+cy*cy)*(bx-ax)) / d
+            r = math.hypot(ax-ux, ay-uy)
+            return ux, uy, r
+
+        def angle_of(p, cx, cy):
+            return math.atan2(p["y"] - cy, p["x"] - cx)
+
+        out = []
+        # For each consecutive triple, build an arc from p0->p2 passing through p1
+        for i in range(len(points) - 2):
+            a = points[i]
+            b = points[i+1]
+            c = points[i+2]
+            circ = circle_from_three(a, b, c)
+            if circ is None:
+                # collinear: fallback to linear segment a->c
+                out.append({"x": int(round(a["x"])), "y": int(round(a["y"]))})
+                out.append({"x": int(round(c["x"])), "y": int(round(c["y"]))})
+                continue
+            cx, cy, r = circ
+            a_ang = angle_of(a, cx, cy)
+            c_ang = angle_of(c, cx, cy)
+            # choose direction that passes through b
+            b_ang = angle_of(b, cx, cy)
+            # normalize angles
+            def norm(a):
+                while a < 0:
+                    a += 2*math.pi
+                while a >= 2*math.pi:
+                    a -= 2*math.pi
+                return a
+            a_n = norm(a_ang)
+            b_n = norm(b_ang)
+            c_n = norm(c_ang)
+            # determine shortest arc that contains b
+            # try both directions
+            def contains(a2, b2, c2):
+                if a2 <= c2:
+                    return a2 <= b2 <= c2
+                return b2 >= a2 or b2 <= c2
+            if contains(a_n, b_n, c_n):
+                start, end = a_n, c_n
+            else:
+                # swap to take longer arc
+                start, end = c_n, a_n
+            # compute angle span
+            span = end - start
+            if span <= 0:
+                span += 2*math.pi
+            samp = max(2, int(abs(span) * steps_per_rad))
+            for s in range(samp + 1):
+                t = s / samp
+                ang = start + t * span
+                x = cx + math.cos(ang) * r
+                y = cy + math.sin(ang) * r
+                out.append({"x": int(round(x)), "y": int(round(y))})
+
+        # ensure last point present
+        out.append({"x": int(round(points[-1]["x"])), "y": int(round(points[-1]["y"]))})
+        # remove consecutive duplicates
+        filtered = []
+        prev = None
+        for p in out:
+            if prev is None or p["x"] != prev["x"] or p["y"] != prev["y"]:
+                filtered.append(p)
+                prev = p
+        return filtered
+
+
     def generate_linear_path(self, points, steps=25):
         """Gera uma linha reta entre os pontos"""
         smooth_points = []
@@ -392,17 +607,14 @@ class BeatmapLoader:
         return hashlib.md5(combined.encode()).hexdigest()
     
     def _validate_slider_points(self, points):
-        """Valida e limita pontos do slider aos limites do playfield osu! (0-512 x 0-384)"""
+        """Valida pontos do slider - apenas converte para int, sem limitar"""
         validated = []
         for point in points:
             x = point.get("x", 0)
             y = point.get("y", 0)
             
-            # Limita aos limites do playfield
-            # Playground osu! é 512x384
-            x = max(0, min(512, x))
-            y = max(0, min(384, y))
-            
+            # Apenas converte para int, permite pontos fora dos limites
+            # (pygame fará clipping na renderização)
             validated.append({"x": int(x), "y": int(y)})
         
         return validated
@@ -423,37 +635,53 @@ class BeatmapLoader:
         if cache_key in self._curve_cache:
             return self._curve_cache[cache_key]
         
-        # INTERPOLACAO ADAPTATIVA: mais passos para curvas simples, menos para complexas
-        # Assim evitamos pontos duplicados/inválidos em curvas muito agressivas
+        # INTERPOLACAO ADAPTATIVA: decide amostragem baseada no comprimento geométrico
         num_control_points = len(points)
-        
-        if num_control_points <= 3:
-            # Curvas muito simples: máxima interpolação
-            steps = 20
-        elif num_control_points <= 10:
-            # Curvas normais: interpolação padrão
-            steps = 15
-        elif num_control_points <= 50:
-            # Curvas complexas: menos interpolação
-            steps = 10
-        elif num_control_points <= 200:
-            # Curvas muito complexas: interpolação mínima
-            steps = 5
-        else:
-            # Curvas extremamente complexas (5000+ pontos): apenas os pontos naturais
-            steps = 2
+
+        # calcula comprimento aproximado do poligono de controle
+        control_length = 0.0
+        for i in range(len(points) - 1):
+            dx = points[i+1]["x"] - points[i]["x"]
+            dy = points[i+1]["y"] - points[i]["y"]
+            control_length += math.hypot(dx, dy)
+
+        # determina steps baseado no comprimento: meta ~1-4 unidades por amostra
+        # evita explosão com limites
+        est_steps = max(8, int(control_length / 3))
+        steps = min(est_steps, 800)
         
         # tipos de curva: L (Linear), B (Bezier), C (Catmull), P (Perfect Circle)
-        if curve_type in ["B", "P", "C"]:
-            # Bezier, Perfect Circle e Catmull usam interpolação suave
-            for step in range(steps + 1):
-                t = step / steps
-                point = self.bezier_point(points, t)
-                smooth_points.append({
-                    "x": int(point["x"]),
-                    "y": int(point["y"])
-                })
-        
+        # Se há muitos pontos de controle, simplifica primeiro para evitar custo explosivo
+        if num_control_points > 1000:
+            simplified = self._rdp(points, epsilon=1.0)
+            # se a simplificação reduziu bastante, substitui
+            if len(simplified) < num_control_points:
+                points = simplified
+                num_control_points = len(points)
+
+        if curve_type == "B":
+            # Bezier: adaptive subdivision
+            if num_control_points > 200:
+                for step in range(steps + 1):
+                    t = step / steps
+                    point = self.bezier_point(points, t)
+                    smooth_points.append({
+                        "x": int(point["x"]),
+                        "y": int(point["y"])
+                    })
+            else:
+                tol = 0.5
+                max_depth = 16
+                smooth_points = self.generate_bezier_path_adaptive(points, tol=tol, max_depth=max_depth)
+
+        elif curve_type == "C":
+            # Catmull-Rom: use dedicated generator
+            smooth_points = self.generate_catmull_path(points, steps=12)
+
+        elif curve_type == "P":
+            # Perfect circle arcs: fit arcs through triples
+            smooth_points = self.generate_perfect_path(points, steps_per_rad=12)
+
         else:
             # Linear: interpolação linear entre pontos
             smooth_points = self.generate_linear_path(points, steps=steps)
