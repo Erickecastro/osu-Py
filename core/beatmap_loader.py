@@ -254,6 +254,7 @@ class BeatmapLoader:
 
                 curve_type = "L"
                 curve_points = []
+                slider_distance = 0.0
 
                 if len(parts) > 5:
 
@@ -283,11 +284,21 @@ class BeatmapLoader:
 
                                 pass
 
+                # extrai slider_distance (comprimento do slider)
+                if len(parts) > 7:
+                    try:
+                        slider_distance = float(parts[7])
+                    except:
+                        slider_distance = 0.0
+
                 # gera pontos suavizados baseado no tipo
                 smooth_points = (
                     self.generate_slider_path(
                         curve_points,
-                        curve_type
+                        curve_type,
+                        slider_distance,
+                        x,
+                        y
                     )
                 )
 
@@ -298,6 +309,7 @@ class BeatmapLoader:
                     "time": time,
                     "curve_points": smooth_points,
                     "curve_type": curve_type,
+                    "slider_distance": slider_distance,
                     "active": False
                 })
 
@@ -663,83 +675,7 @@ class BeatmapLoader:
 
         return self._validate_slider_points(resampled)
 
-    def generate_slider_path(self, points, curve_type="L"):
-        """Gera caminho suavizado do slider com interpolacao adaptativa"""
-        
-        smooth_points = []
-        
-        if len(points) < 1:
-            return smooth_points
-        
-        if len(points) == 1:
-            return points
-        
-        # Verifica cache
-        cache_key = self._curve_hash(points, curve_type)
-        if cache_key in self._curve_cache:
-            return self._curve_cache[cache_key]
-        
-        # INTERPOLACAO ADAPTATIVA: decide amostragem baseada no comprimento geométrico
-        num_control_points = len(points)
 
-        # calcula comprimento aproximado do poligono de controle
-        control_length = 0.0
-        for i in range(len(points) - 1):
-            dx = points[i+1]["x"] - points[i]["x"]
-            dy = points[i+1]["y"] - points[i]["y"]
-            control_length += math.hypot(dx, dy)
-
-        # determina steps baseado no comprimento: meta ~1-4 unidades por amostra
-        # evita explosão com limites
-        est_steps = max(8, int(control_length / 3))
-        steps = min(est_steps, 800)
-        
-        # tipos de curva: L (Linear), B (Bezier), C (Catmull), P (Perfect Circle)
-        # Se há muitos pontos de controle, simplifica primeiro para evitar custo explosivo
-        if num_control_points > 1000:
-            simplified = self._rdp(points, epsilon=1.0)
-            # se a simplificação reduziu bastante, substitui
-            if len(simplified) < num_control_points:
-                points = simplified
-                num_control_points = len(points)
-
-        if curve_type == "B":
-            # Bezier: adaptive subdivision
-            if num_control_points > 200:
-                for step in range(steps + 1):
-                    t = step / steps
-                    point = self.bezier_point(points, t)
-                    smooth_points.append({
-                        "x": int(point["x"]),
-                        "y": int(point["y"])
-                    })
-            else:
-                tol = 0.5
-                max_depth = 16
-                smooth_points = self.generate_bezier_path_adaptive(points, tol=tol, max_depth=max_depth)
-
-        elif curve_type == "C":
-            # Catmull-Rom: use dedicated generator
-            smooth_points = self.generate_catmull_path(points, steps=12)
-
-        elif curve_type == "P":
-            # Perfect circle arcs: fit arcs through triples
-            smooth_points = self.generate_perfect_path(points, steps_per_rad=12)
-
-        else:
-            # Linear: interpolação linear entre pontos
-            smooth_points = self.generate_linear_path(points, steps=steps)
-        
-        # Valida pontos para garantir que não saem do playfield
-        smooth_points = self._validate_slider_points(smooth_points)
-
-        # Reamostra o caminho para evitar gaps visíveis em sliders longos
-        smooth_points = self._resample_slider_path(smooth_points)
-
-        # Armazena no cache
-        self._curve_cache[cache_key] = smooth_points
-
-        return smooth_points
 
     # -------------------------
     # DIFFICULTY
@@ -883,7 +819,8 @@ class BeatmapLoader:
 
 
 
-    def generate_slider_path(self, points, curve_type="L"):
+    def generate_slider_path(self, points, curve_type="L", slider_distance=0.0, start_x=0, start_y=0):
+        """Gera caminho do slider com normalização de comprimento"""
 
         smooth_points = []
 
@@ -891,84 +828,165 @@ class BeatmapLoader:
             return smooth_points
 
         if len(points) == 1:
+            # Se tem apenas um ponto de controle, estende em linha reta
+            if slider_distance > 0:
+                end_x = points[0]["x"]
+                end_y = points[0]["y"]
+                direction_x = end_x - start_x
+                direction_y = end_y - start_y
+                dist_to_point = math.hypot(direction_x, direction_y)
+                
+                if dist_to_point > 0:
+                    # Normaliza direção
+                    direction_x /= dist_to_point
+                    direction_y /= dist_to_point
+                    
+                    # Calcula ponto final na distância correta
+                    final_x = start_x + direction_x * slider_distance
+                    final_y = start_y + direction_y * slider_distance
+                    
+                    # Cria pontos intermediários
+                    steps = max(16, int(slider_distance / 2))
+                    for i in range(steps + 1):
+                        t = i / max(1, steps)
+                        x = start_x + direction_x * (slider_distance * t)
+                        y = start_y + direction_y * (slider_distance * t)
+                        smooth_points.append({"x": int(round(x)), "y": int(round(y))})
+                    return smooth_points
+            
             return points
 
-        cache_key = self._curve_hash(
-            points,
-            curve_type
-        )
+        # Inicia com o ponto inicial do slider
+        all_points = [{"x": start_x, "y": start_y}] + points
 
-        if cache_key in self._curve_cache:
-            return self._curve_cache[
-                cache_key
-            ]
-
+        # Interpola baseado no tipo de curva
         if curve_type == "B":
-
-            smooth_points = (
-                self.generate_bezier_path_adaptive(
-                    points,
-                    tol=0.6,
-                    max_depth=14
-                )
+            smooth_points = self.generate_bezier_path_adaptive(
+                all_points,
+                tol=0.6,
+                max_depth=14
             )
-
         elif curve_type == "C":
-
-            smooth_points = (
-                self.generate_catmull_path(
-                    points,
-                    steps=10
-                )
+            smooth_points = self.generate_catmull_path(
+                all_points,
+                steps=10
             )
-
         elif curve_type == "P":
-
-            smooth_points = (
-                self.generate_perfect_path(
-                    points,
-                    steps_per_rad=10
-                )
+            smooth_points = self.generate_perfect_path(
+                all_points,
+                steps_per_rad=10
+            )
+        else:  # Linear
+            smooth_points = self.generate_linear_path(
+                all_points,
+                steps=24
             )
 
-        else:
-
-            smooth_points = (
-                self.generate_linear_path(
-                    points,
-                    steps=24
-                )
-            )
-
-        smooth_points = (
-            self._validate_slider_points(
-                smooth_points
-            )
+        smooth_points = self._validate_slider_points(smooth_points)
+        
+        # Densifica para evitar gaps
+        smooth_points = self._densify_uniform(
+            smooth_points,
+            spacing=6.0
         )
 
-        smooth_points = (
-            self._densify_uniform(
+        # Normaliza o comprimento do slider se foi especificado
+        if slider_distance > 0 and len(smooth_points) > 1:
+            smooth_points = self._normalize_slider_length(
                 smooth_points,
-                spacing=6.0
+                slider_distance
             )
-        )
-
-        smooth_points = (
-            self._resample_slider_path(
-                smooth_points,
-                min_points=32,
-                spacing=5.0
-            )
+        
+        # Reamostra
+        smooth_points = self._resample_slider_path(
+            smooth_points,
+            min_points=32,
+            spacing=5.0
         )
 
         if len(smooth_points) > 2500:
-
-            smooth_points = smooth_points[
-                ::2
-            ]
-
-        self._curve_cache[
-            cache_key
-        ] = smooth_points
+            smooth_points = smooth_points[::2]
 
         return smooth_points
+
+    def _normalize_slider_length(self, points, target_length):
+        """Normaliza o comprimento do slider para corresponder ao slider_distance especificado"""
+        
+        if len(points) < 2 or target_length <= 0:
+            return points
+        
+        # Calcula comprimento total do caminho interpolado
+        total_length = 0.0
+        arc_lengths = [0.0]
+        
+        for i in range(1, len(points)):
+            p1 = points[i - 1]
+            p2 = points[i]
+            dx = p2["x"] - p1["x"]
+            dy = p2["y"] - p1["y"]
+            segment_length = math.hypot(dx, dy)
+            total_length += segment_length
+            arc_lengths.append(total_length)
+        
+        if total_length <= 0:
+            return points
+        
+        # Se o caminho é muito curto ou muito longo, tenta resampling
+        scale_factor = target_length / total_length
+        
+        # Se a proporção está muito próxima (90-110%), retorna como está
+        if scale_factor >= 0.9 and scale_factor <= 1.1:
+            return points
+        
+        # Cria novo caminho resamplado no comprimento alvo
+        # Usa interpolação paramétrica ao longo da curva original
+        resampled = [points[0]]
+        num_samples = max(32, int(target_length / 2.5))
+        
+        for sample in range(1, num_samples + 1):
+            # Distância no caminho original que corresponde ao sample
+            target_distance_scaled = (sample / num_samples) * target_length
+            
+            # Encontra qual segmento contém esse comprimento no mapa original
+            # Usa proporção inversa para encontrar no caminho original
+            distance_in_original = target_distance_scaled / scale_factor if scale_factor > 0 else 0
+            
+            # Busca binária para encontrar o índice do ponto mais próximo
+            for i in range(len(arc_lengths) - 1):
+                if arc_lengths[i] <= distance_in_original <= arc_lengths[i + 1]:
+                    p1 = points[i]
+                    p2 = points[i + 1]
+                    
+                    # Interpola linearmente dentro do segmento
+                    segment_length = arc_lengths[i + 1] - arc_lengths[i]
+                    
+                    if segment_length > 0:
+                        t = (distance_in_original - arc_lengths[i]) / segment_length
+                        t = max(0, min(1, t))
+                    else:
+                        t = 0
+                    
+                    x = p1["x"] + (p2["x"] - p1["x"]) * t
+                    y = p1["y"] + (p2["y"] - p1["y"]) * t
+                    
+                    resampled.append({"x": int(round(x)), "y": int(round(y))})
+                    break
+        
+        # Garante que o último ponto está incluído
+        if len(resampled) > 0 and (len(resampled) < 2 or resampled[-1] != points[-1]):
+            resampled.append(points[-1])
+        
+        # Recalcula para verificar o comprimento final
+        final_length = 0.0
+        for i in range(len(resampled) - 1):
+            p1 = resampled[i]
+            p2 = resampled[i + 1]
+            dx = p2["x"] - p1["x"]
+            dy = p2["y"] - p1["y"]
+            final_length += math.hypot(dx, dy)
+        
+        # Se o resultado está muito distante, retorna o original
+        if abs(final_length - target_length) > target_length * 0.3:
+            return points
+        
+        return resampled
