@@ -294,35 +294,51 @@ class BeatmapLoader:
                     "active": False
                 })
 
-        # ordena notas por tempo
         notes.sort(
             key=lambda note: note["time"]
         )
 
         return notes
 
-    # -------------------------
-    # BEZIER CURVE
-    # -------------------------
+
     def bezier_point(self, points, t):
         """Calcula um ponto em uma curva Bezier usando De Casteljau (iterativo)"""
-        # cópia dos pontos para não modificar original
-        current_points = [{"x": p["x"], "y": p["y"]} for p in points]
+        if not points:
+            return {"x": 0, "y": 0}
         
-        # aplica interpolação linear até restar um ponto
-        while len(current_points) > 1:
+        # Cria uma cópia dos pontos, com proteção contra valores inválidos
+        current_points = []
+        for p in points:
+            x = float(p.get("x", 0))
+            y = float(p.get("y", 0))
+            
+            # Proteção contra NaN e infinito
+            if x != x or x == float('inf') or x == float('-inf'):
+                x = 0
+            if y != y or y == float('inf') or y == float('-inf'):
+                y = 0
+                
+            current_points.append({"x": x, "y": y})
+        
+        if len(current_points) == 1:
+            return current_points[0]
+        
+        # De Casteljau iterativo
+        max_iterations = 100  # Proteção contra loop infinito
+        iteration = 0
+        
+        while len(current_points) > 1 and iteration < max_iterations:
             new_points = []
             for i in range(len(current_points) - 1):
                 x = current_points[i]["x"] + (current_points[i + 1]["x"] - current_points[i]["x"]) * t
                 y = current_points[i]["y"] + (current_points[i + 1]["y"] - current_points[i]["y"]) * t
                 new_points.append({"x": x, "y": y})
             current_points = new_points
+            iteration += 1
         
-        return current_points[0]
+        return current_points[0] if current_points else {"x": 0, "y": 0}
 
-    # -------------------------
-    # LINEAR CURVE
-    # -------------------------
+
     def generate_linear_path(self, points, steps=25):
         """Gera uma linha reta entre os pontos"""
         smooth_points = []
@@ -362,9 +378,9 @@ class BeatmapLoader:
         
         # tipos de curva: L (Linear), B (Bezier), C (Catmull), P (Perfect Circle)
         if curve_type in ["B", "P", "C"]:
-            # Bezier, Perfect Circle e Catmull usam interpolação suave
-            # Reduzido para 25 passos para performance
-            steps = 25
+            # Bezier: usar apenas 2 passos para performance
+            # t=0 (início), t=0.5 (meio), t=1 (fim)
+            steps = 2
             for step in range(steps + 1):
                 t = step / steps
                 point = self.bezier_point(points, t)
@@ -374,8 +390,8 @@ class BeatmapLoader:
                 })
         
         else:
-            # Linear ou desconhecido
-            smooth_points = self.generate_linear_path(points, steps=25)
+            # Linear: usar apenas 2 passos
+            smooth_points = self.generate_linear_path(points, steps=2)
         
         return smooth_points
 
