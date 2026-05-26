@@ -1,9 +1,14 @@
 import os
+import hashlib
 
 
 class BeatmapLoader:
 
     SONGS_PATH = "songs"
+    
+    def __init__(self):
+        """Inicializa o loader com cache de curvas interpoladas"""
+        self._curve_cache = {}  # Cache para curvas já interpoladas
 
     # -------------------------
     # LOAD SONGS
@@ -365,8 +370,15 @@ class BeatmapLoader:
     # -------------------------
     # SLIDER SMOOTHING (MAIN)
     # -------------------------
+    def _curve_hash(self, points, curve_type):
+        """Cria uma chave hash para cache de curvas"""
+        # Cria string dos pontos para hash
+        points_str = str([(p["x"], p["y"]) for p in points])
+        combined = f"{points_str}_{curve_type}"
+        return hashlib.md5(combined.encode()).hexdigest()
+    
     def generate_slider_path(self, points, curve_type="L"):
-        """Gera caminho suavizado do slider baseado no tipo de curva"""
+        """Gera caminho suavizado do slider com cache"""
         
         smooth_points = []
         
@@ -376,11 +388,18 @@ class BeatmapLoader:
         if len(points) == 1:
             return points
         
+        # Verifica cache
+        cache_key = self._curve_hash(points, curve_type)
+        if cache_key in self._curve_cache:
+            return self._curve_cache[cache_key]
+        
+        # Número otimizado de passos para suavidade visual
+        # 15 passos gera ~12 pontos por slider com ~1s loading
+        steps = 15
+        
         # tipos de curva: L (Linear), B (Bezier), C (Catmull), P (Perfect Circle)
         if curve_type in ["B", "P", "C"]:
-            # Bezier: usar apenas 2 passos para performance
-            # t=0 (início), t=0.5 (meio), t=1 (fim)
-            steps = 2
+            # Bezier, Perfect Circle e Catmull usam interpolação suave
             for step in range(steps + 1):
                 t = step / steps
                 point = self.bezier_point(points, t)
@@ -390,8 +409,11 @@ class BeatmapLoader:
                 })
         
         else:
-            # Linear: usar apenas 2 passos
-            smooth_points = self.generate_linear_path(points, steps=2)
+            # Linear: interpolação linear entre pontos
+            smooth_points = self.generate_linear_path(points, steps=steps)
+        
+        # Armazena no cache
+        self._curve_cache[cache_key] = smooth_points
         
         return smooth_points
 
