@@ -468,16 +468,25 @@ class GameplayScene(BaseScene):
                         # garante inteiros
                         point_x = int(point_x)
                         point_y = int(point_y)
-
-                        slider_points.append(
-                            (point_x, point_y)
-                        )
+                        
+                        # Proteção contra pontos inválidos
+                        # Limita a área visível com margem
+                        screen_width = self.game.screen.get_width()
+                        screen_height = self.game.screen.get_height()
+                        
+                        # Aceita pontos um pouco fora da tela (para renderização de linhas)
+                        MARGIN = 500
+                        if (-MARGIN <= point_x <= screen_width + MARGIN and
+                            -MARGIN <= point_y <= screen_height + MARGIN):
+                            slider_points.append(
+                                (point_x, point_y)
+                            )
 
                     except (ValueError, TypeError, KeyError):
 
                         continue
 
-                # desenha corpo do slider
+                # desenha corpo do slider (apenas se há pontos válidos)
                 if len(slider_points) > 1:
 
                     # largura da linha (aumentada para melhor visibilidade)

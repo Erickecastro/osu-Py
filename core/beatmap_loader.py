@@ -311,6 +311,9 @@ class BeatmapLoader:
         if not points:
             return {"x": 0, "y": 0}
         
+        if len(points) == 1:
+            return points[0]
+        
         # Cria uma cópia dos pontos, com proteção contra valores inválidos
         current_points = []
         for p in points:
@@ -328,20 +331,31 @@ class BeatmapLoader:
         if len(current_points) == 1:
             return current_points[0]
         
-        # De Casteljau iterativo
-        max_iterations = 100  # Proteção contra loop infinito
+        # De Casteljau iterativo com proteção
+        max_iterations = 1000  # Proteção contra loop infinito
         iteration = 0
+        
+        # Clamp t entre 0 e 1
+        t = max(0.0, min(1.0, t))
         
         while len(current_points) > 1 and iteration < max_iterations:
             new_points = []
             for i in range(len(current_points) - 1):
                 x = current_points[i]["x"] + (current_points[i + 1]["x"] - current_points[i]["x"]) * t
                 y = current_points[i]["y"] + (current_points[i + 1]["y"] - current_points[i]["y"]) * t
+                
+                # Proteção contra overflow em curvas muito agressivas
+                if abs(x) > 10000 or abs(y) > 10000:
+                    # Limita valores extremos
+                    x = max(-10000, min(10000, x))
+                    y = max(-10000, min(10000, y))
+                
                 new_points.append({"x": x, "y": y})
             current_points = new_points
             iteration += 1
         
-        return current_points[0] if current_points else {"x": 0, "y": 0}
+        result = current_points[0] if current_points else {"x": 0, "y": 0}
+        return result
 
 
     def generate_linear_path(self, points, steps=25):
@@ -377,8 +391,24 @@ class BeatmapLoader:
         combined = f"{points_str}_{curve_type}"
         return hashlib.md5(combined.encode()).hexdigest()
     
+    def _validate_slider_points(self, points):
+        """Valida e limita pontos do slider aos limites do playfield osu! (0-512 x 0-384)"""
+        validated = []
+        for point in points:
+            x = point.get("x", 0)
+            y = point.get("y", 0)
+            
+            # Limita aos limites do playfield
+            # Playground osu! é 512x384
+            x = max(0, min(512, x))
+            y = max(0, min(384, y))
+            
+            validated.append({"x": int(x), "y": int(y)})
+        
+        return validated
+    
     def generate_slider_path(self, points, curve_type="L"):
-        """Gera caminho suavizado do slider com cache"""
+        """Gera caminho suavizado do slider com interpolacao adaptativa"""
         
         smooth_points = []
         
@@ -393,9 +423,25 @@ class BeatmapLoader:
         if cache_key in self._curve_cache:
             return self._curve_cache[cache_key]
         
-        # Número otimizado de passos para suavidade visual
-        # 15 passos gera ~12 pontos por slider com ~1s loading
-        steps = 15
+        # INTERPOLACAO ADAPTATIVA: mais passos para curvas simples, menos para complexas
+        # Assim evitamos pontos duplicados/inválidos em curvas muito agressivas
+        num_control_points = len(points)
+        
+        if num_control_points <= 3:
+            # Curvas muito simples: máxima interpolação
+            steps = 20
+        elif num_control_points <= 10:
+            # Curvas normais: interpolação padrão
+            steps = 15
+        elif num_control_points <= 50:
+            # Curvas complexas: menos interpolação
+            steps = 10
+        elif num_control_points <= 200:
+            # Curvas muito complexas: interpolação mínima
+            steps = 5
+        else:
+            # Curvas extremamente complexas (5000+ pontos): apenas os pontos naturais
+            steps = 2
         
         # tipos de curva: L (Linear), B (Bezier), C (Catmull), P (Perfect Circle)
         if curve_type in ["B", "P", "C"]:
@@ -411,6 +457,9 @@ class BeatmapLoader:
         else:
             # Linear: interpolação linear entre pontos
             smooth_points = self.generate_linear_path(points, steps=steps)
+        
+        # Valida pontos para garantir que não saem do playfield
+        smooth_points = self._validate_slider_points(smooth_points)
         
         # Armazena no cache
         self._curve_cache[cache_key] = smooth_points
