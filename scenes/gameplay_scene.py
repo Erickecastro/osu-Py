@@ -168,15 +168,36 @@ class GameplayScene(BaseScene):
             return 1.0
         return v
 
+    def _ease_out_cubic(self, v):
+        v = self._clamp01(v)
+        return 1.0 - ((1.0 - v) ** 3)
+
+    def _fade_in_progress(self, note):
+        start = note.get("start_time", note["time"] - self.approach_time)
+        hit_time = note["time"]
+        approach_len = max(1, hit_time - start)
+        fade_in_len = max(120, min(260, approach_len * 0.28))
+
+        return self._ease_out_cubic(
+            (self.current_time - start) / fade_in_len
+        )
+
+    def _slider_reveal_progress(self, note):
+        start = note.get("start_time", note["time"] - self.approach_time)
+        hit_time = note["time"]
+        approach_len = max(1, hit_time - start)
+        reveal_len = max(180, min(420, approach_len * 0.38))
+
+        return self._ease_out_cubic(
+            (self.current_time - start) / reveal_len
+        )
+
     def _note_alpha(self, note):
         """Alpha suave: fade-in no approach e fade-out no fim do objeto."""
-        start = note.get("start_time", note["time"] - self.approach_time)
         hit_time = note["time"]
 
         # Fade-in até o hit.
-        fade_in_len = max(1, hit_time - start)
-        alpha_in = (self.current_time - start) / fade_in_len
-        alpha_in = self._clamp01(alpha_in)
+        alpha_in = self._fade_in_progress(note)
 
         # Fade-out depende do tipo.
         if note["type"] == "slider":
@@ -467,7 +488,57 @@ class GameplayScene(BaseScene):
 
         return (int(round(x)), int(round(y)))
 
-    def _draw_slider(self, screen, slider_points, alpha=255, draw_markers=True):
+    def _slider_points_until_progress(self, points, progress):
+        if len(points) < 2:
+            return points
+
+        progress = self._clamp01(progress)
+        if progress >= 1.0:
+            return points
+
+        total_length = 0.0
+        segment_lengths = []
+
+        for i in range(len(points) - 1):
+            dx = points[i + 1][0] - points[i][0]
+            dy = points[i + 1][1] - points[i][1]
+            length = (dx * dx + dy * dy) ** 0.5
+            segment_lengths.append(length)
+            total_length += length
+
+        if total_length <= 0:
+            return points[:1]
+
+        target_length = total_length * progress
+        visible_points = [points[0]]
+        walked = 0.0
+
+        for i, segment_length in enumerate(segment_lengths):
+            next_walked = walked + segment_length
+
+            if next_walked < target_length:
+                visible_points.append(points[i + 1])
+                walked = next_walked
+                continue
+
+            if segment_length > 0:
+                t = self._clamp01((target_length - walked) / segment_length)
+                x = points[i][0] + (points[i + 1][0] - points[i][0]) * t
+                y = points[i][1] + (points[i + 1][1] - points[i][1]) * t
+                visible_points.append((int(round(x)), int(round(y))))
+
+            break
+
+        return visible_points
+
+    def _draw_slider(
+        self,
+        screen,
+        slider_points,
+        alpha=255,
+        draw_head_marker=True,
+        draw_tail_marker=False
+    ):
 
         if len(slider_points) < 2:
             return
@@ -588,36 +659,39 @@ class GameplayScene(BaseScene):
             )
         )
 
-        if draw_markers:
+        if draw_head_marker or draw_tail_marker:
             head_pos = slider_points[0]
             tail_pos = slider_points[-1]
 
-            pygame.draw.circle(
-                screen,
-                (0, 150, 255, a),
-                head_pos,
-                self.scaled_radius
-            )
-            pygame.draw.circle(
-                screen,
-                (255, 255, 255, a),
-                head_pos,
-                self.scaled_radius,
-                3
-            )
-            pygame.draw.circle(
-                screen,
-                (0, 150, 255, a),
-                tail_pos,
-                self.scaled_radius
-            )
-            pygame.draw.circle(
-                screen,
-                (255, 255, 255, a),
-                tail_pos,
-                self.scaled_radius,
-                3
-            )
+            if draw_head_marker:
+                pygame.draw.circle(
+                    screen,
+                    (0, 150, 255, a),
+                    head_pos,
+                    self.scaled_radius
+                )
+                pygame.draw.circle(
+                    screen,
+                    (255, 255, 255, a),
+                    head_pos,
+                    self.scaled_radius,
+                    3
+                )
+
+            if draw_tail_marker:
+                pygame.draw.circle(
+                    screen,
+                    (0, 150, 255, a),
+                    tail_pos,
+                    self.scaled_radius
+                )
+                pygame.draw.circle(
+                    screen,
+                    (255, 255, 255, a),
+                    tail_pos,
+                    self.scaled_radius,
+                    3
+                )
 
     def render(self, screen):
 
@@ -707,14 +781,7 @@ class GameplayScene(BaseScene):
             if alpha <= 0:
                 continue
 
-            # Pop suave conforme chega no hit.
-            start = note.get("start_time", note["time"] - self.approach_time)
-            fade_in_len = max(1, note["time"] - start)
-            alpha_in = self._clamp01(
-                (self.current_time - start) / fade_in_len
-            )
-            hit_scale = 0.90 + 0.10 * alpha_in
-            scaled_hit_radius = max(1, int(self.scaled_radius * hit_scale))
+            scaled_hit_radius = self.scaled_radius
 
             approach_radius = int(
                 self.scaled_radius
@@ -767,13 +834,17 @@ class GameplayScene(BaseScene):
             elif note["type"] == "slider":
 
                 slider_points = self._build_slider_points(note)
+                visible_slider_points = self._slider_points_until_progress(
+                    slider_points,
+                    self._slider_reveal_progress(note)
+                )
 
                 self._draw_slider(
                     overlay,
-                    slider_points
-                    ,
+                    visible_slider_points,
                     alpha=alpha,
-                    draw_markers=False
+                    draw_head_marker=True,
+                    draw_tail_marker=False
                 )
 
                 # Slider ball (move along the slider path).
