@@ -725,7 +725,7 @@ class BeatmapLoader:
 
             # Apenas converte para int, permite pontos fora dos limites
             # (pygame fará clipping na renderização)
-            validated.append({"x": int(x), "y": int(y)})
+            validated.append({"x": float(x), "y": float(y)})
 
         return validated
 
@@ -948,7 +948,7 @@ class BeatmapLoader:
                         t = i / max(1, steps)
                         x = start_x + direction_x * (slider_distance * t)
                         y = start_y + direction_y * (slider_distance * t)
-                        smooth_points.append({"x": int(round(x)), "y": int(round(y))})
+                        smooth_points.append({"x": x, "y": y})
                     return smooth_points
             
             return points
@@ -1072,9 +1072,6 @@ class BeatmapLoader:
                     break
         
         # Garante que o último ponto está incluído
-        if len(resampled) > 0 and (len(resampled) < 2 or resampled[-1] != points[-1]):
-            resampled.append(points[-1])
-        
         # Recalcula para verificar o comprimento final
         final_length = 0.0
         for i in range(len(resampled) - 1):
