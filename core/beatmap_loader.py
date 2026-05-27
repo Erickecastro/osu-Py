@@ -68,13 +68,18 @@ class BeatmapLoader:
                         osu_file
                     )
 
+                    timing_points = self.parse_timing_points(
+                        osu_file
+                    )
+
                     difficulty_data = {
                         "name": folder,
                         "path": path,
                         "osu_file": osu_file,
                         "notes": notes,
                         "metadata": metadata,
-                        "difficulty": difficulty
+                        "difficulty": difficulty,
+                        "timing_points": timing_points
                     }
 
                     beatmap_data[
@@ -162,6 +167,63 @@ class BeatmapLoader:
                 ] = value.strip()
 
         return metadata
+
+    # -------------------------
+    # TIMING POINTS
+    # -------------------------
+    def parse_timing_points(self, osu_file):
+        """
+        Parse `[TimingPoints]` from an .osu file.
+
+        We only keep:
+        - `time` (ms)
+        - `ms_per_beat` (can be negative for inherited points)
+        - `uninherited` (1 = base point, 0 = inherited point)
+        """
+        timing_points = []
+
+        with open(
+            osu_file,
+            "r",
+            encoding="utf-8",
+            errors="ignore"
+        ) as file:
+            lines = file.readlines()
+
+        timing_section = False
+
+        for line in lines:
+            line = line.strip()
+
+            if line == "[TimingPoints]":
+                timing_section = True
+                continue
+
+            if timing_section and line.startswith("["):
+                break
+
+            if not timing_section or not line:
+                continue
+
+            parts = line.split(",")
+            if len(parts) < 2:
+                continue
+
+            try:
+                tp_time = float(parts[0])
+                ms_per_beat = float(parts[1])
+                uninherited = int(parts[6]) if len(parts) > 6 else 1
+            except:
+                continue
+
+            timing_points.append({
+                "time": tp_time,
+                "ms_per_beat": ms_per_beat,
+                "uninherited": uninherited
+            })
+
+        timing_points.sort(key=lambda tp: tp["time"])
+        return timing_points
 
     # -------------------------
     # FIND .OSU FILES
@@ -254,6 +316,7 @@ class BeatmapLoader:
 
                 curve_type = "L"
                 curve_points = []
+                repeat_count = 1
                 slider_distance = 0.0
 
                 if len(parts) > 5:
@@ -291,6 +354,13 @@ class BeatmapLoader:
                     except:
                         slider_distance = 0.0
 
+                # extrai repeat_count (quantidade de repetições/voltas do slider)
+                if len(parts) > 6:
+                    try:
+                        repeat_count = int(parts[6])
+                    except:
+                        repeat_count = 1
+
                 # gera pontos suavizados baseado no tipo
                 smooth_points = (
                     self.generate_slider_path(
@@ -310,6 +380,7 @@ class BeatmapLoader:
                     "curve_points": smooth_points,
                     "curve_type": curve_type,
                     "slider_distance": slider_distance,
+                    "repeat_count": repeat_count,
                     "active": False
                 })
 
@@ -532,14 +603,19 @@ class BeatmapLoader:
 
 
     def generate_perfect_path(self, points, steps_per_rad=12):
-        """Approximate perfect-circle (arc) sliders by fitting circles through triples of points and sampling arcs.
+        """Approximate osu! perfect-circle (arc) sliders.
 
-        If points < 3 fallback to linear/bezier.
+        In osu!, `P` sliders are circular arcs defined by exactly 3 points:
+        start, control, end. If the control point set doesn't define a circle
+        (collinear) or if there are more than 3 points, fall back to Bezier/linear.
         """
         if not points:
             return []
         if len(points) < 3:
-            # fallback to bezier sampling
+            return self.generate_bezier_path_adaptive(points)
+        if len(points) != 3:
+            # `P` with more points should not be stitched as multiple arcs here;
+            # treat it like a regular Bezier to avoid wrong shapes.
             return self.generate_bezier_path_adaptive(points)
 
         def circle_from_three(a, b, c):
@@ -558,57 +634,48 @@ class BeatmapLoader:
         def angle_of(p, cx, cy):
             return math.atan2(p["y"] - cy, p["x"] - cx)
 
+        a, b, c = points[0], points[1], points[2]
+        circ = circle_from_three(a, b, c)
+        if circ is None:
+            # Collinear: treat as straight line from a to c
+            return self.generate_linear_path([a, c], steps=32)
+
+        cx, cy, r = circ
+
+        def norm(angle):
+            angle = angle % (2 * math.pi)
+            if angle < 0:
+                angle += 2 * math.pi
+            return angle
+
+        a_n = norm(angle_of(a, cx, cy))
+        b_n = norm(angle_of(b, cx, cy))
+        c_n = norm(angle_of(c, cx, cy))
+
+        def ccw_delta(start, end):
+            d = end - start
+            if d < 0:
+                d += 2 * math.pi
+            return d
+
+        # Choose the unique arc from a -> c that passes through b.
+        # If b lies on the counter-clockwise sweep from a to c, go CCW; otherwise go CW.
+        ccw_ac = ccw_delta(a_n, c_n)
+        ccw_ab = ccw_delta(a_n, b_n)
+
+        if ccw_ab <= ccw_ac:
+            span = ccw_ac  # CCW
+        else:
+            span = ccw_ac - 2 * math.pi  # CW (negative span)
+
+        samp = max(6, int(abs(span) * steps_per_rad))
         out = []
-        # For each consecutive triple, build an arc from p0->p2 passing through p1
-        for i in range(len(points) - 2):
-            a = points[i]
-            b = points[i+1]
-            c = points[i+2]
-            circ = circle_from_three(a, b, c)
-            if circ is None:
-                out.append({"x": a["x"], "y": a["y"]})
-                out.append({"x": c["x"], "y": c["y"]})
-                continue
-            cx, cy, r = circ
-            a_ang = angle_of(a, cx, cy)
-            c_ang = angle_of(c, cx, cy)
-            b_ang = angle_of(b, cx, cy)
-
-            def norm(angle):
-                while angle < 0:
-                    angle += 2 * math.pi
-                while angle >= 2 * math.pi:
-                    angle -= 2 * math.pi
-                return angle
-
-            a_n = norm(a_ang)
-            b_n = norm(b_ang)
-            c_n = norm(c_ang)
-
-            def is_between(theta, start, end):
-                if start <= end:
-                    return start <= theta <= end
-                return theta >= start or theta <= end
-
-            if is_between(b_n, a_n, c_n):
-                start, end = a_n, c_n
-            else:
-                start, end = c_n, a_n
-
-            if end <= start:
-                end += 2 * math.pi
-
-            span = end - start
-
-            samp = max(6, int(abs(span) * steps_per_rad))
-            for s in range(samp + 1):
-                t = s / samp
-                ang = start + t * span
-                x = cx + math.cos(ang) * r
-                y = cy + math.sin(ang) * r
-                out.append({"x": x, "y": y})
-
-        out.append({"x": points[-1]["x"], "y": points[-1]["y"]})
+        for s in range(samp + 1):
+            t = s / samp
+            ang = a_n + t * span
+            x = cx + math.cos(ang) * r
+            y = cy + math.sin(ang) * r
+            out.append({"x": x, "y": y})
         filtered = []
         prev = None
         for p in out:
