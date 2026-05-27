@@ -40,12 +40,50 @@ class GameplayScene(BaseScene):
             beatmap["notes"]
         )
 
-        for note in self.notes:
-            note["active"] = False
+        combo_colors = (
+            self.beatmap.get("combo_colors")
+            or self.beatmap["difficulty"].get("combo_colors")
+            or [
+                (233, 182, 29),
+                (89, 80, 203),
+                (66, 198, 221),
+                (224, 73, 73)
+            ]
+        )
+
+        if not combo_colors:
+            combo_colors = [
+                (233, 182, 29),
+                (89, 80, 203),
+                (66, 198, 221),
+                (224, 73, 73)
+            ]
 
         self.active_notes = []
         self.circle_surface_cache = {}
         self.slider_surface_cache = {}
+
+        current_combo_color = 0
+        current_combo_count = 0
+
+        for note_index, note in enumerate(self.notes):
+            note["active"] = False
+            note["hit_index"] = note_index + 1
+
+            if note.get("new_combo") or current_combo_count == 0:
+                if current_combo_count != 0:
+                    offset = note.get("combo_offset", 0)
+                    current_combo_color = (
+                        current_combo_color + offset + 1
+                    ) % len(combo_colors)
+                current_combo_count = 1
+            else:
+                current_combo_count += 1
+
+            note["combo_index"] = current_combo_count
+            note["combo_color"] = combo_colors[
+                current_combo_color
+            ]
 
         self.cs = self.beatmap[
             "difficulty"
@@ -124,6 +162,7 @@ class GameplayScene(BaseScene):
         # Aproximação do comportamento do osu! para visibilidade:
         # fade-in durante o approach e fade-out logo após o hit.
         self.hit_fade_out_time = 350  # ms
+        self.hit_explosion_duration = 300  # ms
 
         self.usable_width = (
             (self.playfield_width * self.scale)
@@ -218,6 +257,24 @@ class GameplayScene(BaseScene):
 
         self._precache_slider_surfaces()
 
+        self.circle_number_font = pygame.font.SysFont(
+            "arial",
+            32,
+            bold=True
+        )
+
+        self.cursor_history = []
+        self.cursor_tail_duration = 0.18  # seconds
+        self.cursor_tail_max_points = 10
+        self.circle_number_font = pygame.font.SysFont(
+            "arial",
+            28,
+            bold=True
+        )
+        
+        self.miss_indicators = []
+        self.miss_indicator_duration = 150  # ms
+
     def _accuracy(self):
         total_hits = sum(self.hit_counts.values())
         if total_hits <= 0:
@@ -235,10 +292,19 @@ class GameplayScene(BaseScene):
         note["judged"] = True
         note["active"] = False
         note["hit_result"] = result
+        note["hit_time"] = self.current_time
         self.judged_objects += 1
         self.hit_counts[result] += 1
 
         if result == 0:
+            scaled_x, scaled_y = self.scale_position(
+                note["x"],
+                note["y"]
+            )
+            self.miss_indicators.append({
+                "pos": (scaled_x, scaled_y),
+                "start_time": self.current_time
+            })
             self.combo = 0
             return
 
@@ -447,6 +513,104 @@ class GameplayScene(BaseScene):
         )
         self._blit_centered(target, surface, center, alpha)
 
+    def _draw_centered_text(self, target, surface, center, alpha=255):
+        alpha = max(0, min(255, int(alpha)))
+        if alpha <= 0:
+            return
+
+        surface.set_alpha(alpha)
+        rect = surface.get_rect(
+            center=(int(round(center[0])), int(round(center[1])))
+        )
+        target.blit(surface, rect)
+
+    def _draw_combo_number(
+        self,
+        target,
+        text,
+        center,
+        color,
+        alpha=255
+    ):
+        outline = self.circle_number_font.render(
+            text,
+            True,
+            (0, 0, 0)
+        )
+        outline.set_alpha(alpha)
+
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            rect = outline.get_rect(
+                center=(
+                    int(round(center[0] + dx)),
+                    int(round(center[1] + dy))
+                )
+            )
+            target.blit(outline, rect)
+
+        main_text = self.circle_number_font.render(
+            text,
+            True,
+            (255, 255, 255)
+        )
+        self._draw_centered_text(
+            target,
+            main_text,
+            center,
+            alpha=alpha
+        )
+
+    def _draw_slider_reverse_markers(
+        self,
+        target,
+        slider_points,
+        repeat_count,
+        alpha=255
+    ):
+        if len(slider_points) < 2 or repeat_count <= 1:
+            return
+
+        arrow_len = max(12, int(self.scaled_radius * 0.45))
+        arrow_width = max(6, int(self.scaled_radius * 0.25))
+
+        for repeat_index in range(1, repeat_count):
+            if repeat_index % 2 == 1:
+                pos = slider_points[-1]
+                reference = slider_points[-2]
+            else:
+                pos = slider_points[0]
+                reference = slider_points[1]
+
+            dx = reference[0] - pos[0]
+            dy = reference[1] - pos[1]
+            distance = (dx * dx + dy * dy) ** 0.5
+            if distance < 1e-3:
+                continue
+
+            ux = dx / distance
+            uy = dy / distance
+            perp_x = -uy
+            perp_y = ux
+
+            base = (
+                pos[0] + ux * arrow_len,
+                pos[1] + uy * arrow_len
+            )
+            left = (
+                base[0] + perp_x * arrow_width,
+                base[1] + perp_y * arrow_width
+            )
+            right = (
+                base[0] - perp_x * arrow_width,
+                base[1] - perp_y * arrow_width
+            )
+
+            pygame.draw.polygon(
+                target,
+                (255, 255, 255, int(alpha)),
+                [pos, left, right]
+            )
+
     def _effective_beat_length_at(self, time_ms):
         """
         Retorna a beat length efetiva no `time_ms`,
@@ -585,6 +749,23 @@ class GameplayScene(BaseScene):
                 - self.start_time
             )
 
+        cursor_pos = pygame.mouse.get_pos()
+        if (
+            not self.cursor_history
+            or self.cursor_history[-1]["pos"] != cursor_pos
+        ):
+            self.cursor_history.append({
+                "pos": cursor_pos,
+                "age": 0.0
+            })
+
+        new_history = []
+        for entry in self.cursor_history:
+            entry["age"] += dt
+            if entry["age"] <= self.cursor_tail_duration:
+                new_history.append(entry)
+        self.cursor_history = new_history[-self.cursor_tail_max_points:]
+
         for note in self.notes:
 
             if (
@@ -619,14 +800,14 @@ class GameplayScene(BaseScene):
             for note in self.active_notes
 
             if (
-                not note.get("judged")
-                and
                 self.current_time
                 <=
                 note.get(
                     "end_time",
                     note["time"] + self.hit_fade_out_time
                 )
+                +
+                self.hit_explosion_duration
             )
         ]
 
@@ -1005,7 +1186,7 @@ class GameplayScene(BaseScene):
             outline_alpha.T
         )
 
-        rgb[body_mask.T] = (255, 105, 180)
+        rgb[body_mask.T] = (80, 80, 80)
 
         del rgb
         del alpha
@@ -1149,7 +1330,9 @@ class GameplayScene(BaseScene):
         draw_head_marker=True,
         draw_tail_marker=False,
         cache_key=None,
-        reveal_progress=1.0
+        reveal_progress=1.0,
+        repeat_count=1,
+        draw_reverse_markers=False
     ):
 
         if len(slider_points) < 2:
@@ -1187,6 +1370,14 @@ class GameplayScene(BaseScene):
                         fill_color=(0, 150, 255),
                         outline_color=(255, 255, 255),
                         outline_width=3,
+                        alpha=a
+                    )
+
+                if draw_reverse_markers and repeat_count > 1:
+                    self._draw_slider_reverse_markers(
+                        screen,
+                        slider_points,
+                        repeat_count,
                         alpha=a
                     )
 
@@ -1267,6 +1458,14 @@ class GameplayScene(BaseScene):
                     fill_color=(0, 150, 255),
                     outline_color=(255, 255, 255),
                     outline_width=3,
+                    alpha=a
+                )
+
+            if draw_reverse_markers and repeat_count > 1:
+                self._draw_slider_reverse_markers(
+                    screen,
+                    slider_points,
+                    repeat_count,
                     alpha=a
                 )
 
@@ -1412,21 +1611,58 @@ class GameplayScene(BaseScene):
                 (scaled_x, scaled_y),
                 approach_radius,
                 outline_color=(255, 255, 255),
-                outline_width=2,
+                outline_width=4,
                 alpha=int(alpha * progress)
             )
 
             if note["type"] == "circle":
-
-                self._draw_aa_circle(
-                    overlay,
-                    (scaled_x, scaled_y),
-                    scaled_hit_radius,
-                    fill_color=(0, 150, 255),
-                    outline_color=(255, 255, 255),
-                    outline_width=3,
-                    alpha=alpha
+                circle_color = note.get(
+                    "combo_color",
+                    (0, 150, 255)
                 )
+
+                is_hit = note.get("judged", False)
+                if is_hit:
+                    hit_time = note.get("hit_time", self.current_time)
+                    explosion_elapsed = self.current_time - hit_time
+                    explosion_progress = min(
+                        1.0,
+                        explosion_elapsed / self.hit_explosion_duration
+                    )
+                    expansion_factor = 1.0 + (explosion_progress * 0.4)
+                    explosion_radius = int(
+                        scaled_hit_radius * expansion_factor
+                    )
+                    explosion_alpha = int(
+                        alpha * (1.0 - explosion_progress)
+                    )
+                    self._draw_aa_circle(
+                        overlay,
+                        (scaled_x, scaled_y),
+                        explosion_radius,
+                        fill_color=circle_color,
+                        outline_color=(255, 255, 255),
+                        outline_width=max(1, int(3 * (1.0 - explosion_progress))),
+                        alpha=explosion_alpha
+                    )
+                else:
+                    self._draw_aa_circle(
+                        overlay,
+                        (scaled_x, scaled_y),
+                        scaled_hit_radius,
+                        fill_color=circle_color,
+                        outline_color=(255, 255, 255),
+                        outline_width=3,
+                        alpha=alpha
+                    )
+
+                    self._draw_combo_number(
+                        overlay,
+                        str(note["combo_index"]),
+                        (scaled_x, scaled_y),
+                        circle_color,
+                        alpha=alpha
+                    )
 
             elif note["type"] == "slider":
 
@@ -1444,7 +1680,17 @@ class GameplayScene(BaseScene):
                     draw_head_marker=True,
                     draw_tail_marker=False,
                     cache_key=note.get("render_index"),
-                    reveal_progress=reveal_progress
+                    reveal_progress=reveal_progress,
+                    repeat_count=note.get("repeat_count", 1),
+                    draw_reverse_markers=True
+                )
+
+                self._draw_combo_number(
+                    overlay,
+                    str(note["combo_index"]),
+                    slider_points[0],
+                    note.get("combo_color", (255, 255, 255)),
+                    alpha=alpha
                 )
 
                 # Slider ball (move along the slider path).
@@ -1507,6 +1753,46 @@ class GameplayScene(BaseScene):
                     )
 
         screen.blit(overlay, (0, 0))
+
+        self._draw_custom_cursor(screen)
+
+    def _draw_custom_cursor(self, screen):
+        if not self.cursor_history:
+            return
+
+        # Draw a short, soft trail behind the cursor.
+        trail_color = (255, 255, 255)
+        trail_size = 16
+
+        for entry in reversed(self.cursor_history):
+            progress = entry["age"] / self.cursor_tail_duration
+            alpha = int(max(0, 220 * (1.0 - progress) ** 1.8))
+            radius = int(max(2.0, trail_size * (1.0 - progress)))
+            self._draw_aa_circle(
+                screen,
+                entry["pos"],
+                radius,
+                fill_color=trail_color,
+                alpha=alpha
+            )
+
+        cursor_pos = self.cursor_history[-1]["pos"]
+        self._draw_aa_circle(
+            screen,
+            cursor_pos,
+            18,
+            fill_color=(255, 255, 255),
+            outline_color=(60, 170, 255),
+            outline_width=4,
+            alpha=255
+        )
+        self._draw_aa_circle(
+            screen,
+            cursor_pos,
+            9,
+            fill_color=(60, 170, 255),
+            alpha=255
+        )
 
     def destroy(self):
 

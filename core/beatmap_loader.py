@@ -72,6 +72,10 @@ class BeatmapLoader:
                         osu_file
                     )
 
+                    combo_colors = self.parse_colours(
+                        osu_file
+                    )
+
                     difficulty_data = {
                         "name": folder,
                         "path": path,
@@ -79,7 +83,8 @@ class BeatmapLoader:
                         "notes": notes,
                         "metadata": metadata,
                         "difficulty": difficulty,
-                        "timing_points": timing_points
+                        "timing_points": timing_points,
+                        "combo_colors": combo_colors
                     }
 
                     beatmap_data[
@@ -225,6 +230,60 @@ class BeatmapLoader:
         timing_points.sort(key=lambda tp: tp["time"])
         return timing_points
 
+    def parse_colours(self, osu_file):
+        combo_colors = []
+
+        with open(
+            osu_file,
+            "r",
+            encoding="utf-8",
+            errors="ignore"
+        ) as file:
+            lines = file.readlines()
+
+        colours_section = False
+
+        for line in lines:
+            line = line.strip()
+
+            if line == "[Colours]":
+                colours_section = True
+                continue
+
+            if colours_section and line.startswith("["):
+                break
+
+            if not colours_section or not line:
+                continue
+
+            if ":" not in line:
+                continue
+
+            key, value = line.split(":", 1)
+            key = key.strip()
+
+            if not key.lower().startswith("combo"):
+                continue
+
+            digits = "".join(ch for ch in key if ch.isdigit())
+            try:
+                index = int(digits) if digits else 0
+            except:
+                index = 0
+
+            rgb = []
+            for part in value.split(",")[:3]:
+                try:
+                    rgb.append(int(part.strip()))
+                except:
+                    break
+
+            if len(rgb) == 3:
+                combo_colors.append((index, tuple(rgb)))
+
+        combo_colors.sort(key=lambda item: item[0])
+        return [color for _, color in combo_colors]
+
     # -------------------------
     # FIND .OSU FILES
     # -------------------------
@@ -300,12 +359,21 @@ class BeatmapLoader:
             # HIT CIRCLE
             # -------------------------
             if object_type & 1:
+                hit_sample = parts[5] if len(parts) > 5 else ""
+                combo_offset = 0
+
+                if object_type & 4:
+                    combo_offset = self._parse_combo_offset(
+                        hit_sample
+                    )
 
                 notes.append({
                     "type": "circle",
                     "x": x,
                     "y": y,
                     "time": time,
+                    "new_combo": bool(object_type & 4),
+                    "combo_offset": combo_offset,
                     "active": False
                 })
 
@@ -381,6 +449,8 @@ class BeatmapLoader:
                     "curve_type": curve_type,
                     "slider_distance": slider_distance,
                     "repeat_count": repeat_count,
+                    "new_combo": bool(object_type & 4),
+                    "combo_offset": 0,
                     "active": False
                 })
 
@@ -389,6 +459,19 @@ class BeatmapLoader:
         )
 
         return notes
+
+    def _parse_combo_offset(self, hit_sample):
+        if not hit_sample:
+            return 0
+
+        parts = hit_sample.split(":")
+        if not parts:
+            return 0
+
+        try:
+            return int(parts[0])
+        except:
+            return 0
 
 
     def bezier_point(self, points, t):
