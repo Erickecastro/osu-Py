@@ -400,32 +400,68 @@ class BeatmapLoader:
         return left[:-1] + right
 
 
-    def generate_bezier_path_adaptive(self, points, tol=0.5, max_depth=16):
-        """Generate an adaptive polyline approximation for a Bezier-like curve.
+    def _split_bezier_segments(self, points):
+        """Split Bezier control points into contiguous segments.
 
-        Uses recursive subdivision based on midpoint chord error. Returns list of int points.
+        In osu!, repeated control points are used to break a Bezier slider into
+        multiple consecutive curve segments.
         """
         if not points:
             return []
 
-        p0 = self.bezier_point(points, 0.0)
-        p1 = self.bezier_point(points, 1.0)
+        segments = []
+        current = [points[0]]
+        for point in points[1:]:
+            if point["x"] == current[-1]["x"] and point["y"] == current[-1]["y"]:
+                if len(current) > 1:
+                    segments.append(current)
+                current = [point]
+            else:
+                current.append(point)
 
-        pts = self._adaptive_subdivide(points, 0.0, 1.0, p0, p1, tol, 0, max_depth)
+        if len(current) > 1:
+            segments.append(current)
 
-        # convert to integer coords and remove consecutive duplicates
+        return segments
+
+
+    def generate_bezier_path_adaptive(self, points, tol=0.15, max_depth=22):
+        """Generate an adaptive polyline approximation for a Bezier-like curve.
+
+        Uses recursive subdivision based on midpoint chord error. Returns list of float points.
+        """
+        if not points:
+            return []
+
+        segments = self._split_bezier_segments(points)
         out = []
         prev = None
-        for p in pts:
-            ip = {"x": int(round(p["x"])), "y": int(round(p["y"]))}
-            if prev is None or ip["x"] != prev["x"] or ip["y"] != prev["y"]:
-                out.append(ip)
-                prev = ip
+
+        for segment in segments:
+            if len(segment) < 3:
+                # For 2-point segments, create a synthetic control point for smooth transition
+                if len(segment) == 2:
+                    p0 = segment[0]
+                    p2 = segment[1]
+                    # Create midpoint control for smoother curve
+                    p1 = {"x": (p0["x"] + p2["x"]) / 2.0, "y": (p0["y"] + p2["y"]) / 2.0}
+                    pts = self._adaptive_subdivide([p0, p1, p2], 0.0, 1.0, p0, p2, tol, 0, max_depth)
+                else:
+                    pts = segment
+            else:
+                p0 = self.bezier_point(segment, 0.0)
+                p1 = self.bezier_point(segment, 1.0)
+                pts = self._adaptive_subdivide(segment, 0.0, 1.0, p0, p1, tol, 0, max_depth)
+
+            for p in pts:
+                if prev is None or p["x"] != prev["x"] or p["y"] != prev["y"]:
+                    out.append(p)
+                    prev = p
 
         return out
 
 
-    def generate_catmull_path(self, points, steps=16):
+    def generate_catmull_path(self, points, steps=30):
         """Generate Catmull-Rom spline through the given points."""
         if not points:
             return []
@@ -439,7 +475,6 @@ class BeatmapLoader:
 
         out = []
         n = len(points)
-        # duplicate endpoints for natural extension
         pts = [points[0]] + points + [points[-1]]
         for i in range(0, n - 1):
             p0 = pts[i]
@@ -449,9 +484,8 @@ class BeatmapLoader:
             for s in range(steps):
                 t = s / steps
                 p = catmull_rom(p0, p1, p2, p3, t)
-                out.append({"x": int(round(p["x"])), "y": int(round(p["y"]))})
-        out.append({"x": int(points[-1]["x"]), "y": int(points[-1]["y"])})
-        # remove consecutive duplicates
+                out.append({"x": p["x"], "y": p["y"]})
+        out.append({"x": points[-1]["x"], "y": points[-1]["y"]})
         filtered = []
         prev = None
         for p in out:
@@ -497,7 +531,7 @@ class BeatmapLoader:
         return rdp_rec(points)
 
 
-    def generate_perfect_path(self, points, steps_per_rad=10):
+    def generate_perfect_path(self, points, steps_per_rad=12):
         """Approximate perfect-circle (arc) sliders by fitting circles through triples of points and sampling arcs.
 
         If points < 3 fallback to linear/bezier.
@@ -532,51 +566,49 @@ class BeatmapLoader:
             c = points[i+2]
             circ = circle_from_three(a, b, c)
             if circ is None:
-                # collinear: fallback to linear segment a->c
-                out.append({"x": int(round(a["x"])), "y": int(round(a["y"]))})
-                out.append({"x": int(round(c["x"])), "y": int(round(c["y"]))})
+                out.append({"x": a["x"], "y": a["y"]})
+                out.append({"x": c["x"], "y": c["y"]})
                 continue
             cx, cy, r = circ
             a_ang = angle_of(a, cx, cy)
             c_ang = angle_of(c, cx, cy)
-            # choose direction that passes through b
             b_ang = angle_of(b, cx, cy)
-            # normalize angles
-            def norm(a):
-                while a < 0:
-                    a += 2*math.pi
-                while a >= 2*math.pi:
-                    a -= 2*math.pi
-                return a
+
+            def norm(angle):
+                while angle < 0:
+                    angle += 2 * math.pi
+                while angle >= 2 * math.pi:
+                    angle -= 2 * math.pi
+                return angle
+
             a_n = norm(a_ang)
             b_n = norm(b_ang)
             c_n = norm(c_ang)
-            # determine shortest arc that contains b
-            # try both directions
-            def contains(a2, b2, c2):
-                if a2 <= c2:
-                    return a2 <= b2 <= c2
-                return b2 >= a2 or b2 <= c2
-            if contains(a_n, b_n, c_n):
+
+            def is_between(theta, start, end):
+                if start <= end:
+                    return start <= theta <= end
+                return theta >= start or theta <= end
+
+            if is_between(b_n, a_n, c_n):
                 start, end = a_n, c_n
             else:
-                # swap to take longer arc
                 start, end = c_n, a_n
-            # compute angle span
+
+            if end <= start:
+                end += 2 * math.pi
+
             span = end - start
-            if span <= 0:
-                span += 2*math.pi
-            samp = max(2, int(abs(span) * steps_per_rad))
+
+            samp = max(6, int(abs(span) * steps_per_rad))
             for s in range(samp + 1):
                 t = s / samp
                 ang = start + t * span
                 x = cx + math.cos(ang) * r
                 y = cy + math.sin(ang) * r
-                out.append({"x": int(round(x)), "y": int(round(y))})
+                out.append({"x": x, "y": y})
 
-        # ensure last point present
-        out.append({"x": int(round(points[-1]["x"])), "y": int(round(points[-1]["y"]))})
-        # remove consecutive duplicates
+        out.append({"x": points[-1]["x"], "y": points[-1]["y"]})
         filtered = []
         prev = None
         for p in out:
@@ -596,15 +628,13 @@ class BeatmapLoader:
             
             for step in range(steps):
                 t = step / steps
-                
-                x = int(start["x"] + (end["x"] - start["x"]) * t)
-                y = int(start["y"] + (end["y"] - start["y"]) * t)
-                
+                x = start["x"] + (end["x"] - start["x"]) * t
+                y = start["y"] + (end["y"] - start["y"]) * t
                 smooth_points.append({"x": x, "y": y})
         
         smooth_points.append({
-            "x": int(points[-1]["x"]),
-            "y": int(points[-1]["y"])
+            "x": points[-1]["x"],
+            "y": points[-1]["y"]
         })
         
         return smooth_points
@@ -671,9 +701,9 @@ class BeatmapLoader:
 
             x = start["x"] + (end["x"] - start["x"]) * t
             y = start["y"] + (end["y"] - start["y"]) * t
-            resampled.append({"x": int(round(x)), "y": int(round(y))})
+            resampled.append({"x": x, "y": y})
 
-        return self._validate_slider_points(resampled)
+        return resampled
 
 
 
@@ -809,8 +839,8 @@ class BeatmapLoader:
                 y = p1["y"] + dy * t
 
                 densified.append({
-                    "x": int(round(x)),
-                    "y": int(round(y))
+                    "x": x,
+                    "y": y
                 })
 
         densified.append(points[-1])
@@ -856,38 +886,38 @@ class BeatmapLoader:
             
             return points
 
-        # Inicia com o ponto inicial do slider
-        all_points = [{"x": start_x, "y": start_y}] + points
+        # CRITICAL: The curve must start from the slider position
+        # osu! curve_points define control points, but the Bezier must begin at slider start
+        # Add slider start position as the first control point
+        path_points = [{"x": float(start_x), "y": float(start_y)}] + points
 
         # Interpola baseado no tipo de curva
         if curve_type == "B":
             smooth_points = self.generate_bezier_path_adaptive(
-                all_points,
-                tol=0.6,
-                max_depth=14
+                path_points,
+                tol=0.15,
+                max_depth=22
             )
         elif curve_type == "C":
             smooth_points = self.generate_catmull_path(
-                all_points,
-                steps=10
+                path_points,
+                steps=35
             )
         elif curve_type == "P":
             smooth_points = self.generate_perfect_path(
-                all_points,
-                steps_per_rad=10
+                path_points,
+                steps_per_rad=14
             )
         else:  # Linear
             smooth_points = self.generate_linear_path(
-                all_points,
-                steps=24
+                path_points,
+                steps=32
             )
 
-        smooth_points = self._validate_slider_points(smooth_points)
-        
-        # Densifica para evitar gaps
+        # Lighter densification - only fill gaps
         smooth_points = self._densify_uniform(
             smooth_points,
-            spacing=6.0
+            spacing=2.5
         )
 
         # Normaliza o comprimento do slider se foi especificado
@@ -897,12 +927,14 @@ class BeatmapLoader:
                 slider_distance
             )
         
-        # Reamostra
+        # Final resampling with better parameters
         smooth_points = self._resample_slider_path(
             smooth_points,
-            min_points=32,
-            spacing=5.0
+            min_points=80,
+            spacing=2.5
         )
+
+        smooth_points = self._validate_slider_points(smooth_points)
 
         if len(smooth_points) > 2500:
             smooth_points = smooth_points[::2]
@@ -962,14 +994,14 @@ class BeatmapLoader:
                     
                     if segment_length > 0:
                         t = (distance_in_original - arc_lengths[i]) / segment_length
-                        t = max(0, min(1, t))
+                        t = max(0.0, min(1.0, t))
                     else:
-                        t = 0
+                        t = 0.0
                     
                     x = p1["x"] + (p2["x"] - p1["x"]) * t
                     y = p1["y"] + (p2["y"] - p1["y"]) * t
                     
-                    resampled.append({"x": int(round(x)), "y": int(round(y))})
+                    resampled.append({"x": x, "y": y})
                     break
         
         # Garante que o último ponto está incluído
