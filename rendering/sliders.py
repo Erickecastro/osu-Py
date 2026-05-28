@@ -161,6 +161,7 @@ class SliderRenderer:
         screen,
         slider_points,
         alpha=255,
+        object_color=(0, 150, 255),
         draw_head_marker=True,
         draw_tail_marker=False,
         cache_key=None,
@@ -187,7 +188,8 @@ class SliderRenderer:
                     draw_head_marker,
                     draw_tail_marker,
                     draw_reverse_markers,
-                    repeat_count
+                    repeat_count,
+                    object_color
                 )
                 return
 
@@ -204,7 +206,7 @@ class SliderRenderer:
                     screen,
                     slider_points[0],
                     self.scene.slider_head_radius,
-                    fill_color=(0, 150, 255),
+                    fill_color=object_color,
                     outline_color=(255, 255, 255),
                     outline_width=3,
                     alpha=a
@@ -240,7 +242,8 @@ class SliderRenderer:
             draw_head_marker,
             draw_tail_marker,
             draw_reverse_markers,
-            repeat_count
+            repeat_count,
+            object_color
         )
 
     def _draw_markers(
@@ -251,14 +254,15 @@ class SliderRenderer:
         draw_head_marker,
         draw_tail_marker,
         draw_reverse_markers,
-        repeat_count
+        repeat_count,
+        object_color
     ):
         if draw_head_marker:
             self.scene._draw_aa_circle(
                 screen,
                 slider_points[0],
                 self.scene.slider_head_radius,
-                fill_color=(0, 150, 255),
+                fill_color=object_color,
                 outline_color=(255, 255, 255),
                 outline_width=3,
                 alpha=alpha
@@ -269,7 +273,7 @@ class SliderRenderer:
                 screen,
                 slider_points[-1],
                 self.scene.scaled_radius,
-                fill_color=(0, 150, 255),
+                fill_color=object_color,
                 outline_color=(255, 255, 255),
                 outline_width=3,
                 alpha=alpha
@@ -493,7 +497,7 @@ class SliderRenderer:
         ]
         tracks = (
             (outline_radius, (30, 30, 30, 220)),
-            (body_radius, (255, 105, 180, 255))
+            (body_radius, (80, 80, 80, 255))
         )
         for radius, color in tracks:
             high_radius = max(1, int(round(radius * aa_scale)))

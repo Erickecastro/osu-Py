@@ -18,6 +18,12 @@ class GameplayScene(BaseScene):
 
     MAX_SLIDER_SURFACE_SIZE = 4096
     MAX_SLIDER_POINTS = 4000
+    DEFAULT_COMBO_COLORS = (
+        (233, 182, 29),
+        (89, 80, 203),
+        (66, 198, 221),
+        (224, 73, 73)
+    )
 
     def __init__(self, game, beatmap):
 
@@ -43,24 +49,7 @@ class GameplayScene(BaseScene):
             beatmap["notes"]
         )
 
-        combo_colors = (
-            self.beatmap.get("combo_colors")
-            or self.beatmap["difficulty"].get("combo_colors")
-            or [
-                (233, 182, 29),
-                (89, 80, 203),
-                (66, 198, 221),
-                (224, 73, 73)
-            ]
-        )
-
-        if not combo_colors:
-            combo_colors = [
-                (233, 182, 29),
-                (89, 80, 203),
-                (66, 198, 221),
-                (224, 73, 73)
-            ]
+        combo_colors = self.DEFAULT_COMBO_COLORS
 
         self.active_notes = []
         self.circle_surface_cache = {}
@@ -1085,6 +1074,7 @@ class GameplayScene(BaseScene):
                     overlay,
                     slider_points,
                     alpha=alpha,
+                    object_color=note.get("combo_color", (0, 150, 255)),
                     draw_head_marker=not note.get("judged", False),
                     draw_tail_marker=False,
                     cache_key=note.get("render_index"),
@@ -1171,7 +1161,7 @@ class GameplayScene(BaseScene):
                         overlay,
                         ball_pos,
                         scaled_hit_radius,
-                        fill_color=(0, 150, 255),
+                        fill_color=note.get("combo_color", (0, 150, 255)),
                         outline_color=(255, 255, 255),
                         outline_width=3,
                         alpha=slider_ball_alpha

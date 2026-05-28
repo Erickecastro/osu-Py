@@ -359,13 +359,10 @@ class BeatmapLoader:
             # HIT CIRCLE
             # -------------------------
             if object_type & 1:
-                hit_sample = parts[5] if len(parts) > 5 else ""
                 combo_offset = 0
 
                 if object_type & 4:
-                    combo_offset = self._parse_combo_offset(
-                        hit_sample
-                    )
+                    combo_offset = self._parse_combo_offset(object_type)
 
                 notes.append({
                     "type": "circle",
@@ -450,7 +447,7 @@ class BeatmapLoader:
                     "slider_distance": slider_distance,
                     "repeat_count": repeat_count,
                     "new_combo": bool(object_type & 4),
-                    "combo_offset": 0,
+                    "combo_offset": self._parse_combo_offset(object_type),
                     "active": False
                 })
 
@@ -460,18 +457,8 @@ class BeatmapLoader:
 
         return notes
 
-    def _parse_combo_offset(self, hit_sample):
-        if not hit_sample:
-            return 0
-
-        parts = hit_sample.split(":")
-        if not parts:
-            return 0
-
-        try:
-            return int(parts[0])
-        except:
-            return 0
+    def _parse_combo_offset(self, object_type):
+        return (int(object_type) >> 4) & 7
 
 
     def bezier_point(self, points, t):
@@ -685,7 +672,7 @@ class BeatmapLoader:
         return rdp_rec(points)
 
 
-    def generate_perfect_path(self, points, steps_per_rad=12):
+    def generate_perfect_path(self, points, steps_per_rad=12, slider_distance=0.0):
         """Approximate osu! perfect-circle (arc) sliders.
 
         In osu!, `P` sliders are circular arcs defined by exactly 3 points:
@@ -751,7 +738,13 @@ class BeatmapLoader:
         else:
             span = ccw_ac - 2 * math.pi  # CW (negative span)
 
-        samp = max(6, int(abs(span) * steps_per_rad))
+        if slider_distance > 0 and r > 1e-6:
+            direction = 1.0 if span >= 0 else -1.0
+            span = direction * (float(slider_distance) / r)
+
+        arc_length = abs(span) * r
+        samp = max(16, int(max(abs(span) * steps_per_rad, arc_length / 1.25)))
+        samp = min(3000, samp)
         out = []
         for s in range(samp + 1):
             t = s / samp
@@ -830,7 +823,7 @@ class BeatmapLoader:
         if total_length <= 0:
             return points
 
-        target_count = max(min_points, min(320, int(total_length / spacing)))
+        target_count = max(min_points, min(1400, int(total_length / spacing)))
 
         if len(points) >= target_count:
             return points
@@ -1056,7 +1049,8 @@ class BeatmapLoader:
         elif curve_type == "P":
             smooth_points = self.generate_perfect_path(
                 path_points,
-                steps_per_rad=14
+                steps_per_rad=36,
+                slider_distance=slider_distance
             )
         else:  # Linear
             smooth_points = self.generate_linear_path(
@@ -1071,7 +1065,7 @@ class BeatmapLoader:
         )
 
         # Normaliza o comprimento do slider se foi especificado
-        if slider_distance > 0 and len(smooth_points) > 1:
+        if curve_type != "P" and slider_distance > 0 and len(smooth_points) > 1:
             smooth_points = self._normalize_slider_length(
                 smooth_points,
                 slider_distance
@@ -1080,8 +1074,8 @@ class BeatmapLoader:
         # Final resampling with better parameters
         smooth_points = self._resample_slider_path(
             smooth_points,
-            min_points=80,
-            spacing=2.5
+            min_points=120,
+            spacing=1.5
         )
 
         smooth_points = self._validate_slider_points(smooth_points)
