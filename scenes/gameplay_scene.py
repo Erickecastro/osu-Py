@@ -1,9 +1,18 @@
 import pygame
-import copy
 
 from scenes.base_scene import BaseScene
 from core.audio import find_audio_file, start_music
 from core.gameplay import calculate_accuracy, hit_result_for_delta
+from core.hit_detection import find_best_hit_object
+from core.gameplay_notes import (
+    clone_notes_with_combo_data,
+    prepare_note_lifecycle
+)
+from core.gameplay_state import (
+    activate_due_notes,
+    judge_missed_notes,
+    prune_inactive_notes
+)
 from rendering.cursor import CursorRenderer
 from rendering.hud import GameplayHUDRenderer
 from rendering.primitives import (
@@ -46,11 +55,11 @@ class GameplayScene(BaseScene):
         self.start_time = None
         self.current_time = 0
 
-        self.notes = copy.deepcopy(
-            beatmap["notes"]
-        )
-
         combo_colors = self.DEFAULT_COMBO_COLORS
+        self.notes = clone_notes_with_combo_data(
+            beatmap["notes"],
+            combo_colors
+        )
 
         self.active_notes = []
         self.next_note_index = 0
@@ -58,28 +67,6 @@ class GameplayScene(BaseScene):
         self.slider_surface_cache = {}
         self.overlay_surface = None
         self.overlay_surface_size = None
-
-        current_combo_color = 0
-        current_combo_count = 0
-
-        for note_index, note in enumerate(self.notes):
-            note["active"] = False
-            note["hit_index"] = note_index + 1
-
-            if note.get("new_combo") or current_combo_count == 0:
-                if current_combo_count != 0:
-                    offset = note.get("combo_offset", 0)
-                    current_combo_color = (
-                        current_combo_color + offset + 1
-                    ) % len(combo_colors)
-                current_combo_count = 1
-            else:
-                current_combo_count += 1
-
-            note["combo_index"] = current_combo_count
-            note["combo_color"] = combo_colors[
-                current_combo_color
-            ]
 
         self.cs = self.beatmap[
             "difficulty"
@@ -237,32 +224,13 @@ class GameplayScene(BaseScene):
 
         # Pré-computa o intervalo de visibilidade de cada objeto.
         # Isso permite desenhar com alpha/escala sem depender de "sumir instantâneo".
-        for render_index, note in enumerate(self.notes):
-            note["render_index"] = render_index
-            note["start_time"] = note["time"] - self.approach_time
-
-            if note["type"] == "slider":
-                repeat_count = note.get("repeat_count", 1)
-                pixel_length = float(note.get("slider_distance", 0.0))
-                span_duration = self._slider_span_duration(
-                    note["time"],
-                    pixel_length
-                )
-                note["span_duration"] = span_duration
-                note["slider_total_duration"] = (
-                    span_duration * repeat_count
-                )
-
-                fade_out_end = (
-                    note["time"]
-                    + note["slider_total_duration"]
-                    + self.hit_fade_out_time
-                )
-                note["end_time"] = fade_out_end
-            else:
-                note["end_time"] = (
-                    note["time"] + self.hit_fade_out_time
-                )
+        prepare_note_lifecycle(
+            self.notes,
+            self.approach_time,
+            self.hit_fade_out_time,
+            self.timing_points,
+            self.slider_multiplier
+        )
 
         self.slider_renderer = SliderRenderer(self)
         self.slider_renderer.precache_surfaces()
@@ -352,59 +320,14 @@ class GameplayScene(BaseScene):
         )
 
     def _try_hit_at(self, pos):
-        best_note = None
-        best_result = None
-        best_delta = None
-
-        for note in self.active_notes:
-            if note.get("judged"):
-                continue
-
-            if note["type"] == "circle":
-                delta = self.current_time - note["time"]
-                result = self._hit_result_for_delta(delta)
-                if result is None:
-                    continue
-
-                scaled_x, scaled_y = self.scale_position(
-                    note["x"],
-                    note["y"]
-                )
-                dx = pos[0] - scaled_x
-                dy = pos[1] - scaled_y
-                distance = (dx * dx + dy * dy) ** 0.5
-
-                if distance > self.scaled_radius:
-                    continue
-
-            elif note["type"] == "slider":
-                if note.get("head_hit"):
-                    continue
-
-                delta = self.current_time - note["time"]
-                result = self._hit_result_for_delta(delta)
-                if result is None:
-                    continue
-
-                scaled_x, scaled_y = self.scale_position(
-                    note["x"],
-                    note["y"]
-                )
-                dx = pos[0] - scaled_x
-                dy = pos[1] - scaled_y
-                distance = (dx * dx + dy * dy) ** 0.5
-
-                if distance > self.scaled_radius:
-                    continue
-
-            else:
-                continue
-
-            abs_delta = abs(delta)
-            if best_delta is None or abs_delta < best_delta:
-                best_note = note
-                best_result = result
-                best_delta = abs_delta
+        best_note, best_result = find_best_hit_object(
+            self.active_notes,
+            self.current_time,
+            pos,
+            self.scaled_radius,
+            self.scale_position,
+            self._hit_result_for_delta
+        )
 
         if best_note is None:
             return False
@@ -728,57 +651,6 @@ class GameplayScene(BaseScene):
                 alpha=inner_alpha
             )
 
-    def _effective_beat_length_at(self, time_ms):
-        """
-        Retorna a beat length efetiva no `time_ms`,
-        considerando TimingPoints base (uninherited) e speed changes (inherited).
-        """
-        if not self.timing_points:
-            return 500.0
-
-        base_tp = None
-        inherited_tp = None
-
-        for tp in self.timing_points:
-            if tp["time"] > time_ms:
-                break
-            if tp.get("uninherited", 1) == 1:
-                base_tp = tp
-            else:
-                inherited_tp = tp
-
-        if base_tp is None:
-            base_tp = self.timing_points[0]
-
-        base_beat_len = float(base_tp.get("ms_per_beat", 500.0))
-
-        # inherited point: ms_per_beat vem negativo e representa speed multiplier.
-        if inherited_tp is None:
-            return base_beat_len
-
-        mpb = float(inherited_tp.get("ms_per_beat", 0.0))
-        if mpb >= 0:
-            return base_beat_len
-
-        sv_mult = -100.0 / mpb if mpb != 0 else 1.0
-        if sv_mult <= 0:
-            sv_mult = 1.0
-
-        return base_beat_len / sv_mult
-
-    def _slider_span_duration(self, slider_start_time_ms, pixel_length):
-        """
-        Duração (ms) de 1 span do slider (uma ida), usando fórmula aproximada do osu!.
-        total = span_duration * repeat_count
-        """
-        if pixel_length <= 0:
-            return 0.0
-
-        effective_beat_len = self._effective_beat_length_at(slider_start_time_ms)
-        denom = max(1e-6, 100.0 * float(self.slider_multiplier))
-        beats = pixel_length / denom
-        return effective_beat_len * beats
-
     def handle_event(self, event):
 
         if event.type == pygame.KEYDOWN:
@@ -825,46 +697,27 @@ class GameplayScene(BaseScene):
             pygame.mouse.get_pos()
         )
 
-        while self.next_note_index < len(self.notes):
-            note = self.notes[self.next_note_index]
-            start_time = note.get(
-                "start_time",
-                note["time"] - self.approach_time
-            )
-            if self.current_time < start_time:
-                break
+        self.next_note_index = activate_due_notes(
+            self.notes,
+            self.active_notes,
+            self.next_note_index,
+            self.current_time,
+            self.approach_time
+        )
 
-            note["active"] = True
-            self.active_notes.append(note)
-            self.next_note_index += 1
+        judge_missed_notes(
+            self.active_notes,
+            self.current_time,
+            self.hit_window_50,
+            self._add_hit_result
+        )
 
-        for note in self.active_notes:
-            if note.get("judged"):
-                continue
-            if note["type"] == "circle":
-                if self.current_time > note["time"] + self.hit_window_50:
-                    self._add_hit_result(note, 0)
-            elif note["type"] == "slider":
-                if self.current_time > note["time"] + self.hit_window_50:
-                    self._add_hit_result(note, 0)
-
-        self.active_notes = [
-
-            note
-
-            for note in self.active_notes
-
-            if (
-                self.current_time
-                <=
-                note.get(
-                    "end_time",
-                    note["time"] + self.hit_fade_out_time
-                )
-                +
-                self.hit_explosion_duration
-            )
-        ]
+        self.active_notes = prune_inactive_notes(
+            self.active_notes,
+            self.current_time,
+            self.hit_fade_out_time,
+            self.hit_explosion_duration
+        )
 
     def scale_position(self, x, y):
 
