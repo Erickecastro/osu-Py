@@ -1,14 +1,17 @@
 import pygame
-import os
 import copy
-from bisect import bisect_right
-
-try:
-    import numpy as np
-except ModuleNotFoundError:
-    np = None
 
 from scenes.base_scene import BaseScene
+from core.audio import find_audio_file, start_music
+from core.gameplay import calculate_accuracy, hit_result_for_delta
+from rendering.cursor import CursorRenderer
+from rendering.primitives import (
+    aa_circle_surface,
+    blit_centered,
+    draw_aa_circle,
+    draw_centered_text
+)
+from rendering.sliders import SliderRenderer
 
 
 class GameplayScene(BaseScene):
@@ -209,7 +212,9 @@ class GameplayScene(BaseScene):
             ) / 2
         )
 
-        self.find_audio()
+        self.music_path = find_audio_file(
+            self.beatmap["path"]
+        )
 
         self.slider_multiplier = (
             self.beatmap["difficulty"].get(
@@ -266,7 +271,8 @@ class GameplayScene(BaseScene):
                     note["time"] + self.hit_fade_out_time
                 )
 
-        self._precache_slider_surfaces()
+        self.slider_renderer = SliderRenderer(self)
+        self.slider_renderer.precache_surfaces()
 
         self.circle_number_font = pygame.font.SysFont(
             "arial",
@@ -274,22 +280,7 @@ class GameplayScene(BaseScene):
             bold=True
         )
 
-        self.cursor_history = []
-        self.cursor_pos = pygame.mouse.get_pos()
-        self.last_cursor_pos = self.cursor_pos
-        self.cursor_trail_emit_timer = 0.0
-        self.cursor_tail_duration = 0.285  # seconds
-        self.cursor_tail_emit_interval = 0.012  # seconds
-        self.cursor_tail_min_distance = 2.0
-        self.cursor_tail_max_points = 8
-        self.cursor_image = self._load_cursor_asset(
-            "cursor.png",
-            0.92
-        )
-        self.cursor_trail_image = self._load_cursor_asset(
-            "cursortrail.png",
-            1.16
-        )
+        self.cursor_renderer = CursorRenderer()
         self.circle_number_font = pygame.font.SysFont(
             "arial",
             28,
@@ -301,17 +292,9 @@ class GameplayScene(BaseScene):
         self.miss_indicator_duration = 520  # ms X stays visible
 
     def _accuracy(self):
-        total_hits = sum(self.hit_counts.values())
-        if total_hits <= 0:
-            return 100.0
-
-        weighted = (
-            (self.hit_counts[300] * 300)
-            + (self.hit_counts[100] * 100)
-            + (self.hit_counts[50] * 50)
+        return calculate_accuracy(
+            self.hit_counts
         )
-
-        return (weighted / (total_hits * 300)) * 100.0
 
     def _add_hit_result(self, note, result):
         note["judged"] = True
@@ -365,14 +348,12 @@ class GameplayScene(BaseScene):
         self.score += result + combo_bonus
 
     def _hit_result_for_delta(self, delta):
-        delta = abs(delta)
-        if delta <= self.hit_window_300:
-            return 300
-        if delta <= self.hit_window_100:
-            return 100
-        if delta <= self.hit_window_50:
-            return 50
-        return None
+        return hit_result_for_delta(
+            delta,
+            self.hit_window_300,
+            self.hit_window_100,
+            self.hit_window_50
+        )
 
     def _try_hit_at(self, pos):
         best_note = None
@@ -571,73 +552,21 @@ class GameplayScene(BaseScene):
         outline_color=None,
         outline_width=0
     ):
-        radius = max(1, int(round(radius)))
-        outline_width = max(0, int(round(outline_width)))
-
-        fill_key = None
-        if fill_color is not None:
-            fill_key = tuple(fill_color[:3])
-
-        outline_key = None
-        if outline_color is not None and outline_width > 0:
-            outline_key = tuple(outline_color[:3])
-
-        key = (radius, fill_key, outline_key, outline_width)
-        cached = self.circle_surface_cache.get(key)
-        if cached is not None:
-            return cached
-
-        aa_scale = 3
-        padding = max(4, outline_width + 2)
-        size = (radius + padding) * 2
-        high_size = size * aa_scale
-        high_radius = radius * aa_scale
-        high_padding = padding * aa_scale
-        high_center = (
-            high_radius + high_padding,
-            high_radius + high_padding
+        return aa_circle_surface(
+            self.circle_surface_cache,
+            radius,
+            fill_color=fill_color,
+            outline_color=outline_color,
+            outline_width=outline_width
         )
-
-        high_surface = pygame.Surface(
-            (high_size, high_size),
-            pygame.SRCALPHA
-        )
-
-        if fill_key is not None:
-            pygame.draw.circle(
-                high_surface,
-                (*fill_key, 255),
-                high_center,
-                high_radius
-            )
-
-        if outline_key is not None:
-            pygame.draw.circle(
-                high_surface,
-                (*outline_key, 255),
-                high_center,
-                high_radius,
-                max(1, outline_width * aa_scale)
-            )
-
-        surface = pygame.transform.smoothscale(
-            high_surface,
-            (size, size)
-        )
-        self.circle_surface_cache[key] = surface
-
-        return surface
 
     def _blit_centered(self, target, surface, center, alpha=255):
-        alpha = max(0, min(255, int(alpha)))
-        if alpha <= 0:
-            return
-
-        surface.set_alpha(alpha)
-        rect = surface.get_rect(
-            center=(int(round(center[0])), int(round(center[1])))
+        blit_centered(
+            target,
+            surface,
+            center,
+            alpha=alpha
         )
-        target.blit(surface, rect)
 
     def _draw_aa_circle(
         self,
@@ -649,24 +578,24 @@ class GameplayScene(BaseScene):
         outline_width=0,
         alpha=255
     ):
-        surface = self._aa_circle_surface(
+        draw_aa_circle(
+            target,
+            self.circle_surface_cache,
+            center,
             radius,
             fill_color=fill_color,
             outline_color=outline_color,
-            outline_width=outline_width
+            outline_width=outline_width,
+            alpha=alpha
         )
-        self._blit_centered(target, surface, center, alpha)
 
     def _draw_centered_text(self, target, surface, center, alpha=255):
-        alpha = max(0, min(255, int(alpha)))
-        if alpha <= 0:
-            return
-
-        surface.set_alpha(alpha)
-        rect = surface.get_rect(
-            center=(int(round(center[0])), int(round(center[1])))
+        draw_centered_text(
+            target,
+            surface,
+            center,
+            alpha=alpha
         )
-        target.blit(surface, rect)
 
     def _draw_combo_number(
         self,
@@ -703,66 +632,6 @@ class GameplayScene(BaseScene):
             center,
             alpha=alpha
         )
-
-    def _load_cursor_asset(self, filename, scale=1.0):
-        path = os.path.join(
-            "assets",
-            "cursor",
-            filename
-        )
-
-        if not os.path.exists(path):
-            return None
-
-        try:
-            image = pygame.image.load(path).convert_alpha()
-        except pygame.error:
-            return None
-
-        if scale != 1.0:
-            width = max(1, int(image.get_width() * scale))
-            height = max(1, int(image.get_height() * scale))
-            image = pygame.transform.smoothscale(
-                image,
-                (width, height)
-            )
-
-        return image
-
-    def _blit_asset_centered(
-        self,
-        target,
-        image,
-        center,
-        alpha=255,
-        scale=1.0
-    ):
-        if image is None:
-            return
-
-        alpha = max(0, min(255, int(alpha)))
-        if alpha <= 0:
-            return
-
-        render_image = image
-        if scale != 1.0:
-            width = max(1, int(image.get_width() * scale))
-            height = max(1, int(image.get_height() * scale))
-            render_image = pygame.transform.smoothscale(
-                image,
-                (width, height)
-            )
-        else:
-            render_image = image.copy()
-
-        render_image.set_alpha(alpha)
-        rect = render_image.get_rect(
-            center=(
-                int(round(center[0])),
-                int(round(center[1]))
-            )
-        )
-        target.blit(render_image, rect)
 
     def _draw_miss_pop(
         self,
@@ -819,57 +688,6 @@ class GameplayScene(BaseScene):
                 alpha=inner_alpha
             )
 
-    def _draw_slider_reverse_markers(
-        self,
-        target,
-        slider_points,
-        repeat_count,
-        alpha=255
-    ):
-        if len(slider_points) < 2 or repeat_count <= 1:
-            return
-
-        arrow_len = max(12, int(self.scaled_radius * 0.45))
-        arrow_width = max(6, int(self.scaled_radius * 0.25))
-
-        for repeat_index in range(1, repeat_count):
-            if repeat_index % 2 == 1:
-                pos = slider_points[-1]
-                reference = slider_points[-2]
-            else:
-                pos = slider_points[0]
-                reference = slider_points[1]
-
-            dx = reference[0] - pos[0]
-            dy = reference[1] - pos[1]
-            distance = (dx * dx + dy * dy) ** 0.5
-            if distance < 1e-3:
-                continue
-
-            ux = dx / distance
-            uy = dy / distance
-            perp_x = -uy
-            perp_y = ux
-
-            base = (
-                pos[0] + ux * arrow_len,
-                pos[1] + uy * arrow_len
-            )
-            left = (
-                base[0] + perp_x * arrow_width,
-                base[1] + perp_y * arrow_width
-            )
-            right = (
-                base[0] - perp_x * arrow_width,
-                base[1] - perp_y * arrow_width
-            )
-
-            pygame.draw.polygon(
-                target,
-                (255, 255, 255, int(alpha)),
-                [pos, left, right]
-            )
-
     def _effective_beat_length_at(self, time_ms):
         """
         Retorna a beat length efetiva no `time_ms`,
@@ -921,54 +739,6 @@ class GameplayScene(BaseScene):
         beats = pixel_length / denom
         return effective_beat_len * beats
 
-    def find_audio(self):
-
-        if not os.path.exists(
-            self.beatmap["path"]
-        ):
-            return
-
-        for file in os.listdir(
-            self.beatmap["path"]
-        ):
-
-            if (
-                file.endswith(".mp3")
-                or
-                file.endswith(".ogg")
-            ):
-
-                self.music_path = os.path.join(
-                    self.beatmap["path"],
-                    file
-                )
-
-                break
-
-    def start_music(self):
-
-        if (
-            self.music_path
-            and
-            not pygame.mixer.music.get_busy()
-        ):
-
-            try:
-
-                pygame.mixer.music.load(
-                    self.music_path
-                )
-
-                pygame.mixer.music.play()
-
-                self.start_time = (
-                    pygame.time.get_ticks()
-                )
-
-            except Exception as e:
-
-                print(e)
-
     def handle_event(self, event):
 
         if event.type == pygame.KEYDOWN:
@@ -997,7 +767,9 @@ class GameplayScene(BaseScene):
 
         if not self.music_started:
 
-            self.start_music()
+            self.start_time = start_music(
+                self.music_path
+            )
 
             self.music_started = True
 
@@ -1008,39 +780,10 @@ class GameplayScene(BaseScene):
                 - self.start_time
             )
 
-        raw_cursor_pos = pygame.mouse.get_pos()
-        self.cursor_pos = raw_cursor_pos
-        self.cursor_trail_emit_timer += dt
-
-        new_history = []
-        for entry in self.cursor_history:
-            entry["age"] += dt
-            if entry["age"] <= self.cursor_tail_duration:
-                new_history.append(entry)
-
-        last_cursor_pos = getattr(
-            self,
-            "last_cursor_pos",
-            self.cursor_pos
+        self.cursor_renderer.update(
+            dt,
+            pygame.mouse.get_pos()
         )
-        dx = self.cursor_pos[0] - last_cursor_pos[0]
-        dy = self.cursor_pos[1] - last_cursor_pos[1]
-        moved_distance = (dx * dx + dy * dy) ** 0.5
-
-        should_add_cursor_sample = (
-            self.cursor_trail_emit_timer >= self.cursor_tail_emit_interval
-            and moved_distance >= self.cursor_tail_min_distance
-        )
-
-        if should_add_cursor_sample:
-            new_history.append({
-                "pos": self.cursor_pos,
-                "age": 0.0
-            })
-            self.cursor_trail_emit_timer = 0.0
-            self.last_cursor_pos = self.cursor_pos
-
-        self.cursor_history = new_history[-self.cursor_tail_max_points:]
 
         for note in self.notes:
 
@@ -1102,646 +845,6 @@ class GameplayScene(BaseScene):
         )
 
         return scaled_x, scaled_y
-
-    def _build_slider_points(self, note):
-
-        all_points = note.get("curve_points", [])
-        if not all_points:
-            all_points = [
-                {
-                    "x": note["x"],
-                    "y": note["y"]
-                }
-            ]
-
-        scaled_points = []
-
-        for point in all_points:
-
-            try:
-
-                scaled_x, scaled_y = (
-                    self.scale_position(
-                        point["x"],
-                        point["y"]
-                    )
-                )
-
-                scaled_points.append(
-                    (
-                        float(scaled_x),
-                        float(scaled_y)
-                    )
-                )
-
-            except:
-                continue
-
-        filtered_points = []
-
-        for point in scaled_points:
-
-            if (
-                not filtered_points
-                or
-                point != filtered_points[-1]
-            ):
-
-                filtered_points.append(point)
-
-        if len(filtered_points) > self.MAX_SLIDER_POINTS:
-            filtered_points = filtered_points[
-                ::2
-            ]
-
-        return filtered_points
-
-    def _slider_point_at_distance(self, points, distance):
-        """
-        Retorna a posição (x, y) ao longo do path do slider,
-        usando distância acumulada em `points`.
-        """
-        if not points:
-            return (0, 0)
-        if len(points) == 1:
-            return points[0]
-
-        cumulative = [0.0]
-        total = 0.0
-
-        for i in range(len(points) - 1):
-            dx = points[i + 1][0] - points[i][0]
-            dy = points[i + 1][1] - points[i][1]
-            seg = (dx * dx + dy * dy) ** 0.5
-            total += seg
-            cumulative.append(total)
-
-        if total <= 0:
-            return points[-1]
-
-        d = max(0.0, min(total, float(distance)))
-        idx = bisect_right(cumulative, d) - 1
-        idx = max(0, min(idx, len(points) - 2))
-
-        seg_start = cumulative[idx]
-        seg_end = cumulative[idx + 1]
-        seg_len = max(1e-9, seg_end - seg_start)
-        t = (d - seg_start) / seg_len
-        t = max(0.0, min(1.0, t))
-
-        x = points[idx][0] + (points[idx + 1][0] - points[idx][0]) * t
-        y = points[idx][1] + (points[idx + 1][1] - points[idx][1]) * t
-
-        return (int(round(x)), int(round(y)))
-
-    def _slider_points_until_progress(self, points, progress):
-        if len(points) < 2:
-            return points
-
-        progress = self._clamp01(progress)
-        if progress >= 1.0:
-            return points
-
-        total_length = 0.0
-        segment_lengths = []
-
-        for i in range(len(points) - 1):
-            dx = points[i + 1][0] - points[i][0]
-            dy = points[i + 1][1] - points[i][1]
-            length = (dx * dx + dy * dy) ** 0.5
-            segment_lengths.append(length)
-            total_length += length
-
-        if total_length <= 0:
-            return points[:1]
-
-        target_length = total_length * progress
-        visible_points = [points[0]]
-        walked = 0.0
-
-        for i, segment_length in enumerate(segment_lengths):
-            next_walked = walked + segment_length
-
-            if next_walked < target_length:
-                visible_points.append(points[i + 1])
-                walked = next_walked
-                continue
-
-            if segment_length > 0:
-                t = self._clamp01((target_length - walked) / segment_length)
-                x = points[i][0] + (points[i + 1][0] - points[i][0]) * t
-                y = points[i][1] + (points[i + 1][1] - points[i][1]) * t
-                visible_points.append((x, y))
-
-            break
-
-        return visible_points
-
-    def _point_line_distance(self, point, start, end):
-        dx = end[0] - start[0]
-        dy = end[1] - start[1]
-
-        if dx == 0 and dy == 0:
-            px = point[0] - start[0]
-            py = point[1] - start[1]
-            return (px * px + py * py) ** 0.5
-
-        return abs(
-            dy * point[0]
-            - dx * point[1]
-            + end[0] * start[1]
-            - end[1] * start[0]
-        ) / ((dx * dx + dy * dy) ** 0.5)
-
-    def _simplify_slider_points(self, points, tolerance=0.35):
-        if len(points) <= 2:
-            return points
-
-        keep = {0, len(points) - 1}
-        stack = [(0, len(points) - 1)]
-
-        while stack:
-            start_idx, end_idx = stack.pop()
-            max_distance = 0.0
-            max_idx = None
-
-            for idx in range(start_idx + 1, end_idx):
-                distance = self._point_line_distance(
-                    points[idx],
-                    points[start_idx],
-                    points[end_idx]
-                )
-
-                if distance > max_distance:
-                    max_distance = distance
-                    max_idx = idx
-
-            if max_idx is not None and max_distance > tolerance:
-                keep.add(max_idx)
-                stack.append((start_idx, max_idx))
-                stack.append((max_idx, end_idx))
-
-        return [points[idx] for idx in sorted(keep)]
-
-    def _render_slider_track_surface_supersampled(
-        self,
-        size,
-        points,
-        outline_radius,
-        body_radius
-    ):
-        width, height = size
-        surface = pygame.Surface(size, pygame.SRCALPHA)
-
-        if len(points) < 2 or width <= 0 or height <= 0:
-            return surface
-
-        aa_scale = 3
-        high_surface = pygame.Surface(
-            (width * aa_scale, height * aa_scale),
-            pygame.SRCALPHA
-        )
-
-        high_points = [
-            (
-                int(round(point[0] * aa_scale)),
-                int(round(point[1] * aa_scale))
-            )
-            for point in points
-        ]
-
-        tracks = (
-            (outline_radius, (30, 30, 30, 220)),
-            (body_radius, (255, 105, 180, 255))
-        )
-
-        for radius, color in tracks:
-            high_radius = max(1, int(round(radius * aa_scale)))
-            high_width = max(1, high_radius * 2)
-
-            for i in range(len(high_points) - 1):
-                pygame.draw.line(
-                    high_surface,
-                    color,
-                    high_points[i],
-                    high_points[i + 1],
-                    high_width
-                )
-
-            for point in high_points:
-                pygame.draw.circle(
-                    high_surface,
-                    color,
-                    point,
-                    high_radius
-                )
-
-        return pygame.transform.smoothscale(
-            high_surface,
-            size
-        )
-
-    def _slider_distance_field(
-        self,
-        width,
-        height,
-        points,
-        max_distance
-    ):
-        if len(points) < 2:
-            return None
-
-        max_distance = float(max_distance)
-        distances = np.full(
-            (height, width),
-            max_distance + 2.0,
-            dtype=np.float32
-        )
-
-        for i in range(len(points) - 1):
-            x1, y1 = points[i]
-            x2, y2 = points[i + 1]
-            dx = float(x2 - x1)
-            dy = float(y2 - y1)
-            length_sq = (dx * dx) + (dy * dy)
-
-            if length_sq <= 1e-6:
-                continue
-
-            min_x = max(0, int(np.floor(min(x1, x2) - max_distance - 2)))
-            max_x = min(width - 1, int(np.ceil(max(x1, x2) + max_distance + 2)))
-            min_y = max(0, int(np.floor(min(y1, y2) - max_distance - 2)))
-            max_y = min(height - 1, int(np.ceil(max(y1, y2) + max_distance + 2)))
-
-            if min_x > max_x or min_y > max_y:
-                continue
-
-            ys, xs = np.mgrid[min_y:max_y + 1, min_x:max_x + 1]
-            sample_x = xs.astype(np.float32) + 0.5
-            sample_y = ys.astype(np.float32) + 0.5
-            px = sample_x - float(x1)
-            py = sample_y - float(y1)
-            t = np.clip(
-                ((px * dx) + (py * dy)) / length_sq,
-                0.0,
-                1.0
-            )
-            nearest_x = float(x1) + (t * dx)
-            nearest_y = float(y1) + (t * dy)
-            segment_distance = np.sqrt(
-                ((sample_x - nearest_x) ** 2)
-                + ((sample_y - nearest_y) ** 2)
-            )
-
-            current = distances[min_y:max_y + 1, min_x:max_x + 1]
-            np.minimum(
-                current,
-                segment_distance,
-                out=current
-            )
-
-        return distances
-
-    def _slider_alpha_from_distance(self, distances, radius, alpha):
-        coverage = np.clip(
-            float(radius) + 0.5 - distances,
-            0.0,
-            1.0
-        )
-
-        return (coverage * float(alpha)).astype(np.uint8)
-
-    def _render_slider_track_surface(
-        self,
-        size,
-        points,
-        outline_radius,
-        body_radius
-    ):
-        width, height = size
-        surface = pygame.Surface(size, pygame.SRCALPHA)
-
-        if len(points) < 2 or width <= 0 or height <= 0:
-            return surface
-
-        if np is None:
-            return self._render_slider_track_surface_supersampled(
-                size,
-                points,
-                outline_radius,
-                body_radius
-            )
-
-        distances = self._slider_distance_field(
-            width,
-            height,
-            points,
-            outline_radius + 2
-        )
-
-        if distances is None:
-            return surface
-
-        rgb = pygame.surfarray.pixels3d(surface)
-        alpha = pygame.surfarray.pixels_alpha(surface)
-
-        outline_alpha = self._slider_alpha_from_distance(
-            distances,
-            outline_radius,
-            220
-        )
-        body_alpha = self._slider_alpha_from_distance(
-            distances,
-            body_radius,
-            255
-        )
-        body_mask = body_alpha > 0
-
-        rgb[:, :, :] = (30, 30, 30)
-        alpha[:, :] = np.where(
-            body_mask.T,
-            body_alpha.T,
-            outline_alpha.T
-        )
-
-        rgb[body_mask.T] = (80, 80, 80)
-
-        del rgb
-        del alpha
-
-        return surface
-
-    def _slider_surface_geometry(self, slider_points):
-        if len(slider_points) < 2:
-            return None
-
-        min_x = int(np.floor(min(p[0] for p in slider_points))) if np is not None else int(min(p[0] for p in slider_points))
-        max_x = int(np.ceil(max(p[0] for p in slider_points))) if np is not None else int(max(p[0] for p in slider_points))
-
-        min_y = int(np.floor(min(p[1] for p in slider_points))) if np is not None else int(min(p[1] for p in slider_points))
-        max_y = int(np.ceil(max(p[1] for p in slider_points))) if np is not None else int(max(p[1] for p in slider_points))
-
-        padding = int(
-            self.slider_path_radius * 2
-        )
-
-        width = int(
-            (max_x - min_x)
-            + padding * 2
-        )
-
-        height = int(
-            (max_y - min_y)
-            + padding * 2
-        )
-
-        if width <= 0 or height <= 0:
-            return None
-
-        width = min(
-            width,
-            self.MAX_SLIDER_SURFACE_SIZE
-        )
-
-        height = min(
-            height,
-            self.MAX_SLIDER_SURFACE_SIZE
-        )
-
-        local_points = []
-
-        for point in slider_points:
-
-            local_x = int(
-                point[0]
-                - min_x
-                + padding
-            )
-
-            local_y = int(
-                point[1]
-                - min_y
-                + padding
-            )
-
-            if (
-                -100 <= local_x <= width + 100
-                and
-                -100 <= local_y <= height + 100
-            ):
-
-                local_points.append(
-                    (
-                        point[0] - min_x + padding,
-                        point[1] - min_y + padding
-                    )
-                )
-
-        if np is None:
-            local_points = self._simplify_slider_points(local_points)
-
-        if len(local_points) < 2:
-            return None
-
-        return (
-            (width, height),
-            local_points,
-            (
-                min_x - padding,
-                min_y - padding
-            )
-        )
-
-    def _cache_full_slider_surface(self, note, slider_points=None):
-        cache_key = note.get("render_index")
-        if cache_key is None:
-            return
-
-        if cache_key in self.slider_surface_cache:
-            return
-
-        if slider_points is None:
-            slider_points = note.get("scaled_slider_points")
-
-        if slider_points is None:
-            slider_points = self._build_slider_points(note)
-            note["scaled_slider_points"] = slider_points
-
-        geometry = self._slider_surface_geometry(slider_points)
-        if geometry is None:
-            return
-
-        size, local_points, surface_pos = geometry
-
-        outline_radius = self.slider_path_radius
-
-        body_radius = int(
-            self.slider_path_radius * 0.76
-        )
-
-        slider_surface = self._render_slider_track_surface(
-            size,
-            local_points,
-            outline_radius,
-            body_radius,
-        )
-
-        self.slider_surface_cache[cache_key] = (
-            slider_surface,
-            surface_pos
-        )
-
-    def _precache_slider_surfaces(self):
-        for note in self.notes:
-            if note["type"] != "slider":
-                continue
-
-            self._cache_full_slider_surface(note)
-
-    def _draw_slider(
-        self,
-        screen,
-        slider_points,
-        alpha=255,
-        draw_head_marker=True,
-        draw_tail_marker=False,
-        cache_key=None,
-        reveal_progress=1.0,
-        repeat_count=1,
-        draw_reverse_markers=False
-    ):
-
-        if len(slider_points) < 2:
-            return
-
-        if alpha <= 0:
-            return
-
-        a = max(0, min(255, int(alpha)))
-        reveal_progress = self._clamp01(reveal_progress)
-
-        if cache_key is not None and reveal_progress >= 0.995:
-            cached = self.slider_surface_cache.get(cache_key)
-            if cached is not None:
-                slider_surface, surface_pos = cached
-                slider_surface.set_alpha(a)
-                screen.blit(slider_surface, surface_pos)
-
-                if draw_head_marker:
-                    self._draw_aa_circle(
-                        screen,
-                        slider_points[0],
-                        self.slider_head_radius,
-                        fill_color=(0, 150, 255),
-                        outline_color=(255, 255, 255),
-                        outline_width=3,
-                        alpha=a
-                    )
-
-                if draw_tail_marker:
-                    self._draw_aa_circle(
-                        screen,
-                        slider_points[-1],
-                        self.scaled_radius,
-                        fill_color=(0, 150, 255),
-                        outline_color=(255, 255, 255),
-                        outline_width=3,
-                        alpha=a
-                    )
-
-                if draw_reverse_markers and repeat_count > 1:
-                    self._draw_slider_reverse_markers(
-                        screen,
-                        slider_points,
-                        repeat_count,
-                        alpha=a
-                    )
-
-                return
-
-        render_points = slider_points
-        if reveal_progress < 0.995:
-            render_points = self._slider_points_until_progress(
-                slider_points,
-                reveal_progress
-            )
-
-        if len(render_points) < 2:
-            if draw_head_marker:
-                self._draw_aa_circle(
-                    screen,
-                    slider_points[0],
-                    self.slider_head_radius,
-                    fill_color=(0, 150, 255),
-                    outline_color=(255, 255, 255),
-                    outline_width=3,
-                    alpha=a
-                )
-            return
-
-        geometry = self._slider_surface_geometry(render_points)
-        if geometry is None:
-            return
-
-        size, local_points, surface_pos = geometry
-
-        outline_radius = self.slider_path_radius
-        body_radius = int(
-            self.slider_path_radius * 0.76
-        )
-
-        slider_surface = self._render_slider_track_surface(
-            size,
-            local_points,
-            outline_radius,
-            body_radius,
-        )
-
-        if cache_key is not None and reveal_progress >= 0.995:
-            self.slider_surface_cache[cache_key] = (
-                slider_surface,
-                surface_pos
-            )
-
-        slider_surface.set_alpha(a)
-        screen.blit(
-            slider_surface,
-            surface_pos
-        )
-
-        if draw_head_marker or draw_tail_marker:
-            head_pos = slider_points[0]
-            tail_pos = slider_points[-1]
-
-            if draw_head_marker:
-                self._draw_aa_circle(
-                    screen,
-                    head_pos,
-                    self.slider_head_radius,
-                    fill_color=(0, 150, 255),
-                    outline_color=(255, 255, 255),
-                    outline_width=3,
-                    alpha=a
-                )
-
-            if draw_tail_marker:
-                self._draw_aa_circle(
-                    screen,
-                    tail_pos,
-                    self.scaled_radius,
-                    fill_color=(0, 150, 255),
-                    outline_color=(255, 255, 255),
-                    outline_width=3,
-                    alpha=a
-                )
-
-            if draw_reverse_markers and repeat_count > 1:
-                self._draw_slider_reverse_markers(
-                    screen,
-                    slider_points,
-                    repeat_count,
-                    alpha=a
-                )
 
     def render(self, screen):
 
@@ -1973,12 +1076,12 @@ class GameplayScene(BaseScene):
 
                 slider_points = note.get("scaled_slider_points")
                 if slider_points is None:
-                    slider_points = self._build_slider_points(note)
+                    slider_points = self.slider_renderer.build_points(note)
                     note["scaled_slider_points"] = slider_points
 
                 reveal_progress = self._slider_reveal_progress(note)
 
-                self._draw_slider(
+                self.slider_renderer.draw(
                     overlay,
                     slider_points,
                     alpha=alpha,
@@ -2059,7 +1162,7 @@ class GameplayScene(BaseScene):
                             t if forward else (1.0 - t)
                         )
 
-                    ball_pos = self._slider_point_at_distance(
+                    ball_pos = self.slider_renderer.point_at_distance(
                         slider_points,
                         ball_dist
                     )
@@ -2113,53 +1216,7 @@ class GameplayScene(BaseScene):
 
         screen.blit(overlay, (0, 0))
 
-        self._draw_custom_cursor(screen)
-
-    def _draw_custom_cursor(self, screen):
-        cursor_pos = getattr(
-            self,
-            "cursor_pos",
-            pygame.mouse.get_pos()
-        )
-
-        trail_surface = pygame.Surface(
-            screen.get_size(),
-            pygame.SRCALPHA
-        )
-
-        points = [
-            entry for entry in self.cursor_history
-            if entry["age"] <= self.cursor_tail_duration
-        ]
-
-        for entry in points:
-            progress = self._clamp01(
-                entry["age"] / self.cursor_tail_duration
-            )
-            fade_in = self._clamp01(entry["age"] / 0.018)
-            fade_out = 1.0 - progress
-            alpha = int(
-                220
-                * self._ease_out_cubic(fade_in)
-                * (fade_out ** 1.8)
-            )
-            scale = 0.86 + (0.14 * self._ease_out_cubic(fade_in))
-            self._blit_asset_centered(
-                trail_surface,
-                self.cursor_trail_image,
-                entry["pos"],
-                alpha=alpha,
-                scale=scale
-            )
-
-        screen.blit(trail_surface, (0, 0))
-
-        self._blit_asset_centered(
-            screen,
-            self.cursor_image,
-            cursor_pos,
-            alpha=250
-        )
+        self.cursor_renderer.draw(screen)
 
     def destroy(self):
 
