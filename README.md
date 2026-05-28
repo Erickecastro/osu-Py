@@ -1,1 +1,78 @@
-Um projeto feito por fã do jogo clássico de ritmo OSU!. WIP.
+# osu-Py
+
+osu-Py e um projeto fan-made de jogo de ritmo inspirado no osu!, feito em Python com pygame-ce. O objetivo e carregar beatmaps no formato `.osu`, tocar a musica correspondente e renderizar uma gameplay jogavel com hit circles, sliders, approach circles, combo, score, accuracy, cursor customizado e selecao de musicas/dificuldades.
+
+O projeto ainda esta em desenvolvimento, mas a gameplay principal ja esta funcional e vem sendo reorganizada aos poucos para facilitar manutencao, melhorar performance e separar melhor as responsabilidades entre loader, cenas, renderizadores e regras de jogo.
+
+## Funcionalidades atuais
+
+- Leitura de pastas de beatmaps dentro de `songs/`.
+- Parse de metadata, difficulty, timing points, hit circles, sliders e cores de combo.
+- Gameplay com circles, sliders, reverse markers, slider ball, fade in/out, miss pop, score, combo e accuracy.
+- Renderizacao de cursor e cursor trail usando assets em `assets/cursor/`.
+- Menus com `pygame_gui` para selecionar musica e dificuldade.
+- Suporte a fullscreen e troca de fullscreen com `F11`.
+
+## Requisitos
+
+- Python 3.12 recomendado.
+- Windows foi o ambiente principal de desenvolvimento/teste.
+- Dependencias listadas em `requirements.txt`.
+
+Instale as dependencias com:
+
+```bash
+pip install -r requirements.txt
+```
+
+Em alguns ambientes Windows, o comando pode ser:
+
+```bash
+py -3.12 -m pip install -r requirements.txt
+```
+
+## Como rodar
+
+```bash
+py -3.12 main.py
+```
+
+Ou, se `python` apontar para a versao correta:
+
+```bash
+python main.py
+```
+
+## Beatmaps
+
+Coloque as musicas dentro da pasta `songs/`. Cada beatmap deve manter sua estrutura original, incluindo pelo menos:
+
+- Arquivo `.osu`.
+- Arquivo de audio referenciado pelo `.osu`.
+- Assets opcionais do beatmap, quando existirem.
+
+O loader percorre as subpastas de `songs/`, encontra arquivos `.osu` e monta a lista de dificuldades disponiveis.
+
+## Controles
+
+- `Z` ou `X`: acertar objetos.
+- Clique esquerdo ou direito: acertar objetos.
+- `Esc`: sair da gameplay ou voltar uma cena.
+- `F11`: alternar fullscreen.
+- `Alt + F4`: sair do jogo.
+
+## Estrutura do projeto
+
+- `main.py`: ponto de entrada.
+- `core/`: loop principal, audio, loader de beatmaps, scene manager e calculos de gameplay.
+- `scenes/`: menus, selecao de musica/dificuldade e cena de gameplay.
+- `rendering/`: renderizacao de primitivas, cursor e sliders.
+- `assets/`: assets globais do jogo.
+- `songs/`: beatmaps usados nos testes.
+- `ui/`: espaco reservado para componentes/temas de interface.
+
+## Observacoes de desenvolvimento
+
+O projeto prioriza manter uma base simples e facil de evoluir. A cena de gameplay ainda concentra bastante logica, entao uma das proximas etapas e fragmentar melhor essa cena em componentes menores, especialmente HUD, lifecycle dos objetos, julgamento de hit e renderizacao especifica de notas.
+
+Se aparecer o aviso `libpng warning: iCCP: known incorrect sRGB profile`, ele normalmente indica um perfil de cor invalido em algum PNG carregado pelo pygame. Em geral isso nao impede o jogo de funcionar.
