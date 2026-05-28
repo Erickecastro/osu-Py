@@ -52,8 +52,11 @@ class GameplayScene(BaseScene):
         combo_colors = self.DEFAULT_COMBO_COLORS
 
         self.active_notes = []
+        self.next_note_index = 0
         self.circle_surface_cache = {}
         self.slider_surface_cache = {}
+        self.overlay_surface = None
+        self.overlay_surface_size = None
 
         current_combo_color = 0
         current_combo_count = 0
@@ -275,6 +278,8 @@ class GameplayScene(BaseScene):
             28,
             bold=True
         )
+        self.hud_text_cache = {}
+        self.combo_number_surface_cache = {}
         
         self.miss_indicators = []
         self.miss_indicator_delay = 25  # ms before the X appears
@@ -586,6 +591,43 @@ class GameplayScene(BaseScene):
             alpha=alpha
         )
 
+    def _hud_text_surface(self, text, color=(255, 255, 255)):
+        key = (text, tuple(color))
+        cached = self.hud_text_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if len(self.hud_text_cache) > 96:
+            self.hud_text_cache.clear()
+
+        surface = self.font.render(
+            text,
+            True,
+            color
+        )
+        self.hud_text_cache[key] = surface
+        return surface
+
+    def _combo_number_surfaces(self, text):
+        cached = self.combo_number_surface_cache.get(text)
+        if cached is not None:
+            return cached
+
+        surfaces = (
+            self.circle_number_font.render(
+                text,
+                True,
+                (0, 0, 0)
+            ),
+            self.circle_number_font.render(
+                text,
+                True,
+                (255, 255, 255)
+            )
+        )
+        self.combo_number_surface_cache[text] = surfaces
+        return surfaces
+
     def _draw_combo_number(
         self,
         target,
@@ -594,11 +636,7 @@ class GameplayScene(BaseScene):
         color,
         alpha=255
     ):
-        outline = self.circle_number_font.render(
-            text,
-            True,
-            (0, 0, 0)
-        )
+        outline, main_text = self._combo_number_surfaces(text)
         outline.set_alpha(alpha)
 
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
@@ -610,11 +648,6 @@ class GameplayScene(BaseScene):
             )
             target.blit(outline, rect)
 
-        main_text = self.circle_number_font.render(
-            text,
-            True,
-            (255, 255, 255)
-        )
         self._draw_centered_text(
             target,
             main_text,
@@ -774,24 +807,18 @@ class GameplayScene(BaseScene):
             pygame.mouse.get_pos()
         )
 
-        for note in self.notes:
+        while self.next_note_index < len(self.notes):
+            note = self.notes[self.next_note_index]
+            start_time = note.get(
+                "start_time",
+                note["time"] - self.approach_time
+            )
+            if self.current_time < start_time:
+                break
 
-            if (
-                not note["active"]
-                and
-                self.current_time >= (
-                    note.get(
-                        "start_time",
-                        note["time"] - self.approach_time
-                    )
-                )
-            ):
-
-                note["active"] = True
-
-                self.active_notes.append(
-                    note
-                )
+            note["active"] = True
+            self.active_notes.append(note)
+            self.next_note_index += 1
 
         for note in self.active_notes:
             if note.get("judged"):
@@ -853,9 +880,8 @@ class GameplayScene(BaseScene):
             "Unknown"
         )
 
-        title_text = self.font.render(
+        title_text = self._hud_text_surface(
             f"{title} [{version}]",
-            True,
             (255, 255, 255)
         )
 
@@ -864,9 +890,9 @@ class GameplayScene(BaseScene):
             (20, 20)
         )
 
-        time_text = self.font.render(
-            f"{self.current_time} ms",
-            True,
+        display_time = int(self.current_time // 25) * 25
+        time_text = self._hud_text_surface(
+            f"{display_time} ms",
             (0, 255, 0)
         )
 
@@ -875,19 +901,16 @@ class GameplayScene(BaseScene):
             (20, 60)
         )
 
-        score_text = self.font.render(
+        score_text = self._hud_text_surface(
             f"{self.score:08d}",
-            True,
             (255, 255, 255)
         )
-        accuracy_text = self.font.render(
+        accuracy_text = self._hud_text_surface(
             f"{self._accuracy():05.2f}%",
-            True,
             (255, 255, 255)
         )
-        combo_text = self.font.render(
+        combo_text = self._hud_text_surface(
             f"{self.combo}x",
-            True,
             (255, 255, 255)
         )
 
@@ -932,7 +955,16 @@ class GameplayScene(BaseScene):
         )
 
         # Camada transparente para permitir alpha real (fade in/out suave).
-        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        screen_size = screen.get_size()
+        if self.overlay_surface is None or self.overlay_surface_size != screen_size:
+            self.overlay_surface = pygame.Surface(
+                screen_size,
+                pygame.SRCALPHA
+            )
+            self.overlay_surface_size = screen_size
+
+        overlay = self.overlay_surface
+        overlay.fill((0, 0, 0, 0))
 
         for note in self.active_notes:
 

@@ -15,6 +15,9 @@ class CursorRenderer:
         self.last_emit_pos = self.pos
         self.emit_timer = 0.0
         self.trail = []
+        self.trail_surface = None
+        self.trail_surface_size = None
+        self.scaled_image_cache = {}
 
         self.trail_duration = 0.285
         self.trail_emit_interval = 0.012
@@ -58,10 +61,15 @@ class CursorRenderer:
         self.trail = live_trail[-self.trail_max_points:]
 
     def draw(self, screen):
-        trail_surface = pygame.Surface(
-            screen.get_size(),
-            pygame.SRCALPHA
-        )
+        screen_size = screen.get_size()
+        if self.trail_surface is None or self.trail_surface_size != screen_size:
+            self.trail_surface = pygame.Surface(
+                screen_size,
+                pygame.SRCALPHA
+            )
+            self.trail_surface_size = screen_size
+
+        self.trail_surface.fill((0, 0, 0, 0))
 
         for entry in self.trail:
             progress = self._clamp01(
@@ -76,14 +84,14 @@ class CursorRenderer:
             )
             scale = 0.86 + (0.14 * self._ease_out_cubic(fade_in))
             self._blit_centered(
-                trail_surface,
+                self.trail_surface,
                 self.trail_image,
                 entry["pos"],
                 alpha=alpha,
                 scale=scale
             )
 
-        screen.blit(trail_surface, (0, 0))
+        screen.blit(self.trail_surface, (0, 0))
 
         self._blit_centered(
             screen,
@@ -138,12 +146,16 @@ class CursorRenderer:
                 max(1, int(image.get_width() * scale)),
                 max(1, int(image.get_height() * scale))
             )
-            render_image = pygame.transform.smoothscale(
-                image,
-                size
-            )
+            cache_key = (id(image), size)
+            render_image = self.scaled_image_cache.get(cache_key)
+            if render_image is None:
+                render_image = pygame.transform.smoothscale(
+                    image,
+                    size
+                )
+                self.scaled_image_cache[cache_key] = render_image
         else:
-            render_image = image.copy()
+            render_image = image
 
         render_image.set_alpha(alpha)
         rect = render_image.get_rect(
