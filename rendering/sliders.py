@@ -1,6 +1,10 @@
+import math
+import os
 from bisect import bisect_right
 
 import pygame
+
+from core.beatmap_timing import effective_beat_length_at
 
 try:
     import numpy as np
@@ -11,6 +15,23 @@ except ModuleNotFoundError:
 class SliderRenderer:
     def __init__(self, scene):
         self.scene = scene
+        self.reverse_arrow_image = self._load_reverse_arrow()
+        self.reverse_arrow_cache = {}
+        self.precache_index = 0
+
+    def _load_reverse_arrow(self):
+        path = os.path.join(
+            "assets",
+            "gameplay",
+            "reversearrow.png"
+        )
+        if not os.path.exists(path):
+            return None
+
+        try:
+            return pygame.image.load(path).convert_alpha()
+        except pygame.error:
+            return None
 
     def build_points(self, note):
         all_points = note.get("curve_points", [])
@@ -91,6 +112,26 @@ class SliderRenderer:
                 continue
             self.cache_full_surface(note)
 
+    def precache_step(self, max_ms=4, max_items=2):
+        start = pygame.time.get_ticks()
+        cached_count = 0
+
+        while self.precache_index < len(self.scene.notes):
+            note = self.scene.notes[self.precache_index]
+            self.precache_index += 1
+
+            if note["type"] != "slider":
+                continue
+
+            self.cache_full_surface(note)
+            cached_count += 1
+
+            elapsed = pygame.time.get_ticks() - start
+            if cached_count >= max_items or elapsed >= max_ms:
+                break
+
+        return self.precache_index >= len(self.scene.notes)
+
     def cache_full_surface(self, note, slider_points=None):
         cache_key = note.get("render_index")
         if cache_key is None:
@@ -138,7 +179,9 @@ class SliderRenderer:
         draw_tail_marker=False,
         cache_key=None,
         repeat_count=1,
-        draw_reverse_markers=False
+        draw_reverse_markers=False,
+        slider_start_time=None,
+        span_duration=None
     ):
         if len(slider_points) < 2 or alpha <= 0:
             return
@@ -161,7 +204,9 @@ class SliderRenderer:
                 draw_tail_marker,
                 draw_reverse_markers,
                 repeat_count,
-                object_color
+                object_color,
+                slider_start_time,
+                span_duration
             )
             return
 
@@ -195,7 +240,9 @@ class SliderRenderer:
             draw_tail_marker,
             draw_reverse_markers,
             repeat_count,
-            object_color
+            object_color,
+            slider_start_time,
+            span_duration
         )
 
     def _draw_markers(
@@ -207,7 +254,9 @@ class SliderRenderer:
         draw_tail_marker,
         draw_reverse_markers,
         repeat_count,
-        object_color
+        object_color,
+        slider_start_time,
+        span_duration
     ):
         if draw_head_marker:
             self.scene._draw_aa_circle(
@@ -236,6 +285,8 @@ class SliderRenderer:
                 screen,
                 slider_points,
                 repeat_count,
+                slider_start_time=slider_start_time,
+                span_duration=span_duration,
                 alpha=alpha
             )
 
@@ -244,49 +295,92 @@ class SliderRenderer:
         target,
         slider_points,
         repeat_count,
+        slider_start_time=None,
+        span_duration=None,
         alpha=255
     ):
         if len(slider_points) < 2 or repeat_count <= 1:
             return
 
-        arrow_len = max(12, int(self.scene.scaled_radius * 0.45))
-        arrow_width = max(6, int(self.scene.scaled_radius * 0.25))
+        beat_length = effective_beat_length_at(
+            self.scene.timing_points,
+            self.scene.current_time
+        )
+        beat_length = max(120.0, float(beat_length))
+        pulse = 0.5 + 0.5 * math.sin(
+            (self.scene.current_time / beat_length) * math.tau
+        )
+        pulse_scale = 1.0 + (0.12 * pulse)
+        pulse_alpha = int(alpha * (0.72 + (0.28 * pulse)))
 
-        for repeat_index in range(1, repeat_count):
-            if repeat_index % 2 == 1:
-                pos = slider_points[-1]
-                reference = slider_points[-2]
-            else:
-                pos = slider_points[0]
-                reference = slider_points[1]
+        arrow_size = max(
+            18,
+            int(self.scene.scaled_radius * 0.56 * pulse_scale)
+        )
 
-            dx = reference[0] - pos[0]
-            dy = reference[1] - pos[1]
-            distance = (dx * dx + dy * dy) ** 0.5
-            if distance < 1e-3:
-                continue
+        repeat_index = 1
+        if slider_start_time is not None and span_duration:
+            elapsed = self.scene.current_time - slider_start_time
+            repeat_index = int(max(0.0, elapsed) / max(1.0, span_duration)) + 1
+            repeat_index = max(1, min(repeat_index, repeat_count - 1))
 
-            ux = dx / distance
-            uy = dy / distance
-            perp_x = -uy
-            perp_y = ux
-            base = (
-                pos[0] + ux * arrow_len,
-                pos[1] + uy * arrow_len
+        if repeat_index % 2 == 1:
+            pos = slider_points[-1]
+            reference = slider_points[-2]
+        else:
+            pos = slider_points[0]
+            reference = slider_points[1]
+
+        dx = reference[0] - pos[0]
+        dy = reference[1] - pos[1]
+        distance = (dx * dx + dy * dy) ** 0.5
+        if distance < 1e-3:
+            return
+
+        ux = dx / distance
+        uy = dy / distance
+        center = (
+            pos[0] + (ux * self.scene.scaled_radius * 0.18),
+            pos[1] + (uy * self.scene.scaled_radius * 0.18)
+        )
+        angle = -math.degrees(math.atan2(uy, ux))
+        self._draw_reverse_arrow_image(
+            target,
+            center,
+            arrow_size,
+            angle,
+            pulse_alpha
+        )
+
+    def _draw_reverse_arrow_image(self, target, center, size, angle, alpha):
+        if self.reverse_arrow_image is None:
+            return
+
+        size = max(1, int(size))
+        angle = int(round(angle))
+        cache_key = (size, angle)
+        cached = self.reverse_arrow_cache.get(cache_key)
+        if cached is None:
+            scaled = pygame.transform.smoothscale(
+                self.reverse_arrow_image,
+                (size, size)
             )
-            left = (
-                base[0] + perp_x * arrow_width,
-                base[1] + perp_y * arrow_width
+            cached = pygame.transform.rotozoom(
+                scaled,
+                angle,
+                1.0
             )
-            right = (
-                base[0] - perp_x * arrow_width,
-                base[1] - perp_y * arrow_width
+            self.reverse_arrow_cache[cache_key] = cached
+
+        image = cached.copy()
+        image.set_alpha(max(0, min(255, int(alpha))))
+        rect = image.get_rect(
+            center=(
+                int(round(center[0])),
+                int(round(center[1]))
             )
-            pygame.draw.polygon(
-                target,
-                (255, 255, 255, int(alpha)),
-                [pos, left, right]
-            )
+        )
+        target.blit(image, rect)
 
     def _point_line_distance(self, point, start, end):
         dx = end[0] - start[0]
@@ -390,10 +484,14 @@ class SliderRenderer:
                 body_radius
             )
 
+        render_points = self._simplify_points(
+            points,
+            tolerance=0.18
+        )
         distances = self._distance_field(
             width,
             height,
-            points,
+            render_points,
             outline_radius + 2
         )
         if distances is None:

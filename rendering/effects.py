@@ -1,0 +1,133 @@
+class GameplayEffectsRenderer:
+    def __init__(self, scene):
+        self.scene = scene
+        self.combo_number_surface_cache = {}
+
+    def combo_number_surfaces(self, text):
+        cached = self.combo_number_surface_cache.get(text)
+        if cached is not None:
+            return cached
+
+        surfaces = (
+            self.scene.circle_number_font.render(
+                text,
+                True,
+                (0, 0, 0)
+            ),
+            self.scene.circle_number_font.render(
+                text,
+                True,
+                (255, 255, 255)
+            )
+        )
+        self.combo_number_surface_cache[text] = surfaces
+        return surfaces
+
+    def draw_combo_number(
+        self,
+        target,
+        text,
+        center,
+        alpha=255
+    ):
+        outline, main_text = self.combo_number_surfaces(text)
+        outline.set_alpha(alpha)
+
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            rect = outline.get_rect(
+                center=(
+                    int(round(center[0] + dx)),
+                    int(round(center[1] + dy))
+                )
+            )
+            target.blit(outline, rect)
+
+        self.scene._draw_centered_text(
+            target,
+            main_text,
+            center,
+            alpha=alpha
+        )
+
+    def draw_miss_pop(
+        self,
+        target,
+        center,
+        radius,
+        color,
+        alpha=255
+    ):
+        alpha = max(0, min(255, int(alpha)))
+        if alpha <= 0:
+            return
+
+        radius = max(1, int(radius))
+        progress = self.scene._clamp01(1.0 - (alpha / 255.0))
+        eased = progress * progress * progress * (
+            progress * (progress * 6.0 - 15.0) + 10.0
+        )
+        collapse = 1.0 - ((1.0 - eased) ** 1.75)
+        remaining = 1.0 - collapse
+
+        fill_radius = int(radius * max(0.04, remaining ** 1.05))
+        shell_radius = int(radius * max(0.07, remaining ** 0.94))
+        ring_width = max(1, int(radius * (0.055 * remaining + 0.018)))
+        visible_alpha = int(255 * (remaining ** 1.18))
+
+        if fill_radius > 1:
+            self.scene._draw_aa_circle(
+                target,
+                center,
+                fill_radius,
+                fill_color=color,
+                alpha=int(visible_alpha * 0.82)
+            )
+
+        self.scene._draw_aa_circle(
+            target,
+            center,
+            shell_radius,
+            outline_color=(255, 255, 255),
+            outline_width=ring_width,
+            alpha=visible_alpha
+        )
+
+        if progress < 0.64:
+            inner_alpha = int(visible_alpha * (1.0 - progress / 0.64) * 0.30)
+            inner_radius = int(radius * max(0.03, remaining ** 1.42))
+            self.scene._draw_aa_circle(
+                target,
+                center,
+                inner_radius,
+                outline_color=(255, 255, 255),
+                outline_width=max(1, int(ring_width * 0.55)),
+                alpha=inner_alpha
+            )
+
+    def draw_hit_explosion(
+        self,
+        target,
+        center,
+        radius,
+        color,
+        hit_time,
+        alpha=255
+    ):
+        explosion_elapsed = self.scene.current_time - hit_time
+        explosion_progress = min(
+            1.0,
+            explosion_elapsed / self.scene.hit_explosion_duration
+        )
+        expansion_factor = 1.0 + (explosion_progress * 0.4)
+        explosion_radius = int(radius * expansion_factor)
+        explosion_alpha = int(alpha * (1.0 - explosion_progress))
+
+        self.scene._draw_aa_circle(
+            target,
+            center,
+            explosion_radius,
+            fill_color=color,
+            outline_color=(255, 255, 255),
+            outline_width=max(1, int(3 * (1.0 - explosion_progress))),
+            alpha=explosion_alpha
+        )

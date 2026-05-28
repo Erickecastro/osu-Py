@@ -3,6 +3,16 @@ import hashlib
 import math
 from bisect import bisect_right
 
+from core.osu_hitobjects import parse_hitobjects_section
+from core.osu_sections import (
+    parse_background_event,
+    parse_colours_section,
+    parse_difficulty_section,
+    parse_metadata_section,
+    parse_timing_points_section,
+    read_osu_lines
+)
+
 
 class BeatmapLoader:
 
@@ -55,25 +65,31 @@ class BeatmapLoader:
             for osu_file in osu_files:
 
                 try:
+                    lines = read_osu_lines(osu_file)
 
-                    notes = self.parse_hitobjects(
-                        osu_file
+                    notes = parse_hitobjects_section(
+                        lines,
+                        self.generate_slider_path
                     )
 
-                    difficulty = self.parse_difficulty(
-                        osu_file
+                    difficulty = parse_difficulty_section(
+                        lines
                     )
 
-                    metadata = self.parse_metadata(
-                        osu_file
+                    metadata = parse_metadata_section(
+                        lines
                     )
 
-                    timing_points = self.parse_timing_points(
-                        osu_file
+                    timing_points = parse_timing_points_section(
+                        lines
                     )
 
-                    combo_colors = self.parse_colours(
-                        osu_file
+                    combo_colors = parse_colours_section(
+                        lines
+                    )
+
+                    background = parse_background_event(
+                        lines
                     )
 
                     difficulty_data = {
@@ -84,7 +100,8 @@ class BeatmapLoader:
                         "metadata": metadata,
                         "difficulty": difficulty,
                         "timing_points": timing_points,
-                        "combo_colors": combo_colors
+                        "combo_colors": combo_colors,
+                        "background": background
                     }
 
                     beatmap_data[
@@ -119,170 +136,22 @@ class BeatmapLoader:
     # METADATA
     # -------------------------
     def parse_metadata(self, osu_file):
-
-        metadata = {
-            "Title": "Unknown",
-            "Artist": "Unknown",
-            "Creator": "Unknown",
-            "Version": "Unknown"
-        }
-
-        with open(
-            osu_file,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ) as file:
-
-            lines = file.readlines()
-
-        metadata_section = False
-
-        for line in lines:
-
-            line = line.strip()
-
-            if line == "[Metadata]":
-
-                metadata_section = True
-
-                continue
-
-            if (
-                metadata_section
-                and
-                line.startswith("[")
-            ):
-
-                break
-
-            if metadata_section:
-
-                if ":" not in line:
-
-                    continue
-
-                key, value = line.split(
-                    ":",
-                    1
-                )
-
-                metadata[
-                    key.strip()
-                ] = value.strip()
-
-        return metadata
+        return parse_metadata_section(
+            read_osu_lines(osu_file)
+        )
 
     # -------------------------
     # TIMING POINTS
     # -------------------------
     def parse_timing_points(self, osu_file):
-        """
-        Parse `[TimingPoints]` from an .osu file.
-
-        We only keep:
-        - `time` (ms)
-        - `ms_per_beat` (can be negative for inherited points)
-        - `uninherited` (1 = base point, 0 = inherited point)
-        """
-        timing_points = []
-
-        with open(
-            osu_file,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ) as file:
-            lines = file.readlines()
-
-        timing_section = False
-
-        for line in lines:
-            line = line.strip()
-
-            if line == "[TimingPoints]":
-                timing_section = True
-                continue
-
-            if timing_section and line.startswith("["):
-                break
-
-            if not timing_section or not line:
-                continue
-
-            parts = line.split(",")
-            if len(parts) < 2:
-                continue
-
-            try:
-                tp_time = float(parts[0])
-                ms_per_beat = float(parts[1])
-                uninherited = int(parts[6]) if len(parts) > 6 else 1
-            except:
-                continue
-
-            timing_points.append({
-                "time": tp_time,
-                "ms_per_beat": ms_per_beat,
-                "uninherited": uninherited
-            })
-
-        timing_points.sort(key=lambda tp: tp["time"])
-        return timing_points
+        return parse_timing_points_section(
+            read_osu_lines(osu_file)
+        )
 
     def parse_colours(self, osu_file):
-        combo_colors = []
-
-        with open(
-            osu_file,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ) as file:
-            lines = file.readlines()
-
-        colours_section = False
-
-        for line in lines:
-            line = line.strip()
-
-            if line == "[Colours]":
-                colours_section = True
-                continue
-
-            if colours_section and line.startswith("["):
-                break
-
-            if not colours_section or not line:
-                continue
-
-            if ":" not in line:
-                continue
-
-            key, value = line.split(":", 1)
-            key = key.strip()
-
-            if not key.lower().startswith("combo"):
-                continue
-
-            digits = "".join(ch for ch in key if ch.isdigit())
-            try:
-                index = int(digits) if digits else 0
-            except:
-                index = 0
-
-            rgb = []
-            for part in value.split(",")[:3]:
-                try:
-                    rgb.append(int(part.strip()))
-                except:
-                    break
-
-            if len(rgb) == 3:
-                combo_colors.append((index, tuple(rgb)))
-
-        combo_colors.sort(key=lambda item: item[0])
-        return [color for _, color in combo_colors]
+        return parse_colours_section(
+            read_osu_lines(osu_file)
+        )
 
     # -------------------------
     # FIND .OSU FILES
@@ -306,160 +175,10 @@ class BeatmapLoader:
     # -------------------------
     def parse_hitobjects(self, osu_file):
 
-        notes = []
-
-        with open(
-            osu_file,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ) as file:
-
-            lines = file.readlines()
-
-        hitobjects_section = False
-
-        for line in lines:
-
-            line = line.strip()
-
-            if line == "[HitObjects]":
-
-                hitobjects_section = True
-
-                continue
-
-            if not hitobjects_section:
-
-                continue
-
-            if line == "":
-
-                continue
-
-            parts = line.split(",")
-
-            if len(parts) < 4:
-
-                continue
-
-            try:
-
-                x = int(parts[0])
-                y = int(parts[1])
-                time = int(parts[2])
-
-                object_type = int(parts[3])
-
-            except:
-
-                continue
-
-            # -------------------------
-            # HIT CIRCLE
-            # -------------------------
-            if object_type & 1:
-                combo_offset = 0
-
-                if object_type & 4:
-                    combo_offset = self._parse_combo_offset(object_type)
-
-                notes.append({
-                    "type": "circle",
-                    "x": x,
-                    "y": y,
-                    "time": time,
-                    "new_combo": bool(object_type & 4),
-                    "combo_offset": combo_offset,
-                    "active": False
-                })
-
-            # -------------------------
-            # SLIDER
-            # -------------------------
-            elif object_type & 2:
-
-                curve_type = "L"
-                curve_points = []
-                repeat_count = 1
-                slider_distance = 0.0
-
-                if len(parts) > 5:
-
-                    curve_data = parts[5]
-
-                    curve_parts = curve_data.split("|")
-
-                    # extrai tipo de curva (L, B, C, P)
-                    if len(curve_parts) > 0:
-                        curve_type = curve_parts[0]
-
-                    # extrai pontos de controle
-                    for point in curve_parts[1:]:
-
-                        if ":" in point:
-
-                            try:
-
-                                px, py = point.split(":")
-
-                                curve_points.append({
-                                    "x": int(px),
-                                    "y": int(py)
-                                })
-
-                            except:
-
-                                pass
-
-                # extrai slider_distance (comprimento do slider)
-                if len(parts) > 7:
-                    try:
-                        slider_distance = float(parts[7])
-                    except:
-                        slider_distance = 0.0
-
-                # extrai repeat_count (quantidade de repetições/voltas do slider)
-                if len(parts) > 6:
-                    try:
-                        repeat_count = int(parts[6])
-                    except:
-                        repeat_count = 1
-
-                # gera pontos suavizados baseado no tipo
-                smooth_points = (
-                    self.generate_slider_path(
-                        curve_points,
-                        curve_type,
-                        slider_distance,
-                        x,
-                        y
-                    )
-                )
-
-                notes.append({
-                    "type": "slider",
-                    "x": x,
-                    "y": y,
-                    "time": time,
-                    "curve_points": smooth_points,
-                    "curve_type": curve_type,
-                    "slider_distance": slider_distance,
-                    "repeat_count": repeat_count,
-                    "new_combo": bool(object_type & 4),
-                    "combo_offset": self._parse_combo_offset(object_type),
-                    "active": False
-                })
-
-        notes.sort(
-            key=lambda note: note["time"]
+        return parse_hitobjects_section(
+            read_osu_lines(osu_file),
+            self.generate_slider_path
         )
-
-        return notes
-
-    def _parse_combo_offset(self, object_type):
-        return (int(object_type) >> 4) & 7
-
 
     def bezier_point(self, points, t):
         """Calcula um ponto em uma curva Bezier usando De Casteljau (iterativo)"""
@@ -854,96 +573,9 @@ class BeatmapLoader:
     # DIFFICULTY
     # -------------------------
     def parse_difficulty(self, osu_file):
-
-        difficulty = {
-            "CS": 4,
-            "AR": 9,
-            "OD": 8,
-            "HP": 5,
-            "SliderMultiplier": 1.4,
-            "SliderTickRate": 1
-        }
-
-        with open(
-            osu_file,
-            "r",
-            encoding="utf-8",
-            errors="ignore"
-        ) as file:
-
-            lines = file.readlines()
-
-        difficulty_section = False
-
-        for line in lines:
-
-            line = line.strip()
-
-            if line == "[Difficulty]":
-
-                difficulty_section = True
-
-                continue
-
-            if (
-                difficulty_section
-                and
-                line.startswith("[")
-            ):
-
-                break
-
-            if not difficulty_section:
-
-                continue
-
-            if ":" not in line:
-
-                continue
-
-            key, value = line.split(
-                ":",
-                1
-            )
-
-            key = key.strip()
-            value = value.strip()
-
-            try:
-
-                if key == "CircleSize":
-
-                    difficulty["CS"] = float(value)
-
-                elif key == "ApproachRate":
-
-                    difficulty["AR"] = float(value)
-
-                elif key == "OverallDifficulty":
-
-                    difficulty["OD"] = float(value)
-
-                elif key == "HPDrainRate":
-
-                    difficulty["HP"] = float(value)
-
-                elif key == "SliderMultiplier":
-
-                    difficulty[
-                        "SliderMultiplier"
-                    ] = float(value)
-
-                elif key == "SliderTickRate":
-
-                    difficulty[
-                        "SliderTickRate"
-                    ] = float(value)
-
-            except:
-
-                pass
-
-        return difficulty
+        return parse_difficulty_section(
+            read_osu_lines(osu_file)
+        )
     
 
     def _densify_uniform(self, points, spacing=6.0):

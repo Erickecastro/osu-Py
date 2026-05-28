@@ -1,8 +1,11 @@
+import os
+
 import pygame
 
 from scenes.base_scene import BaseScene
 from core.audio import find_audio_file, start_music
 from core.gameplay import calculate_accuracy, hit_result_for_delta
+from core.health import apply_health_drain, apply_health_result
 from core.hit_detection import find_best_hit_object
 from core.gameplay_notes import (
     clone_notes_with_combo_data,
@@ -14,6 +17,7 @@ from core.gameplay_state import (
     prune_inactive_notes
 )
 from rendering.cursor import CursorRenderer
+from rendering.effects import GameplayEffectsRenderer
 from rendering.hud import GameplayHUDRenderer
 from rendering.primitives import (
     aa_circle_surface,
@@ -54,6 +58,8 @@ class GameplayScene(BaseScene):
 
         self.start_time = None
         self.current_time = 0
+        self.ready_start_time = pygame.time.get_ticks()
+        self.pre_start_delay_ms = 1500
 
         combo_colors = self.DEFAULT_COMBO_COLORS
         self.notes = clone_notes_with_combo_data(
@@ -67,6 +73,12 @@ class GameplayScene(BaseScene):
         self.slider_surface_cache = {}
         self.overlay_surface = None
         self.overlay_surface_size = None
+        self.background_source = None
+        self.background_surface = None
+        self.background_surface_size = None
+        self.dim_surface = None
+        self.dim_surface_size = None
+        self.background_dim_alpha = 185
 
         self.cs = self.beatmap[
             "difficulty"
@@ -80,6 +92,12 @@ class GameplayScene(BaseScene):
             "difficulty"
         ].get(
             "OD",
+            5
+        )
+        self.hp = self.beatmap[
+            "difficulty"
+        ].get(
+            "HP",
             5
         )
 
@@ -195,6 +213,10 @@ class GameplayScene(BaseScene):
         self.music_path = find_audio_file(
             self.beatmap["path"]
         )
+        self._load_background_surface()
+        self._scaled_background(
+            (self.game.WIDTH, self.game.HEIGHT)
+        )
 
         self.slider_multiplier = (
             self.beatmap["difficulty"].get(
@@ -213,6 +235,8 @@ class GameplayScene(BaseScene):
         self.score = 0
         self.combo = 0
         self.max_combo = 0
+        self.health = 1.0
+        self.target_health = 1.0
         self.hit_counts = {
             300: 0,
             100: 0,
@@ -233,7 +257,6 @@ class GameplayScene(BaseScene):
         )
 
         self.slider_renderer = SliderRenderer(self)
-        self.slider_renderer.precache_surfaces()
 
         self.circle_number_font = pygame.font.SysFont(
             "arial",
@@ -247,7 +270,7 @@ class GameplayScene(BaseScene):
             28,
             bold=True
         )
-        self.combo_number_surface_cache = {}
+        self.effects_renderer = GameplayEffectsRenderer(self)
         self.hud_renderer = GameplayHUDRenderer(self.font)
         self._precache_gameplay_surfaces()
         
@@ -267,6 +290,7 @@ class GameplayScene(BaseScene):
         note["hit_time"] = self.current_time
         self.judged_objects += 1
         self.hit_counts[result] += 1
+        self._update_health_target(result)
 
         if note["type"] == "slider":
             note["head_hit"] = result > 0
@@ -310,6 +334,13 @@ class GameplayScene(BaseScene):
 
         combo_bonus = max(0, self.combo - 1) * result // 25
         self.score += result + combo_bonus
+
+    def _update_health_target(self, result):
+        self.target_health = apply_health_result(
+            self.target_health,
+            result,
+            self.hp
+        )
 
     def _hit_result_for_delta(self, delta):
         return hit_result_for_delta(
@@ -549,107 +580,80 @@ class GameplayScene(BaseScene):
                 outline_width=3
             )
 
-    def _combo_number_surfaces(self, text):
-        cached = self.combo_number_surface_cache.get(text)
-        if cached is not None:
-            return cached
-
-        surfaces = (
-            self.circle_number_font.render(
-                text,
-                True,
-                (0, 0, 0)
-            ),
-            self.circle_number_font.render(
-                text,
-                True,
-                (255, 255, 255)
-            )
-        )
-        self.combo_number_surface_cache[text] = surfaces
-        return surfaces
-
-    def _draw_combo_number(
-        self,
-        target,
-        text,
-        center,
-        color,
-        alpha=255
-    ):
-        outline, main_text = self._combo_number_surfaces(text)
-        outline.set_alpha(alpha)
-
-        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
-            rect = outline.get_rect(
-                center=(
-                    int(round(center[0] + dx)),
-                    int(round(center[1] + dy))
-                )
-            )
-            target.blit(outline, rect)
-
-        self._draw_centered_text(
-            target,
-            main_text,
-            center,
-            alpha=alpha
-        )
-
-    def _draw_miss_pop(
-        self,
-        target,
-        center,
-        radius,
-        color,
-        alpha=255
-    ):
-        alpha = max(0, min(255, int(alpha)))
-        if alpha <= 0:
+    def _load_background_surface(self):
+        background = self.beatmap.get("background")
+        if not background:
             return
 
-        radius = max(1, int(radius))
-        progress = self._clamp01(1.0 - (alpha / 255.0))
-        eased = progress * progress * progress * (
-            progress * (progress * 6.0 - 15.0) + 10.0
+        path = os.path.join(
+            self.beatmap["path"],
+            background.replace("\\", os.sep)
         )
-        collapse = 1.0 - ((1.0 - eased) ** 1.75)
-        remaining = 1.0 - collapse
+        if not os.path.exists(path):
+            return
 
-        fill_radius = int(radius * max(0.04, remaining ** 1.05))
-        shell_radius = int(radius * max(0.07, remaining ** 0.94))
-        ring_width = max(1, int(radius * (0.055 * remaining + 0.018)))
-        visible_alpha = int(255 * (remaining ** 1.18))
+        try:
+            self.background_source = pygame.image.load(path).convert()
+        except pygame.error:
+            self.background_source = None
 
-        if fill_radius > 1:
-            self._draw_aa_circle(
-                target,
-                center,
-                fill_radius,
-                fill_color=color,
-                alpha=int(visible_alpha * 0.82)
-            )
+    def _scaled_background(self, screen_size):
+        source = getattr(self, "background_source", None)
+        if source is None:
+            return None
 
-        self._draw_aa_circle(
-            target,
-            center,
-            shell_radius,
-            outline_color=(255, 255, 255),
-            outline_width=ring_width,
-            alpha=visible_alpha
+        if (
+            self.background_surface is not None
+            and self.background_surface_size == screen_size
+        ):
+            return self.background_surface
+
+        screen_w, screen_h = screen_size
+        image_w, image_h = source.get_size()
+        if image_w <= 0 or image_h <= 0:
+            return None
+
+        scale = max(screen_w / image_w, screen_h / image_h)
+        target_size = (
+            max(1, int(image_w * scale)),
+            max(1, int(image_h * scale))
+        )
+        scaled = pygame.transform.smoothscale(
+            source,
+            target_size
+        )
+        position = (
+            (screen_w - target_size[0]) // 2,
+            (screen_h - target_size[1]) // 2
         )
 
-        if progress < 0.64:
-            inner_alpha = int(visible_alpha * (1.0 - progress / 0.64) * 0.30)
-            inner_radius = int(radius * max(0.03, remaining ** 1.42))
-            self._draw_aa_circle(
-                target,
-                center,
-                inner_radius,
-                outline_color=(255, 255, 255),
-                outline_width=max(1, int(ring_width * 0.55)),
-                alpha=inner_alpha
+        self.background_surface = (scaled, position)
+        self.background_surface_size = screen_size
+        return self.background_surface
+
+    def _draw_background(self, screen):
+        screen.fill((5, 5, 5))
+        background = self._scaled_background(
+            screen.get_size()
+        )
+        if background is None:
+            return
+
+        surface, position = background
+        screen.blit(surface, position)
+
+        if (
+            self.dim_surface is None
+            or self.dim_surface_size != screen.get_size()
+        ):
+            self.dim_surface = pygame.Surface(
+                screen.get_size(),
+                pygame.SRCALPHA
             )
+            self.dim_surface_size = screen.get_size()
+
+        self.dim_surface.fill((0, 0, 0, self.background_dim_alpha))
+        screen.blit(self.dim_surface, (0, 0))
 
     def handle_event(self, event):
 
@@ -676,12 +680,24 @@ class GameplayScene(BaseScene):
                 )
 
     def update(self, dt):
+        self.cursor_renderer.update(
+            dt,
+            pygame.mouse.get_pos()
+        )
 
         if not self.music_started:
+            ready_elapsed = (
+                pygame.time.get_ticks()
+                - self.ready_start_time
+            )
+            if ready_elapsed < self.pre_start_delay_ms:
+                return
 
             self.start_time = start_music(
                 self.music_path
             )
+            if self.start_time is None:
+                self.start_time = pygame.time.get_ticks()
 
             self.music_started = True
 
@@ -692,10 +708,15 @@ class GameplayScene(BaseScene):
                 - self.start_time
             )
 
-        self.cursor_renderer.update(
+        self.target_health = apply_health_drain(
+            self.target_health,
             dt,
-            pygame.mouse.get_pos()
+            self.hp
         )
+        health_speed = min(1.0, dt * 7.0)
+        self.health += (
+            self.target_health - self.health
+        ) * health_speed
 
         self.next_note_index = activate_due_notes(
             self.notes,
@@ -735,7 +756,12 @@ class GameplayScene(BaseScene):
 
     def render(self, screen):
 
-        screen.fill((10, 10, 10))
+        self._draw_background(screen)
+
+        if not self.music_started:
+            self._render_ready(screen)
+            self.cursor_renderer.draw(screen)
+            return
 
         self.hud_renderer.draw(
             screen,
@@ -743,7 +769,8 @@ class GameplayScene(BaseScene):
             self.current_time,
             self.score,
             self._accuracy(),
-            self.combo
+            self.combo,
+            self.health
         )
 
         pygame.draw.rect(
@@ -848,7 +875,7 @@ class GameplayScene(BaseScene):
                 hit_result = note.get("hit_result")
                 if hit_result == 0:
                     pop_alpha = self._miss_pop_alpha(note)
-                    self._draw_miss_pop(
+                    self.effects_renderer.draw_miss_pop(
                         overlay,
                         (scaled_x, scaled_y),
                         scaled_hit_radius,
@@ -857,26 +884,13 @@ class GameplayScene(BaseScene):
                     )
                 elif hit_result is not None and hit_result > 0:
                     hit_time = note.get("hit_time", self.current_time)
-                    explosion_elapsed = self.current_time - hit_time
-                    explosion_progress = min(
-                        1.0,
-                        explosion_elapsed / self.hit_explosion_duration
-                    )
-                    expansion_factor = 1.0 + (explosion_progress * 0.4)
-                    explosion_radius = int(
-                        scaled_hit_radius * expansion_factor
-                    )
-                    explosion_alpha = int(
-                        alpha * (1.0 - explosion_progress)
-                    )
-                    self._draw_aa_circle(
+                    self.effects_renderer.draw_hit_explosion(
                         overlay,
                         (scaled_x, scaled_y),
-                        explosion_radius,
-                        fill_color=circle_color,
-                        outline_color=(255, 255, 255),
-                        outline_width=max(1, int(3 * (1.0 - explosion_progress))),
-                        alpha=explosion_alpha
+                        scaled_hit_radius,
+                        circle_color,
+                        hit_time,
+                        alpha=alpha
                     )
                 else:
                     self._draw_aa_circle(
@@ -895,11 +909,10 @@ class GameplayScene(BaseScene):
                     number_base_alpha
                 )
                 if number_alpha > 0:
-                    self._draw_combo_number(
+                    self.effects_renderer.draw_combo_number(
                         overlay,
                         str(note["combo_index"]),
                         (scaled_x, scaled_y),
-                        circle_color,
                         alpha=number_alpha
                     )
 
@@ -924,18 +937,29 @@ class GameplayScene(BaseScene):
                     draw_tail_marker=False,
                     cache_key=note.get("render_index"),
                     repeat_count=note.get("repeat_count", 1),
-                    draw_reverse_markers=True
+                    draw_reverse_markers=True,
+                    slider_start_time=note["time"],
+                    span_duration=note.get("span_duration", 0.0)
                 )
 
                 head_result = note.get("head_hit_result")
                 if head_result == 0:
                     pop_alpha = self._miss_pop_alpha(note)
-                    self._draw_miss_pop(
+                    self.effects_renderer.draw_miss_pop(
                         overlay,
                         slider_points[0],
                         self.slider_head_radius,
                         note.get("combo_color", (0, 150, 255)),
                         alpha=pop_alpha
+                    )
+                elif head_result is not None and head_result > 0:
+                    self.effects_renderer.draw_hit_explosion(
+                        overlay,
+                        slider_points[0],
+                        self.slider_head_radius,
+                        note.get("combo_color", (0, 150, 255)),
+                        note.get("head_hit_time", self.current_time),
+                        alpha=alpha
                     )
 
                 number_base_alpha = 255 if head_result == 0 else alpha
@@ -944,11 +968,10 @@ class GameplayScene(BaseScene):
                     number_base_alpha
                 )
                 if number_alpha > 0:
-                    self._draw_combo_number(
+                    self.effects_renderer.draw_combo_number(
                         overlay,
                         str(note["combo_index"]),
                         slider_points[0],
-                        note.get("combo_color", (255, 255, 255)),
                         alpha=number_alpha
                     )
 
@@ -1054,6 +1077,38 @@ class GameplayScene(BaseScene):
         screen.blit(overlay, (0, 0))
 
         self.cursor_renderer.draw(screen)
+
+    def _render_ready(self, screen):
+        pygame.draw.rect(
+            screen,
+            (40, 40, 40),
+            (
+                self.offset_x,
+                self.offset_y,
+                self.playfield_width * self.scale,
+                self.playfield_height * self.scale
+            ),
+            3
+        )
+
+        remaining = max(
+            0,
+            self.pre_start_delay_ms
+            - (pygame.time.get_ticks() - self.ready_start_time)
+        )
+        dots = "." * (1 + int((self.pre_start_delay_ms - remaining) / 400) % 3)
+        text = self.font.render(
+            f"Ready{dots}",
+            True,
+            (255, 255, 255)
+        )
+        rect = text.get_rect(
+            center=(
+                self.game.WIDTH // 2,
+                self.game.HEIGHT // 2
+            )
+        )
+        screen.blit(text, rect)
 
     def destroy(self):
 
