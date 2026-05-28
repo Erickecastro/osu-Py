@@ -155,13 +155,27 @@ class GameplayScene(BaseScene):
         if self.scaled_radius < 40:
             self.scaled_radius = 40
 
+        self.slider_head_radius = int(
+            self.scaled_radius
+        )
+
+        self.slider_path_radius = int(
+            self.scaled_radius * 1.22
+        )
+
         self.safe_margin = (
-            self.scaled_radius + 16
+            max(
+                self.slider_head_radius,
+                self.slider_path_radius
+            ) + 16
         )
 
         # Aproximação do comportamento do osu! para visibilidade:
         # fade-in durante o approach e fade-out logo após o hit.
         self.hit_fade_out_time = 350  # ms
+        self.miss_fade_out_time = 90  # ms
+        self.miss_pop_duration = 112  # ms
+        self.hit_number_fade_out_time = 140  # ms
         self.hit_explosion_duration = 300  # ms
 
         self.usable_width = (
@@ -221,10 +235,7 @@ class GameplayScene(BaseScene):
             0: 0
         }
         self.judged_objects = 0
-        self.judgable_objects = sum(
-            1 for note in self.notes
-            if note["type"] == "circle"
-        )
+        self.judgable_objects = len(self.notes)
 
         # Pré-computa o intervalo de visibilidade de cada objeto.
         # Isso permite desenhar com alpha/escala sem depender de "sumir instantâneo".
@@ -264,8 +275,21 @@ class GameplayScene(BaseScene):
         )
 
         self.cursor_history = []
-        self.cursor_tail_duration = 0.18  # seconds
-        self.cursor_tail_max_points = 10
+        self.cursor_pos = pygame.mouse.get_pos()
+        self.last_cursor_pos = self.cursor_pos
+        self.cursor_trail_emit_timer = 0.0
+        self.cursor_tail_duration = 0.285  # seconds
+        self.cursor_tail_emit_interval = 0.012  # seconds
+        self.cursor_tail_min_distance = 2.0
+        self.cursor_tail_max_points = 8
+        self.cursor_image = self._load_cursor_asset(
+            "cursor.png",
+            0.92
+        )
+        self.cursor_trail_image = self._load_cursor_asset(
+            "cursortrail.png",
+            1.16
+        )
         self.circle_number_font = pygame.font.SysFont(
             "arial",
             28,
@@ -273,7 +297,8 @@ class GameplayScene(BaseScene):
         )
         
         self.miss_indicators = []
-        self.miss_indicator_duration = 150  # ms
+        self.miss_indicator_delay = 25  # ms before the X appears
+        self.miss_indicator_duration = 520  # ms X stays visible
 
     def _accuracy(self):
         total_hits = sum(self.hit_counts.values())
@@ -290,23 +315,48 @@ class GameplayScene(BaseScene):
 
     def _add_hit_result(self, note, result):
         note["judged"] = True
-        note["active"] = False
+        note["active"] = True
         note["hit_result"] = result
         note["hit_time"] = self.current_time
         self.judged_objects += 1
         self.hit_counts[result] += 1
 
+        if note["type"] == "slider":
+            note["head_hit"] = result > 0
+            note["head_hit_result"] = result
+            note["head_hit_time"] = self.current_time
+
         if result == 0:
-            scaled_x, scaled_y = self.scale_position(
-                note["x"],
-                note["y"]
-            )
+            miss_fade_end = self.current_time + self.miss_fade_out_time
+            miss_pop_end = self.current_time + self.miss_pop_duration
             self.miss_indicators.append({
-                "pos": (scaled_x, scaled_y),
+                "pos": self.scale_position(
+                    note["x"],
+                    note["y"]
+                ),
+                "show_time": miss_fade_end + self.miss_indicator_delay,
                 "start_time": self.current_time
             })
+            note["fade_out_start"] = self.current_time
+            note["fade_out_duration"] = self.miss_fade_out_time
+            note["miss_pop_start"] = self.current_time
+            if note["type"] == "slider":
+                slider_end = (
+                    note["time"]
+                    + note.get("slider_total_duration", 0.0)
+                )
+                note["end_time"] = max(
+                    miss_pop_end,
+                    slider_end + self.hit_fade_out_time
+                )
+            else:
+                note["end_time"] = miss_pop_end
             self.combo = 0
             return
+
+        if note["type"] == "circle":
+            note["fade_out_start"] = self.current_time
+            note["end_time"] = self.current_time + self.hit_fade_out_time
 
         self.combo += 1
         self.max_combo = max(self.max_combo, self.combo)
@@ -332,23 +382,45 @@ class GameplayScene(BaseScene):
         for note in self.active_notes:
             if note.get("judged"):
                 continue
-            if note["type"] != "circle":
-                continue
 
-            delta = self.current_time - note["time"]
-            result = self._hit_result_for_delta(delta)
-            if result is None:
-                continue
+            if note["type"] == "circle":
+                delta = self.current_time - note["time"]
+                result = self._hit_result_for_delta(delta)
+                if result is None:
+                    continue
 
-            scaled_x, scaled_y = self.scale_position(
-                note["x"],
-                note["y"]
-            )
-            dx = pos[0] - scaled_x
-            dy = pos[1] - scaled_y
-            distance = (dx * dx + dy * dy) ** 0.5
+                scaled_x, scaled_y = self.scale_position(
+                    note["x"],
+                    note["y"]
+                )
+                dx = pos[0] - scaled_x
+                dy = pos[1] - scaled_y
+                distance = (dx * dx + dy * dy) ** 0.5
 
-            if distance > self.scaled_radius:
+                if distance > self.scaled_radius:
+                    continue
+
+            elif note["type"] == "slider":
+                if note.get("head_hit"):
+                    continue
+
+                delta = self.current_time - note["time"]
+                result = self._hit_result_for_delta(delta)
+                if result is None:
+                    continue
+
+                scaled_x, scaled_y = self.scale_position(
+                    note["x"],
+                    note["y"]
+                )
+                dx = pos[0] - scaled_x
+                dy = pos[1] - scaled_y
+                distance = (dx * dx + dy * dy) ** 0.5
+
+                if distance > self.scaled_radius:
+                    continue
+
+            else:
                 continue
 
             abs_delta = abs(delta)
@@ -401,24 +473,96 @@ class GameplayScene(BaseScene):
         # Fade-in até o hit.
         alpha_in = self._fade_in_progress(note)
 
-        # Fade-out depende do tipo.
         if note["type"] == "slider":
             fade_out_start = (
                 hit_time + note.get("slider_total_duration", 0.0)
             )
+            fade_out_duration = self.hit_fade_out_time
         else:
-            fade_out_start = hit_time
+            fade_out_start = note.get("fade_out_start")
+            if fade_out_start is None and note.get("hit_result") is None:
+                fade_out_start = self.current_time + 1
+                fade_out_duration = self.hit_fade_out_time
+            else:
+                fade_out_start = (
+                    fade_out_start
+                    if fade_out_start is not None
+                    else hit_time
+                )
+                fade_out_duration = note.get(
+                    "fade_out_duration",
+                    self.hit_fade_out_time
+                )
 
-        fade_out_end = fade_out_start + self.hit_fade_out_time
+        fade_out_duration = max(1, fade_out_duration)
+        fade_out_end = fade_out_start + fade_out_duration
         if self.current_time <= fade_out_start:
             alpha_out = 1.0
         elif self.current_time >= fade_out_end:
             alpha_out = 0.0
         else:
-            alpha_out = (fade_out_end - self.current_time) / self.hit_fade_out_time
+            alpha_out = (fade_out_end - self.current_time) / fade_out_duration
 
         a = alpha_in * self._clamp01(alpha_out)
         return int(255 * a)
+
+    def _slider_ball_alpha(self, note):
+        time_since_hit = self.current_time - note["time"]
+        if time_since_hit < 0:
+            return 0
+
+        slider_total_duration = float(
+            note.get("slider_total_duration", 0.0)
+        )
+        if slider_total_duration <= 0:
+            return 0
+
+        slider_end = note["time"] + slider_total_duration
+        if self.current_time <= slider_end:
+            return 255
+
+        fade_progress = (
+            self.current_time - slider_end
+        ) / max(1, self.hit_fade_out_time)
+        return int(255 * (1.0 - self._clamp01(fade_progress)))
+
+    def _combo_number_alpha(self, note, base_alpha):
+        base_alpha = max(0, min(255, int(base_alpha)))
+
+        if note["type"] == "slider":
+            hit_result = note.get("head_hit_result")
+            hit_time = note.get("head_hit_time")
+        else:
+            hit_result = note.get("hit_result")
+            hit_time = note.get("hit_time")
+
+        if hit_result is None or hit_time is None:
+            return base_alpha
+
+        elapsed = self.current_time - hit_time
+        fade_duration = (
+            self.miss_pop_duration
+            if hit_result == 0
+            else self.hit_number_fade_out_time
+        )
+        progress = self._clamp01(
+            elapsed / max(1, fade_duration)
+        )
+        return int(base_alpha * (1.0 - progress))
+
+    def _miss_pop_alpha(self, note):
+        pop_start = note.get("miss_pop_start")
+        if pop_start is None:
+            return 0
+
+        elapsed = self.current_time - pop_start
+        progress = self._clamp01(
+            elapsed / max(1, self.miss_pop_duration)
+        )
+        eased = progress * progress * progress * (
+            progress * (progress * 6.0 - 15.0) + 10.0
+        )
+        return int(255 * (1.0 - eased))
 
     def _aa_circle_surface(
         self,
@@ -559,6 +703,121 @@ class GameplayScene(BaseScene):
             center,
             alpha=alpha
         )
+
+    def _load_cursor_asset(self, filename, scale=1.0):
+        path = os.path.join(
+            "assets",
+            "cursor",
+            filename
+        )
+
+        if not os.path.exists(path):
+            return None
+
+        try:
+            image = pygame.image.load(path).convert_alpha()
+        except pygame.error:
+            return None
+
+        if scale != 1.0:
+            width = max(1, int(image.get_width() * scale))
+            height = max(1, int(image.get_height() * scale))
+            image = pygame.transform.smoothscale(
+                image,
+                (width, height)
+            )
+
+        return image
+
+    def _blit_asset_centered(
+        self,
+        target,
+        image,
+        center,
+        alpha=255,
+        scale=1.0
+    ):
+        if image is None:
+            return
+
+        alpha = max(0, min(255, int(alpha)))
+        if alpha <= 0:
+            return
+
+        render_image = image
+        if scale != 1.0:
+            width = max(1, int(image.get_width() * scale))
+            height = max(1, int(image.get_height() * scale))
+            render_image = pygame.transform.smoothscale(
+                image,
+                (width, height)
+            )
+        else:
+            render_image = image.copy()
+
+        render_image.set_alpha(alpha)
+        rect = render_image.get_rect(
+            center=(
+                int(round(center[0])),
+                int(round(center[1]))
+            )
+        )
+        target.blit(render_image, rect)
+
+    def _draw_miss_pop(
+        self,
+        target,
+        center,
+        radius,
+        color,
+        alpha=255
+    ):
+        alpha = max(0, min(255, int(alpha)))
+        if alpha <= 0:
+            return
+
+        radius = max(1, int(radius))
+        progress = self._clamp01(1.0 - (alpha / 255.0))
+        eased = progress * progress * progress * (
+            progress * (progress * 6.0 - 15.0) + 10.0
+        )
+        collapse = 1.0 - ((1.0 - eased) ** 1.75)
+        remaining = 1.0 - collapse
+
+        fill_radius = int(radius * max(0.04, remaining ** 1.05))
+        shell_radius = int(radius * max(0.07, remaining ** 0.94))
+        ring_width = max(1, int(radius * (0.055 * remaining + 0.018)))
+        visible_alpha = int(255 * (remaining ** 1.18))
+
+        if fill_radius > 1:
+            self._draw_aa_circle(
+                target,
+                center,
+                fill_radius,
+                fill_color=color,
+                alpha=int(visible_alpha * 0.82)
+            )
+
+        self._draw_aa_circle(
+            target,
+            center,
+            shell_radius,
+            outline_color=(255, 255, 255),
+            outline_width=ring_width,
+            alpha=visible_alpha
+        )
+
+        if progress < 0.64:
+            inner_alpha = int(visible_alpha * (1.0 - progress / 0.64) * 0.30)
+            inner_radius = int(radius * max(0.03, remaining ** 1.42))
+            self._draw_aa_circle(
+                target,
+                center,
+                inner_radius,
+                outline_color=(255, 255, 255),
+                outline_width=max(1, int(ring_width * 0.55)),
+                alpha=inner_alpha
+            )
 
     def _draw_slider_reverse_markers(
         self,
@@ -749,21 +1008,38 @@ class GameplayScene(BaseScene):
                 - self.start_time
             )
 
-        cursor_pos = pygame.mouse.get_pos()
-        if (
-            not self.cursor_history
-            or self.cursor_history[-1]["pos"] != cursor_pos
-        ):
-            self.cursor_history.append({
-                "pos": cursor_pos,
-                "age": 0.0
-            })
+        raw_cursor_pos = pygame.mouse.get_pos()
+        self.cursor_pos = raw_cursor_pos
+        self.cursor_trail_emit_timer += dt
 
         new_history = []
         for entry in self.cursor_history:
             entry["age"] += dt
             if entry["age"] <= self.cursor_tail_duration:
                 new_history.append(entry)
+
+        last_cursor_pos = getattr(
+            self,
+            "last_cursor_pos",
+            self.cursor_pos
+        )
+        dx = self.cursor_pos[0] - last_cursor_pos[0]
+        dy = self.cursor_pos[1] - last_cursor_pos[1]
+        moved_distance = (dx * dx + dy * dy) ** 0.5
+
+        should_add_cursor_sample = (
+            self.cursor_trail_emit_timer >= self.cursor_tail_emit_interval
+            and moved_distance >= self.cursor_tail_min_distance
+        )
+
+        if should_add_cursor_sample:
+            new_history.append({
+                "pos": self.cursor_pos,
+                "age": 0.0
+            })
+            self.cursor_trail_emit_timer = 0.0
+            self.last_cursor_pos = self.cursor_pos
+
         self.cursor_history = new_history[-self.cursor_tail_max_points:]
 
         for note in self.notes:
@@ -788,10 +1064,12 @@ class GameplayScene(BaseScene):
         for note in self.active_notes:
             if note.get("judged"):
                 continue
-            if note["type"] != "circle":
-                continue
-            if self.current_time > note["time"] + self.hit_window_50:
-                self._add_hit_result(note, 0)
+            if note["type"] == "circle":
+                if self.current_time > note["time"] + self.hit_window_50:
+                    self._add_hit_result(note, 0)
+            elif note["type"] == "slider":
+                if self.current_time > note["time"] + self.hit_window_50:
+                    self._add_hit_result(note, 0)
 
         self.active_notes = [
 
@@ -1204,7 +1482,7 @@ class GameplayScene(BaseScene):
         max_y = int(np.ceil(max(p[1] for p in slider_points))) if np is not None else int(max(p[1] for p in slider_points))
 
         padding = int(
-            self.scaled_radius * 2
+            self.slider_path_radius * 2
         )
 
         width = int(
@@ -1295,12 +1573,10 @@ class GameplayScene(BaseScene):
 
         size, local_points, surface_pos = geometry
 
-        outline_radius = int(
-            self.scaled_radius * 1.18
-        )
+        outline_radius = self.slider_path_radius
 
         body_radius = int(
-            self.scaled_radius * 0.88
+            self.slider_path_radius * 0.76
         )
 
         slider_surface = self._render_slider_track_surface(
@@ -1355,7 +1631,7 @@ class GameplayScene(BaseScene):
                     self._draw_aa_circle(
                         screen,
                         slider_points[0],
-                        self.scaled_radius,
+                        self.slider_head_radius,
                         fill_color=(0, 150, 255),
                         outline_color=(255, 255, 255),
                         outline_width=3,
@@ -1395,7 +1671,7 @@ class GameplayScene(BaseScene):
                 self._draw_aa_circle(
                     screen,
                     slider_points[0],
-                    self.scaled_radius,
+                    self.slider_head_radius,
                     fill_color=(0, 150, 255),
                     outline_color=(255, 255, 255),
                     outline_width=3,
@@ -1409,11 +1685,9 @@ class GameplayScene(BaseScene):
 
         size, local_points, surface_pos = geometry
 
-        outline_radius = int(
-            self.scaled_radius * 1.18
-        )
+        outline_radius = self.slider_path_radius
         body_radius = int(
-            self.scaled_radius * 0.88
+            self.slider_path_radius * 0.76
         )
 
         slider_surface = self._render_slider_track_surface(
@@ -1443,7 +1717,7 @@ class GameplayScene(BaseScene):
                 self._draw_aa_circle(
                     screen,
                     head_pos,
-                    self.scaled_radius,
+                    self.slider_head_radius,
                     fill_color=(0, 150, 255),
                     outline_color=(255, 255, 255),
                     outline_width=3,
@@ -1592,7 +1866,19 @@ class GameplayScene(BaseScene):
             )
 
             alpha = self._note_alpha(note)
-            if alpha <= 0:
+            slider_ball_alpha = 0
+            if note["type"] == "slider":
+                slider_ball_alpha = self._slider_ball_alpha(note)
+
+            miss_pop_alpha = 0
+            if note.get("hit_result") == 0:
+                miss_pop_alpha = self._miss_pop_alpha(note)
+
+            if (
+                alpha <= 0
+                and slider_ball_alpha <= 0
+                and miss_pop_alpha <= 0
+            ):
                 continue
 
             scaled_hit_radius = self.scaled_radius
@@ -1606,14 +1892,18 @@ class GameplayScene(BaseScene):
                 )
             )
 
-            self._draw_aa_circle(
-                overlay,
-                (scaled_x, scaled_y),
-                approach_radius,
-                outline_color=(255, 255, 255),
-                outline_width=4,
-                alpha=int(alpha * progress)
-            )
+            if alpha > 0:
+                approach_alpha = int(
+                    alpha * (0.42 + (0.58 * self._clamp01(progress)))
+                )
+                self._draw_aa_circle(
+                    overlay,
+                    (scaled_x, scaled_y),
+                    approach_radius,
+                    outline_color=(255, 255, 255),
+                    outline_width=5,
+                    alpha=approach_alpha
+                )
 
             if note["type"] == "circle":
                 circle_color = note.get(
@@ -1621,8 +1911,17 @@ class GameplayScene(BaseScene):
                     (0, 150, 255)
                 )
 
-                is_hit = note.get("judged", False)
-                if is_hit:
+                hit_result = note.get("hit_result")
+                if hit_result == 0:
+                    pop_alpha = self._miss_pop_alpha(note)
+                    self._draw_miss_pop(
+                        overlay,
+                        (scaled_x, scaled_y),
+                        scaled_hit_radius,
+                        circle_color,
+                        alpha=pop_alpha
+                    )
+                elif hit_result is not None and hit_result > 0:
                     hit_time = note.get("hit_time", self.current_time)
                     explosion_elapsed = self.current_time - hit_time
                     explosion_progress = min(
@@ -1656,12 +1955,18 @@ class GameplayScene(BaseScene):
                         alpha=alpha
                     )
 
+                number_base_alpha = 255 if hit_result == 0 else alpha
+                number_alpha = self._combo_number_alpha(
+                    note,
+                    number_base_alpha
+                )
+                if number_alpha > 0:
                     self._draw_combo_number(
                         overlay,
                         str(note["combo_index"]),
                         (scaled_x, scaled_y),
                         circle_color,
-                        alpha=alpha
+                        alpha=number_alpha
                     )
 
             elif note["type"] == "slider":
@@ -1677,7 +1982,7 @@ class GameplayScene(BaseScene):
                     overlay,
                     slider_points,
                     alpha=alpha,
-                    draw_head_marker=True,
+                    draw_head_marker=not note.get("judged", False),
                     draw_tail_marker=False,
                     cache_key=note.get("render_index"),
                     reveal_progress=reveal_progress,
@@ -1685,13 +1990,30 @@ class GameplayScene(BaseScene):
                     draw_reverse_markers=True
                 )
 
-                self._draw_combo_number(
-                    overlay,
-                    str(note["combo_index"]),
-                    slider_points[0],
-                    note.get("combo_color", (255, 255, 255)),
-                    alpha=alpha
+                head_result = note.get("head_hit_result")
+                if head_result == 0:
+                    pop_alpha = self._miss_pop_alpha(note)
+                    self._draw_miss_pop(
+                        overlay,
+                        slider_points[0],
+                        self.slider_head_radius,
+                        note.get("combo_color", (0, 150, 255)),
+                        alpha=pop_alpha
+                    )
+
+                number_base_alpha = 255 if head_result == 0 else alpha
+                number_alpha = self._combo_number_alpha(
+                    note,
+                    number_base_alpha
                 )
+                if number_alpha > 0:
+                    self._draw_combo_number(
+                        overlay,
+                        str(note["combo_index"]),
+                        slider_points[0],
+                        note.get("combo_color", (255, 255, 255)),
+                        alpha=number_alpha
+                    )
 
                 # Slider ball (move along the slider path).
                 time_since_hit = (
@@ -1749,49 +2071,94 @@ class GameplayScene(BaseScene):
                         fill_color=(0, 150, 255),
                         outline_color=(255, 255, 255),
                         outline_width=3,
-                        alpha=alpha
+                        alpha=slider_ball_alpha
                     )
+
+        self.miss_indicators = [
+            indicator
+            for indicator in self.miss_indicators
+            if self.current_time < indicator["show_time"] + self.miss_indicator_duration
+        ]
+
+        for indicator in self.miss_indicators:
+            if self.current_time < indicator["show_time"]:
+                continue
+
+            elapsed = self.current_time - indicator["show_time"]
+            progress = self._clamp01(
+                elapsed / self.miss_indicator_duration
+            )
+            eased = 1.0 - (progress ** 0.7)
+            alpha = int(255 * eased)
+            size = int(self.scaled_radius * 0.30)
+            half = max(1, size // 2)
+            x, y = indicator["pos"]
+            y += int(elapsed * 0.03)
+            width = max(2, int(2 * eased))
+
+            pygame.draw.line(
+                overlay,
+                (255, 255, 255, alpha),
+                (x - half, y - half),
+                (x + half, y + half),
+                width
+            )
+            pygame.draw.line(
+                overlay,
+                (255, 255, 255, alpha),
+                (x - half, y + half),
+                (x + half, y - half),
+                width
+            )
 
         screen.blit(overlay, (0, 0))
 
         self._draw_custom_cursor(screen)
 
     def _draw_custom_cursor(self, screen):
-        if not self.cursor_history:
-            return
+        cursor_pos = getattr(
+            self,
+            "cursor_pos",
+            pygame.mouse.get_pos()
+        )
 
-        # Draw a short, soft trail behind the cursor.
-        trail_color = (255, 255, 255)
-        trail_size = 16
+        trail_surface = pygame.Surface(
+            screen.get_size(),
+            pygame.SRCALPHA
+        )
 
-        for entry in reversed(self.cursor_history):
-            progress = entry["age"] / self.cursor_tail_duration
-            alpha = int(max(0, 220 * (1.0 - progress) ** 1.8))
-            radius = int(max(2.0, trail_size * (1.0 - progress)))
-            self._draw_aa_circle(
-                screen,
+        points = [
+            entry for entry in self.cursor_history
+            if entry["age"] <= self.cursor_tail_duration
+        ]
+
+        for entry in points:
+            progress = self._clamp01(
+                entry["age"] / self.cursor_tail_duration
+            )
+            fade_in = self._clamp01(entry["age"] / 0.018)
+            fade_out = 1.0 - progress
+            alpha = int(
+                220
+                * self._ease_out_cubic(fade_in)
+                * (fade_out ** 1.8)
+            )
+            scale = 0.86 + (0.14 * self._ease_out_cubic(fade_in))
+            self._blit_asset_centered(
+                trail_surface,
+                self.cursor_trail_image,
                 entry["pos"],
-                radius,
-                fill_color=trail_color,
-                alpha=alpha
+                alpha=alpha,
+                scale=scale
             )
 
-        cursor_pos = self.cursor_history[-1]["pos"]
-        self._draw_aa_circle(
+        screen.blit(trail_surface, (0, 0))
+
+        self._blit_asset_centered(
             screen,
+            self.cursor_image,
             cursor_pos,
-            18,
-            fill_color=(255, 255, 255),
-            outline_color=(60, 170, 255),
-            outline_width=4,
-            alpha=255
-        )
-        self._draw_aa_circle(
-            screen,
-            cursor_pos,
-            9,
-            fill_color=(60, 170, 255),
-            alpha=255
+            alpha=250
         )
 
     def destroy(self):
