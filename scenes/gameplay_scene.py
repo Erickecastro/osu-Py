@@ -5,6 +5,7 @@ from scenes.base_scene import BaseScene
 from core.audio import find_audio_file, start_music
 from core.gameplay import calculate_accuracy, hit_result_for_delta
 from rendering.cursor import CursorRenderer
+from rendering.hud import GameplayHUDRenderer
 from rendering.primitives import (
     aa_circle_surface,
     blit_centered,
@@ -278,8 +279,9 @@ class GameplayScene(BaseScene):
             28,
             bold=True
         )
-        self.hud_text_cache = {}
         self.combo_number_surface_cache = {}
+        self.hud_renderer = GameplayHUDRenderer(self.font)
+        self._precache_gameplay_surfaces()
         
         self.miss_indicators = []
         self.miss_indicator_delay = 25  # ms before the X appears
@@ -429,16 +431,6 @@ class GameplayScene(BaseScene):
 
         return self._ease_out_cubic(
             (self.current_time - start) / fade_in_len
-        )
-
-    def _slider_reveal_progress(self, note):
-        start = note.get("start_time", note["time"] - self.approach_time)
-        hit_time = note["time"]
-        approach_len = max(1, hit_time - start)
-        reveal_len = max(180, min(420, approach_len * 0.38))
-
-        return self._ease_out_cubic(
-            (self.current_time - start) / reveal_len
         )
 
     def _note_alpha(self, note):
@@ -591,22 +583,48 @@ class GameplayScene(BaseScene):
             alpha=alpha
         )
 
-    def _hud_text_surface(self, text, color=(255, 255, 255)):
-        key = (text, tuple(color))
-        cached = self.hud_text_cache.get(key)
-        if cached is not None:
-            return cached
+    def _precache_gameplay_surfaces(self):
+        base_radius = max(1, int(self.scaled_radius))
+        max_hit_radius = max(base_radius, int(base_radius * 1.42) + 1)
 
-        if len(self.hud_text_cache) > 96:
-            self.hud_text_cache.clear()
+        for color in self.DEFAULT_COMBO_COLORS:
+            self._aa_circle_surface(
+                base_radius,
+                fill_color=color,
+                outline_color=(255, 255, 255),
+                outline_width=3
+            )
+            for radius in range(base_radius, max_hit_radius + 1):
+                for outline_width in (1, 2, 3):
+                    self._aa_circle_surface(
+                        radius,
+                        fill_color=color,
+                        outline_color=(255, 255, 255),
+                        outline_width=outline_width
+                    )
 
-        surface = self.font.render(
-            text,
-            True,
-            color
-        )
-        self.hud_text_cache[key] = surface
-        return surface
+            for radius in range(2, base_radius + 1):
+                self._aa_circle_surface(
+                    radius,
+                    fill_color=color
+                )
+
+        for radius in range(2, base_radius + 1):
+            self._aa_circle_surface(
+                radius,
+                outline_color=(255, 255, 255),
+                outline_width=1
+            )
+            self._aa_circle_surface(
+                radius,
+                outline_color=(255, 255, 255),
+                outline_width=2
+            )
+            self._aa_circle_surface(
+                radius,
+                outline_color=(255, 255, 255),
+                outline_width=3
+            )
 
     def _combo_number_surfaces(self, text):
         cached = self.combo_number_surface_cache.get(text)
@@ -866,74 +884,13 @@ class GameplayScene(BaseScene):
 
         screen.fill((10, 10, 10))
 
-        title = self.beatmap[
-            "metadata"
-        ].get(
-            "Title",
-            self.beatmap["name"]
-        )
-
-        version = self.beatmap[
-            "metadata"
-        ].get(
-            "Version",
-            "Unknown"
-        )
-
-        title_text = self._hud_text_surface(
-            f"{title} [{version}]",
-            (255, 255, 255)
-        )
-
-        screen.blit(
-            title_text,
-            (20, 20)
-        )
-
-        display_time = int(self.current_time // 25) * 25
-        time_text = self._hud_text_surface(
-            f"{display_time} ms",
-            (0, 255, 0)
-        )
-
-        screen.blit(
-            time_text,
-            (20, 60)
-        )
-
-        score_text = self._hud_text_surface(
-            f"{self.score:08d}",
-            (255, 255, 255)
-        )
-        accuracy_text = self._hud_text_surface(
-            f"{self._accuracy():05.2f}%",
-            (255, 255, 255)
-        )
-        combo_text = self._hud_text_surface(
-            f"{self.combo}x",
-            (255, 255, 255)
-        )
-
-        screen.blit(
-            score_text,
-            (
-                self.game.WIDTH - score_text.get_width() - 20,
-                20
-            )
-        )
-        screen.blit(
-            accuracy_text,
-            (
-                self.game.WIDTH - accuracy_text.get_width() - 20,
-                60
-            )
-        )
-        screen.blit(
-            combo_text,
-            (
-                20,
-                self.game.HEIGHT - combo_text.get_height() - 20
-            )
+        self.hud_renderer.draw(
+            screen,
+            self.beatmap,
+            self.current_time,
+            self.score,
+            self._accuracy(),
+            self.combo
         )
 
         pygame.draw.rect(
@@ -1099,8 +1056,11 @@ class GameplayScene(BaseScene):
                 if slider_points is None:
                     slider_points = self.slider_renderer.build_points(note)
                     note["scaled_slider_points"] = slider_points
-
-                reveal_progress = self._slider_reveal_progress(note)
+                    cumulative, total_length = self.slider_renderer.path_metrics(
+                        slider_points
+                    )
+                    note["scaled_slider_cumulative"] = cumulative
+                    note["scaled_slider_length"] = total_length
 
                 self.slider_renderer.draw(
                     overlay,
@@ -1110,7 +1070,6 @@ class GameplayScene(BaseScene):
                     draw_head_marker=not note.get("judged", False),
                     draw_tail_marker=False,
                     cache_key=note.get("render_index"),
-                    reveal_progress=reveal_progress,
                     repeat_count=note.get("repeat_count", 1),
                     draw_reverse_markers=True
                 )
@@ -1159,14 +1118,15 @@ class GameplayScene(BaseScene):
                 )
 
                 if time_since_hit >= 0 and slider_total_duration > 0:
-                    # Total length along the path (one span).
-                    total_length = 0.0
-                    for i in range(len(slider_points) - 1):
-                        dx = slider_points[i + 1][0] - slider_points[i][0]
-                        dy = slider_points[i + 1][1] - slider_points[i][1]
-                        total_length += (dx * dx + dy * dy) ** 0.5
+                    total_length = note.get("scaled_slider_length")
+                    cumulative = note.get("scaled_slider_cumulative")
+                    if total_length is None or cumulative is None:
+                        cumulative, total_length = self.slider_renderer.path_metrics(
+                            slider_points
+                        )
+                        note["scaled_slider_cumulative"] = cumulative
+                        note["scaled_slider_length"] = total_length
 
-                    total_length = max(0.0, total_length)
                     within = min(slider_total_duration, time_since_hit)
 
                     if span_duration <= 0:
@@ -1186,7 +1146,9 @@ class GameplayScene(BaseScene):
 
                     ball_pos = self.slider_renderer.point_at_distance(
                         slider_points,
-                        ball_dist
+                        ball_dist,
+                        cumulative,
+                        total_length
                     )
 
                     self._draw_aa_circle(

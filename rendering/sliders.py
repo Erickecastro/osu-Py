@@ -44,20 +44,29 @@ class SliderRenderer:
 
         return filtered_points
 
-    def point_at_distance(self, points, distance):
-        if not points:
-            return (0, 0)
-        if len(points) == 1:
-            return points[0]
-
+    def path_metrics(self, points):
         cumulative = [0.0]
         total = 0.0
+        if len(points) < 2:
+            return cumulative, total
+
         for i in range(len(points) - 1):
             dx = points[i + 1][0] - points[i][0]
             dy = points[i + 1][1] - points[i][1]
             seg = (dx * dx + dy * dy) ** 0.5
             total += seg
             cumulative.append(total)
+
+        return cumulative, total
+
+    def point_at_distance(self, points, distance, cumulative=None, total=None):
+        if not points:
+            return (0, 0)
+        if len(points) == 1:
+            return points[0]
+
+        if cumulative is None or total is None:
+            cumulative, total = self.path_metrics(points)
 
         if total <= 0:
             return points[-1]
@@ -75,47 +84,6 @@ class SliderRenderer:
         y = points[idx][1] + (points[idx + 1][1] - points[idx][1]) * t
 
         return (int(round(x)), int(round(y)))
-
-    def points_until_progress(self, points, progress):
-        if len(points) < 2:
-            return points
-
-        progress = self.scene._clamp01(progress)
-        if progress >= 1.0:
-            return points
-
-        total_length = 0.0
-        segment_lengths = []
-        for i in range(len(points) - 1):
-            dx = points[i + 1][0] - points[i][0]
-            dy = points[i + 1][1] - points[i][1]
-            length = (dx * dx + dy * dy) ** 0.5
-            segment_lengths.append(length)
-            total_length += length
-
-        if total_length <= 0:
-            return points[:1]
-
-        target_length = total_length * progress
-        visible_points = [points[0]]
-        walked = 0.0
-        for i, segment_length in enumerate(segment_lengths):
-            next_walked = walked + segment_length
-            if next_walked < target_length:
-                visible_points.append(points[i + 1])
-                walked = next_walked
-                continue
-
-            if segment_length > 0:
-                t = self.scene._clamp01(
-                    (target_length - walked) / segment_length
-                )
-                x = points[i][0] + (points[i + 1][0] - points[i][0]) * t
-                y = points[i][1] + (points[i + 1][1] - points[i][1]) * t
-                visible_points.append((x, y))
-            break
-
-        return visible_points
 
     def precache_surfaces(self):
         for note in self.scene.notes:
@@ -137,6 +105,10 @@ class SliderRenderer:
         if slider_points is None:
             slider_points = self.build_points(note)
             note["scaled_slider_points"] = slider_points
+
+        cumulative, total = self.path_metrics(slider_points)
+        note["scaled_slider_cumulative"] = cumulative
+        note["scaled_slider_length"] = total
 
         geometry = self._surface_geometry(slider_points)
         if geometry is None:
@@ -165,7 +137,6 @@ class SliderRenderer:
         draw_head_marker=True,
         draw_tail_marker=False,
         cache_key=None,
-        reveal_progress=1.0,
         repeat_count=1,
         draw_reverse_markers=False
     ):
@@ -173,47 +144,28 @@ class SliderRenderer:
             return
 
         a = max(0, min(255, int(alpha)))
-        reveal_progress = self.scene._clamp01(reveal_progress)
 
-        if cache_key is not None and reveal_progress >= 0.995:
+        cached = None
+        if cache_key is not None:
             cached = self.scene.slider_surface_cache.get(cache_key)
-            if cached is not None:
-                slider_surface, surface_pos = cached
-                slider_surface.set_alpha(a)
-                screen.blit(slider_surface, surface_pos)
-                self._draw_markers(
-                    screen,
-                    slider_points,
-                    a,
-                    draw_head_marker,
-                    draw_tail_marker,
-                    draw_reverse_markers,
-                    repeat_count,
-                    object_color
-                )
-                return
 
-        render_points = slider_points
-        if reveal_progress < 0.995:
-            render_points = self.points_until_progress(
+        if cached is not None:
+            slider_surface, surface_pos = cached
+            slider_surface.set_alpha(a)
+            screen.blit(slider_surface, surface_pos)
+            self._draw_markers(
+                screen,
                 slider_points,
-                reveal_progress
+                a,
+                draw_head_marker,
+                draw_tail_marker,
+                draw_reverse_markers,
+                repeat_count,
+                object_color
             )
-
-        if len(render_points) < 2:
-            if draw_head_marker:
-                self.scene._draw_aa_circle(
-                    screen,
-                    slider_points[0],
-                    self.scene.slider_head_radius,
-                    fill_color=object_color,
-                    outline_color=(255, 255, 255),
-                    outline_width=3,
-                    alpha=a
-                )
             return
 
-        geometry = self._surface_geometry(render_points)
+        geometry = self._surface_geometry(slider_points)
         if geometry is None:
             return
 
@@ -227,7 +179,7 @@ class SliderRenderer:
             body_radius
         )
 
-        if cache_key is not None and reveal_progress >= 0.995:
+        if cache_key is not None:
             self.scene.slider_surface_cache[cache_key] = (
                 slider_surface,
                 surface_pos
