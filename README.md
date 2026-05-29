@@ -52,6 +52,7 @@ Coloque as musicas dentro da pasta `songs/`. Cada beatmap deve manter sua estrut
 - Assets opcionais do beatmap, quando existirem.
 
 O loader percorre as subpastas de `songs/`, encontra arquivos `.osu` e monta a lista de dificuldades disponiveis.
+Baixe as músicas do seu interese diretamente no site oficial do game, https://osu.ppy.sh/beatmapsets. 
 
 ## Controles
 
