@@ -2,7 +2,7 @@
 
 osu-Py e um projeto fan-made de jogo de ritmo inspirado no osu!, feito em Python com pygame-ce. O objetivo e carregar beatmaps no formato `.osu`, tocar a musica correspondente e renderizar uma gameplay jogavel com hit circles, sliders, approach circles, combo, score, accuracy, cursor customizado e selecao de musicas/dificuldades.
 
-O projeto ainda esta em desenvolvimento, mas a gameplay principal ja esta funcional e vem sendo reorganizada aos poucos para facilitar manutencao, melhorar performance e separar melhor as responsabilidades entre loader, cenas, renderizadores e regras de jogo.
+O projeto ainda esta em desenvolvimento, mas a gameplay principal ja esta funcional e vem sendo reorganizada aos poucos para facilitar a manutencao, melhorar a performance e separar melhor as responsabilidades entre loader, cenas, renderizadores e regras de jogo.
 
 ## Funcionalidades atuais
 
@@ -56,7 +56,7 @@ O loader percorre as subpastas de `songs/`, encontra arquivos `.osu` e monta a l
 ## Controles
 
 - `Z` ou `X`: acertar objetos.
-- Clique esquerdo ou direito: acertar objetos.
+- `Clique esquerdo` ou `clioque direito` do mouse para acertar os objetos.
 - `Esc`: sair da gameplay ou voltar uma cena.
 - `F11`: alternar fullscreen.
 - `Alt + F4`: sair do jogo.
@@ -73,6 +73,10 @@ O loader percorre as subpastas de `songs/`, encontra arquivos `.osu` e monta a l
 
 ## Observacoes de desenvolvimento
 
-O projeto prioriza manter uma base simples e facil de evoluir. A cena de gameplay ainda concentra bastante logica, entao uma das proximas etapas e fragmentar melhor essa cena em componentes menores, especialmente HUD, lifecycle dos objetos, julgamento de hit e renderizacao especifica de notas.
+O projeto prioriza manter uma base simples e facil de evoluir. A cena de gameplay ainda concentra bastante logica, entao uma das proximas etapas será fragmentar melhor toda a estrutura de código em componentes menores, especialmente HUD, lifecycle dos objetos, julgamento de hit e renderizacao especifica de notas.
 
 Se aparecer o aviso `libpng warning: iCCP: known incorrect sRGB profile`, ele normalmente indica um perfil de cor invalido em algum PNG carregado pelo pygame. Em geral isso nao impede o jogo de funcionar.
+
+## Aviso
+
+- Esse projeto é feito totalmente por um fã e não possui qualquer ligação com o jogo oficial e seus responsáveis. 
