@@ -9,6 +9,7 @@ from core.audio import find_audio_file, start_music
 from core.gameplay import calculate_accuracy, hit_result_for_delta
 from core.health import apply_health_drain, apply_health_result
 from core.hit_detection import find_best_hit_object
+from core.gameplay_input import GameplayInputController
 from core.gameplay_notes import (
     clone_notes_with_combo_data,
     prepare_note_lifecycle
@@ -217,6 +218,7 @@ class GameplayScene(BaseScene):
             self.playfield_width * self.scale,
             self.playfield_height * self.scale
         )
+        self.overlay_dirty_rect = self._build_overlay_dirty_rect()
         self._precompute_note_positions()
 
         self.music_path = find_audio_file(
@@ -299,6 +301,7 @@ class GameplayScene(BaseScene):
         self.hit_result_indicators = []
         self.hit_keys_held = set()
         self.hit_mouse_buttons_held = set()
+        self.input_controller = GameplayInputController(self)
         self.miss_indicator_delay = 25  # ms before the X appears
         self.miss_indicator_duration = 520  # ms X stays visible
 
@@ -1382,40 +1385,7 @@ class GameplayScene(BaseScene):
         screen.blit(surface, position)
 
     def handle_event(self, event):
-
-        if event.type == pygame.KEYDOWN:
-
-            if event.key == pygame.K_ESCAPE:
-
-                pygame.mixer.music.stop()
-
-                self.game.scene_manager.pop_scene()
-
-            elif event.key in (pygame.K_z, pygame.K_x):
-                self.hit_keys_held.add(event.key)
-
-                self._try_hit_at(
-                    self.game.mouse_pos
-                )
-
-        elif event.type == pygame.KEYUP:
-
-            if event.key in (pygame.K_z, pygame.K_x):
-                self.hit_keys_held.discard(event.key)
-
-        elif event.type == pygame.MOUSEBUTTONDOWN:
-
-            if event.button in (1, 3):
-                self.hit_mouse_buttons_held.add(event.button)
-
-                self._try_hit_at(
-                    self.game.mouse_pos
-                )
-
-        elif event.type == pygame.MOUSEBUTTONUP:
-
-            if event.button in (1, 3):
-                self.hit_mouse_buttons_held.discard(event.button)
+        self.input_controller.handle_event(event)
 
     def update(self, dt):
         self.cursor_renderer.update(
@@ -1522,6 +1492,25 @@ class GameplayScene(BaseScene):
                 self.object_offset_y + (note["y"] * self.object_scale)
             )
 
+    def _build_overlay_dirty_rect(self):
+        margin = int(
+            max(
+                self.scaled_radius * 4.4,
+                self.slider_follow_radius,
+                self.slider_path_radius * 2.0
+            )
+        )
+        screen_rect = pygame.Rect(
+            0,
+            0,
+            self.game.WIDTH,
+            self.game.HEIGHT
+        )
+        return pygame.Rect(self.playfield_rect).inflate(
+            margin * 2,
+            margin * 2
+        ).clip(screen_rect)
+
     def _note_screen_pos(self, note):
         pos = note.get("scaled_pos")
         if pos is not None:
@@ -1575,7 +1564,7 @@ class GameplayScene(BaseScene):
             self.overlay_surface_size = screen_size
 
         overlay = self.overlay_surface
-        overlay.fill((0, 0, 0, 0))
+        overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
 
         self._draw_followpoints(overlay)
 
@@ -2008,7 +1997,11 @@ class GameplayScene(BaseScene):
                     width
                 )
 
-        screen.blit(overlay, (0, 0))
+        screen.blit(
+            overlay,
+            self.overlay_dirty_rect,
+            self.overlay_dirty_rect
+        )
 
         self.cursor_renderer.draw(screen, self.game.mouse_pos)
 
