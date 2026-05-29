@@ -1,5 +1,6 @@
 import os
 import math
+from bisect import bisect_left, bisect_right
 
 import pygame
 
@@ -50,6 +51,7 @@ class GameplayScene(BaseScene):
         self.beatmap = beatmap
 
         pygame.mouse.set_visible(False)
+        self.game.enable_raw_mouse()
 
         self.font = pygame.font.SysFont(
             "arial",
@@ -72,6 +74,10 @@ class GameplayScene(BaseScene):
             beatmap["notes"],
             combo_colors
         )
+        self.note_times = [
+            note["time"]
+            for note in self.notes
+        ]
         self.active_notes = []
         self.next_note_index = 0
         self.circle_surface_cache = {}
@@ -829,6 +835,23 @@ class GameplayScene(BaseScene):
             (diameter, diameter)
         )
 
+    def _rotated_image(self, image, angle):
+        if image is None:
+            return None
+
+        key = ("rotated", id(image), round(float(angle), 1))
+        cached = self.image_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        rotated = pygame.transform.rotozoom(
+            image,
+            angle,
+            1.0
+        )
+        self.image_surface_cache[key] = rotated
+        return rotated
+
     def _alpha_width(self, image, threshold=96):
         if image is None:
             return 0
@@ -1007,7 +1030,22 @@ class GameplayScene(BaseScene):
         if not frames or len(self.notes) < 2:
             return
 
-        for index in range(len(self.notes) - 1):
+        start_index = max(
+            0,
+            bisect_left(
+                self.note_times,
+                self.current_time - 2200
+            ) - 1
+        )
+        end_index = min(
+            len(self.notes) - 1,
+            bisect_right(
+                self.note_times,
+                self.current_time + self.approach_time + 250
+            ) + 1
+        )
+
+        for index in range(start_index, end_index):
             note = self.notes[index]
             next_note = self.notes[index + 1]
             if next_note.get("new_combo"):
@@ -1153,11 +1191,12 @@ class GameplayScene(BaseScene):
             scaled = self._scaled_image(frame, size)
             if scaled is None:
                 continue
-            rotated = pygame.transform.rotozoom(
+            rotated = self._rotated_image(
                 scaled,
-                angle,
-                1.0
+                angle
             )
+            if rotated is None:
+                continue
 
             for point_index in range(1, count + 1):
                 t = point_index / (count + 1)
@@ -1298,9 +1337,9 @@ class GameplayScene(BaseScene):
                 screen.get_size(),
                 pygame.SRCALPHA
             )
+            self.dim_surface.fill((0, 0, 0, self.background_dim_alpha))
             self.dim_surface_size = screen.get_size()
 
-        self.dim_surface.fill((0, 0, 0, self.background_dim_alpha))
         screen.blit(self.dim_surface, (0, 0))
 
     def handle_event(self, event):
@@ -1317,7 +1356,7 @@ class GameplayScene(BaseScene):
                 self.hit_keys_held.add(event.key)
 
                 self._try_hit_at(
-                    pygame.mouse.get_pos()
+                    self.game.mouse_pos
                 )
 
         elif event.type == pygame.KEYUP:
@@ -1331,7 +1370,7 @@ class GameplayScene(BaseScene):
                 self.hit_mouse_buttons_held.add(event.button)
 
                 self._try_hit_at(
-                    event.pos
+                    self.game.mouse_pos
                 )
 
         elif event.type == pygame.MOUSEBUTTONUP:
@@ -1981,5 +2020,7 @@ class GameplayScene(BaseScene):
     def destroy(self):
 
         pygame.mixer.music.stop()
+
+        self.game.disable_raw_mouse()
 
         pygame.mouse.set_visible(True)

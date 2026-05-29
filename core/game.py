@@ -1,3 +1,5 @@
+import os
+
 import pygame
 import pygame_gui
 
@@ -14,6 +16,10 @@ class Game:
         # -------------------------
         # PYGAME
         # -------------------------
+        os.environ.setdefault("SDL_MOUSE_RELATIVE_MODE_WARP", "0")
+        os.environ.setdefault("SDL_MOUSE_RELATIVE_SYSTEM_SCALE", "0")
+        os.environ.setdefault("SDL_MOUSE_RELATIVE_MODE_CENTER", "0")
+
         pygame.mixer.pre_init(
             frequency=44100,
             size=-16,
@@ -38,6 +44,8 @@ class Game:
         # -------------------------
         self.clock = pygame.time.Clock()
         self.mouse_pos = pygame.mouse.get_pos()
+        self.raw_mouse_enabled = False
+        self.raw_mouse_sensitivity = 1.0
 
         self.running = True
 
@@ -124,6 +132,65 @@ class Game:
 
                 current_scene.create_ui()
 
+    def enable_raw_mouse(self, pos=None):
+        if pos is None:
+            pos = self.mouse_pos
+
+        self.mouse_pos = self._clamp_mouse_pos(pos)
+        pygame.event.set_grab(True)
+
+        if hasattr(pygame.mouse, "set_relative_mode"):
+            try:
+                pygame.mouse.set_relative_mode(True)
+                self.raw_mouse_enabled = bool(
+                    pygame.mouse.get_relative_mode()
+                    if hasattr(pygame.mouse, "get_relative_mode")
+                    else True
+                )
+            except pygame.error:
+                self.raw_mouse_enabled = False
+                pygame.event.set_grab(False)
+        else:
+            self.raw_mouse_enabled = False
+            pygame.event.set_grab(False)
+
+        pygame.mouse.get_rel()
+
+    def disable_raw_mouse(self):
+        if hasattr(pygame.mouse, "set_relative_mode"):
+            try:
+                pygame.mouse.set_relative_mode(False)
+            except pygame.error:
+                pass
+
+        pygame.event.set_grab(False)
+        self.raw_mouse_enabled = False
+
+        try:
+            pygame.mouse.set_pos(
+                int(self.mouse_pos[0]),
+                int(self.mouse_pos[1])
+            )
+        except pygame.error:
+            pass
+
+    def _clamp_mouse_pos(self, pos):
+        return (
+            max(0, min(self.WIDTH - 1, float(pos[0]))),
+            max(0, min(self.HEIGHT - 1, float(pos[1])))
+        )
+
+    def _apply_raw_mouse_delta(self, rel):
+        if not self.raw_mouse_enabled:
+            return
+
+        self.mouse_pos = self._clamp_mouse_pos(
+            (
+                self.mouse_pos[0] + (rel[0] * self.raw_mouse_sensitivity),
+                self.mouse_pos[1] + (rel[1] * self.raw_mouse_sensitivity)
+            )
+        )
+
     # -------------------------
     # MAIN LOOP
     # -------------------------
@@ -150,8 +217,15 @@ class Game:
         current_scene = self.scene_manager.current_scene
         uses_ui = getattr(current_scene, "uses_ui", True)
 
+        if self.raw_mouse_enabled:
+            self._apply_raw_mouse_delta(
+                pygame.mouse.get_rel()
+            )
+
         for event in pygame.event.get():
-            if hasattr(event, "pos"):
+            if self.raw_mouse_enabled and event.type == pygame.MOUSEMOTION:
+                continue
+            if not self.raw_mouse_enabled and hasattr(event, "pos"):
                 self.mouse_pos = event.pos
 
             # -------------------------
@@ -196,7 +270,8 @@ class Game:
                     event
                 )
 
-        self.mouse_pos = pygame.mouse.get_pos()
+        if not self.raw_mouse_enabled:
+            self.mouse_pos = pygame.mouse.get_pos()
 
     # -------------------------
     # UPDATE
@@ -214,7 +289,12 @@ class Game:
     # -------------------------
     def render(self):
         current_scene = self.scene_manager.current_scene
-        self.mouse_pos = pygame.mouse.get_pos()
+        if self.raw_mouse_enabled:
+            self._apply_raw_mouse_delta(
+                pygame.mouse.get_rel()
+            )
+        else:
+            self.mouse_pos = pygame.mouse.get_pos()
 
         self.scene_manager.render(
             self.screen

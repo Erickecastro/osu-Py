@@ -15,8 +15,6 @@ class CursorRenderer:
         self.last_emit_pos = self.pos
         self.emit_timer = 0.0
         self.trail = []
-        self.trail_surface = None
-        self.trail_surface_size = None
         self.scaled_image_cache = {}
 
         self.trail_duration = 0.285
@@ -64,16 +62,6 @@ class CursorRenderer:
         if pos is not None:
             self.pos = pos
 
-        screen_size = screen.get_size()
-        if self.trail_surface is None or self.trail_surface_size != screen_size:
-            self.trail_surface = pygame.Surface(
-                screen_size,
-                pygame.SRCALPHA
-            )
-            self.trail_surface_size = screen_size
-
-        self.trail_surface.fill((0, 0, 0, 0))
-
         for entry in self.trail:
             progress = self._clamp01(
                 entry["age"] / self.trail_duration
@@ -87,14 +75,12 @@ class CursorRenderer:
             )
             scale = 0.86 + (0.14 * self._ease_out_cubic(fade_in))
             self._blit_centered(
-                self.trail_surface,
+                screen,
                 self.trail_image,
                 entry["pos"],
                 alpha=alpha,
                 scale=scale
             )
-
-        screen.blit(self.trail_surface, (0, 0))
 
         self._blit_centered(
             screen,
