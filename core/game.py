@@ -1,30 +1,35 @@
-import os
-
 import pygame
 import pygame_gui
 
 from core.beatmap_loader import BeatmapLoader
+from core.performance import (
+    MIXER_BUFFER,
+    MIXER_CHANNELS,
+    MIXER_FREQUENCY,
+    MIXER_SIZE,
+    RAW_MOUSE_SENSITIVITY,
+    TARGET_FPS,
+    configure_low_latency_environment
+)
 from core.scene_manager import SceneManager
 from scenes.main_menu_scene import MainMenuScene
 
 class Game:
 
-    FPS = 1000
+    FPS = TARGET_FPS
 
     def __init__(self):
 
         # -------------------------
         # PYGAME
         # -------------------------
-        os.environ.setdefault("SDL_MOUSE_RELATIVE_MODE_WARP", "0")
-        os.environ.setdefault("SDL_MOUSE_RELATIVE_SYSTEM_SCALE", "0")
-        os.environ.setdefault("SDL_MOUSE_RELATIVE_MODE_CENTER", "0")
+        configure_low_latency_environment()
 
         pygame.mixer.pre_init(
-            frequency=44100,
-            size=-16,
-            channels=2,
-            buffer=256
+            frequency=MIXER_FREQUENCY,
+            size=MIXER_SIZE,
+            channels=MIXER_CHANNELS,
+            buffer=MIXER_BUFFER
         )
         pygame.init()
 
@@ -45,7 +50,7 @@ class Game:
         self.clock = pygame.time.Clock()
         self.mouse_pos = pygame.mouse.get_pos()
         self.raw_mouse_enabled = False
-        self.raw_mouse_sensitivity = 1.0
+        self.raw_mouse_sensitivity = RAW_MOUSE_SENSITIVITY
 
         self.running = True
 
