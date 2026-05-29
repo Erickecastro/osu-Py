@@ -12,6 +12,7 @@ from core.gameplay_notes import (
     clone_notes_with_combo_data,
     prepare_note_lifecycle
 )
+from core.beatmap_timing import effective_beat_length_at
 from core.gameplay_state import (
     activate_due_notes,
     judge_missed_notes,
@@ -185,11 +186,11 @@ class GameplayScene(BaseScene):
 
         # Aproximação do comportamento do osu! para visibilidade:
         # fade-in durante o approach e fade-out logo após o hit.
-        self.hit_fade_out_time = 350  # ms
-        self.miss_fade_out_time = 90  # ms
+        self.hit_fade_out_time = 460  # ms
+        self.miss_fade_out_time = 180  # ms
         self.miss_pop_duration = 112  # ms
-        self.hit_number_fade_out_time = 140  # ms
-        self.hit_explosion_duration = 300  # ms
+        self.hit_number_fade_out_time = 220  # ms
+        self.hit_explosion_duration = 380  # ms
 
         self.usable_width = (
             (self.playfield_width * self.scale)
@@ -403,7 +404,7 @@ class GameplayScene(BaseScene):
     def _hit_result_for_delta(self, delta):
         if delta < -self.hit_window_50:
             early_delta = abs(delta)
-            if early_delta <= self.approach_time * 0.45:
+            if early_delta <= self._early_hit_limit_ms():
                 return 50
 
         return hit_result_for_delta(
@@ -413,17 +414,140 @@ class GameplayScene(BaseScene):
             self.hit_window_50
         )
 
+    def _early_hit_limit_ms(self):
+        return max(
+            self.hit_window_50 * 1.15,
+            min(
+                self.approach_time * 0.30,
+                self.hit_window_50 * 1.55
+            )
+        )
+
+    def _note_can_receive_early_hit(self, note):
+        return self.current_time >= note["time"] - self._early_hit_limit_ms()
+
+    def _slider_end_time(self, note):
+        span_duration = float(note.get("span_duration", 0.0))
+        repeat_count = int(note.get("repeat_count", 1))
+        slider_total_duration = float(
+            note.get(
+                "slider_total_duration",
+                span_duration * repeat_count
+            )
+        )
+        return note["time"] + slider_total_duration
+
+    def _note_blocks_notelock(self, note):
+        if note["type"] == "circle":
+            return not note.get("judged")
+
+        if note["type"] != "slider":
+            return False
+
+        if note.get("head_hit"):
+            return (
+                not note.get("slider_follow_missed")
+                and self.current_time <= self._slider_end_time(note)
+            )
+
+        return note.get("head_hit_result") is None
+
+    def _notelock_target(self):
+        candidates = [
+            note
+            for note in self.active_notes
+            if self._note_blocks_notelock(note)
+        ]
+        if not candidates:
+            return None
+
+        return min(
+            candidates,
+            key=lambda note: (
+                note["time"],
+                note.get("render_index", 0)
+            )
+        )
+
+    def _note_is_clickable_target(self, note):
+        return not (
+            note["type"] == "slider"
+            and note.get("head_hit")
+        )
+
+    def _note_at_pos(self, pos):
+        best_note = None
+        best_distance = None
+
+        for note in self.active_notes:
+            if note["type"] not in ("circle", "slider"):
+                continue
+            if not self._note_blocks_notelock(note):
+                continue
+            if not self._note_is_clickable_target(note):
+                continue
+
+            scaled_x, scaled_y = self.scale_position(
+                note["x"],
+                note["y"]
+            )
+            dx = pos[0] - scaled_x
+            dy = pos[1] - scaled_y
+            distance = (dx * dx + dy * dy) ** 0.5
+            if distance > self.scaled_radius:
+                continue
+            if best_distance is None or distance < best_distance:
+                best_note = note
+                best_distance = distance
+
+        return best_note
+
+    def _trigger_notelock_shake(self, note):
+        note["notelock_shake_start"] = self.current_time
+        note["notelock_shake_until"] = self.current_time + 220
+
+    def _notelock_shake_offset(self, note):
+        start = note.get("notelock_shake_start")
+        until = note.get("notelock_shake_until")
+        if start is None or until is None:
+            return (0.0, 0.0)
+        if self.current_time >= until:
+            return (0.0, 0.0)
+
+        duration = max(1, until - start)
+        progress = self._clamp01((self.current_time - start) / duration)
+        amplitude = self.scaled_radius * 0.14 * (1.0 - progress)
+        wobble = math.sin(progress * math.tau * 4.0)
+        return (amplitude * wobble, 0.0)
+
     def _try_hit_at(self, pos):
+        locked_note = self._notelock_target()
+
+        def can_attempt_hit(note):
+            return (
+                note is locked_note
+                and self._note_is_clickable_target(note)
+                and self._note_can_receive_early_hit(note)
+            )
+
         best_note, best_result = find_best_hit_object(
             self.active_notes,
             self.current_time,
             pos,
             self.scaled_radius,
             self.scale_position,
-            self._hit_result_for_delta
+            self._hit_result_for_delta,
+            can_attempt_hit
         )
 
         if best_note is None:
+            clicked_note = self._note_at_pos(pos)
+            if (
+                clicked_note is not None
+                and locked_note is not None
+                and clicked_note is not locked_note
+            ):
+                self._trigger_notelock_shake(clicked_note)
             return False
 
         self._add_hit_result(best_note, best_result)
@@ -444,7 +568,7 @@ class GameplayScene(BaseScene):
         start = note.get("start_time", note["time"] - self.approach_time)
         hit_time = note["time"]
         approach_len = max(1, hit_time - start)
-        fade_in_len = max(120, min(260, approach_len * 0.28))
+        fade_in_len = max(180, min(420, approach_len * 0.42))
 
         return self._ease_out_cubic(
             (self.current_time - start) / fade_in_len
@@ -744,6 +868,24 @@ class GameplayScene(BaseScene):
         self.image_surface_cache[key] = width
         return width
 
+    def _cropped_alpha_image(self, image):
+        if image is None:
+            return None
+
+        key = ("alpha_crop", id(image))
+        cached = self.image_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        rect = image.get_bounding_rect()
+        if rect.width <= 0 or rect.height <= 0:
+            self.image_surface_cache[key] = image
+            return image
+
+        cropped = image.subsurface(rect).copy()
+        self.image_surface_cache[key] = cropped
+        return cropped
+
     def _tinted_image(self, image, color):
         if image is None:
             return None
@@ -873,6 +1015,11 @@ class GameplayScene(BaseScene):
             note["y"]
         )
 
+    def _note_judged_time(self, note):
+        if note["type"] == "slider":
+            return note.get("head_hit_time") or note.get("hit_time")
+        return note.get("hit_time")
+
     def _draw_followpoints(self, target):
         frames = self.skin_images.get("followpoints", [])
         if not frames or len(self.notes) < 2:
@@ -888,8 +1035,69 @@ class GameplayScene(BaseScene):
             if gap < 80 or gap > 1800:
                 continue
 
-            start_time = note["time"] + min(50, gap * 0.12)
-            end_time = next_note["time"] - min(50, gap * 0.12)
+            note_start = note.get(
+                "start_time",
+                note["time"] - self.approach_time
+            )
+            note_approach_len = max(1.0, note["time"] - note_start)
+            next_start = next_note.get(
+                "start_time",
+                next_note["time"] - self.approach_time
+            )
+            next_approach_len = max(1.0, next_note["time"] - next_start)
+            beat_length = max(
+                120.0,
+                float(
+                    effective_beat_length_at(
+                        self.timing_points,
+                        next_note["time"]
+                    )
+                )
+            )
+            lead_time = min(
+                gap * 0.98,
+                max(
+                    240.0,
+                    min(
+                        self.approach_time * 0.68,
+                        beat_length * 1.05
+                    )
+                )
+            )
+            both_visible_time = max(
+                note_start + (note_approach_len * 0.10),
+                next_start + (next_approach_len * 0.015)
+            )
+            earliest_pre_hit_start = note["time"] - max(
+                210.0,
+                min(430.0, gap * 0.92, beat_length * 0.95)
+            )
+            latest_pre_hit_start = note["time"] - max(
+                90.0,
+                min(230.0, gap * 0.58)
+            )
+            pre_hit_start = max(
+                both_visible_time,
+                earliest_pre_hit_start,
+                note_start
+            )
+            if pre_hit_start <= latest_pre_hit_start:
+                start_time = pre_hit_start
+            else:
+                start_time = max(
+                    both_visible_time,
+                    note_start
+                )
+            judged_time = self._note_judged_time(next_note)
+            fade_out_duration = max(
+                70.0,
+                min(180.0, gap * 0.22, beat_length * 0.22)
+            )
+            end_time = (
+                judged_time + fade_out_duration
+                if judged_time is not None
+                else next_note["time"] + self.hit_window_50
+            )
             if self.current_time < start_time or self.current_time > end_time:
                 continue
 
@@ -923,23 +1131,42 @@ class GameplayScene(BaseScene):
             angle = -math.degrees(
                 math.atan2(uy, ux)
             )
-            progress = self._clamp01(
-                (self.current_time - start_time)
-                / max(1, end_time - start_time)
+            elapsed = self.current_time - start_time
+            appear_duration = max(
+                95.0,
+                min(
+                    320.0,
+                    gap * 0.58,
+                    beat_length * 0.54,
+                    max(95.0, (next_note["time"] - start_time) * 0.42)
+                )
             )
+            progress = self._clamp01(elapsed / appear_duration)
+            fade_in_duration = max(
+                35.0,
+                min(95.0, appear_duration * 0.34, beat_length * 0.16)
+            )
+            fade_in = self._clamp01(elapsed / fade_in_duration)
+            fade_out = 1.0
+            if judged_time is not None:
+                fade_out = 1.0 - self._clamp01(
+                    (self.current_time - judged_time) / fade_out_duration
+                )
             alpha = int(
-                230
-                * min(progress / 0.18, (1.0 - progress) / 0.18, 1.0)
+                255
+                * fade_in
+                * fade_out
             )
             if alpha <= 0:
                 continue
 
-            segment_width = max(12, int(self.scaled_radius * 0.62))
-            count = max(1, int(distance / segment_width))
-            frame = frames[-1]
+            segment_width = max(22, int(self.scaled_radius * 0.86))
+            spacing = max(10, int(segment_width * 0.48))
+            count = max(1, int(distance / spacing))
+            frame = self._cropped_alpha_image(frames[-1])
             size = (
-                int(segment_width * 1.20),
-                int(self.scaled_radius * 0.48)
+                int(segment_width * 1.42),
+                max(9, int(self.scaled_radius * 0.22))
             )
             scaled = self._scaled_image(frame, size)
             if scaled is None:
@@ -952,15 +1179,15 @@ class GameplayScene(BaseScene):
 
             for point_index in range(1, count + 1):
                 t = point_index / (count + 1)
+                sequence_smoothing = max(
+                    1.15,
+                    min(2.65, gap / 165.0)
+                )
                 appear = self._clamp01(
-                    (progress * (count + 3) - point_index + 1)
-                    / 2.5
+                    (progress * (count + 7) - point_index + 2)
+                    / sequence_smoothing
                 )
-                disappear = self._clamp01(
-                    ((1.0 - progress) * (count + 3) - (count + 2 - point_index))
-                    / 2.5
-                )
-                point_fade = min(appear, disappear)
+                point_fade = appear
                 point_alpha = int(alpha * point_fade)
                 if point_alpha <= 0:
                     continue
@@ -1288,6 +1515,9 @@ class GameplayScene(BaseScene):
                     note["y"]
                 )
             )
+            shake_x, shake_y = self._notelock_shake_offset(note)
+            scaled_x += shake_x
+            scaled_y += shake_y
 
             time_left = (
                 note["time"]
@@ -1426,9 +1656,19 @@ class GameplayScene(BaseScene):
                     note["scaled_slider_cumulative"] = cumulative
                     note["scaled_slider_length"] = total_length
 
+                if shake_x or shake_y:
+                    render_slider_points = [
+                        (x + shake_x, y + shake_y)
+                        for x, y in slider_points
+                    ]
+                    slider_cache_key = None
+                else:
+                    render_slider_points = slider_points
+                    slider_cache_key = note.get("render_index")
+
                 self.slider_renderer.draw(
                     overlay,
-                    slider_points,
+                    render_slider_points,
                     alpha=slider_track_alpha,
                     object_color=note.get("combo_color", (0, 150, 255)),
                     draw_head_marker=(
@@ -1436,7 +1676,7 @@ class GameplayScene(BaseScene):
                         and self.current_time < note["time"]
                     ),
                     draw_tail_marker=False,
-                    cache_key=note.get("render_index"),
+                    cache_key=slider_cache_key,
                     repeat_count=note.get("repeat_count", 1),
                     draw_reverse_markers=True,
                     slider_start_time=note["time"],
@@ -1445,17 +1685,18 @@ class GameplayScene(BaseScene):
 
                 head_result = note.get("head_hit_result")
                 head_alpha = self._slider_head_alpha(note, alpha)
+                slider_head_pos = render_slider_points[0]
 
                 if head_result is None and head_alpha > 0:
                     if not self._draw_hitcircle_skin(
                         overlay,
-                        slider_points[0],
+                        slider_head_pos,
                         note.get("combo_color", (0, 150, 255)),
                         alpha=head_alpha
                     ):
                         self._draw_aa_circle(
                             overlay,
-                            slider_points[0],
+                            slider_head_pos,
                             self.slider_head_radius,
                             fill_color=note.get("combo_color", (0, 150, 255)),
                             outline_color=(255, 255, 255),
@@ -1465,14 +1706,14 @@ class GameplayScene(BaseScene):
                     self.effects_renderer.draw_combo_number(
                         overlay,
                         str(note["combo_index"]),
-                        slider_points[0],
+                        slider_head_pos,
                         alpha=head_alpha
                     )
                 elif head_result == 0 and head_alpha > 0:
                     pop_alpha = self._miss_pop_alpha(note)
                     self.effects_renderer.draw_miss_pop(
                         overlay,
-                        slider_points[0],
+                        slider_head_pos,
                         self.slider_head_radius,
                         note.get("combo_color", (0, 150, 255)),
                         alpha=pop_alpha
@@ -1480,7 +1721,7 @@ class GameplayScene(BaseScene):
                 elif head_result == 300 and head_alpha > 0:
                     self.effects_renderer.draw_hit_explosion(
                         overlay,
-                        slider_points[0],
+                        slider_head_pos,
                         self.slider_head_radius,
                         note.get("combo_color", (0, 150, 255)),
                         note.get("head_hit_time", self.current_time),
@@ -1533,7 +1774,7 @@ class GameplayScene(BaseScene):
                         )
 
                     ball_pos = self.slider_renderer.point_at_distance(
-                        slider_points,
+                        render_slider_points,
                         ball_dist,
                         cumulative,
                         total_length
@@ -1551,10 +1792,11 @@ class GameplayScene(BaseScene):
                         mouse_x, mouse_y = pygame.mouse.get_pos()
                         dx = mouse_x - ball_pos[0]
                         dy = mouse_y - ball_pos[1]
-                        outside = (
+                        cursor_outside = (
                             (dx * dx + dy * dy) ** 0.5 > follow_radius
-                            or not self._hit_input_held()
                         )
+                        input_released = not self._hit_input_held()
+                        outside = cursor_outside or input_released
                         remaining = (
                             note["time"]
                             + slider_total_duration
@@ -1575,21 +1817,37 @@ class GameplayScene(BaseScene):
                                     note["slider_follow_outside_since"] = (
                                         self.current_time
                                     )
-                                elif self.current_time - outside_since > 140:
+                                    note["slider_follow_outside_reason"] = (
+                                        "cursor"
+                                        if cursor_outside
+                                        else "release"
+                                    )
+                                elif self.current_time - outside_since > 250:
+                                    if cursor_outside:
+                                        note[
+                                            "slider_follow_outside_reason"
+                                        ] = "cursor"
+                                    early_release = (
+                                        note.get(
+                                            "slider_follow_outside_reason"
+                                        )
+                                        == "release"
+                                    )
                                     self._register_slider_follow_miss(
                                         note,
                                         ball_pos,
-                                        early_release=True
+                                        early_release=early_release
                                     )
                         else:
                             note["slider_follow_outside_since"] = None
+                            note["slider_follow_outside_reason"] = None
 
                     outside_since = note.get("slider_follow_outside_since")
                     follow_alpha = slider_ball_alpha * 0.82
                     if outside_since is not None:
                         outside_elapsed = self.current_time - outside_since
                         follow_alpha *= 1.0 - self._clamp01(
-                            outside_elapsed / 140
+                            outside_elapsed / 250
                         )
 
                     if show_slider_follow:
@@ -1601,18 +1859,24 @@ class GameplayScene(BaseScene):
                             alpha=int(follow_alpha)
                         )
 
-                    sliderball_diameter = max(
+                    sliderball_visible_diameter = max(
                         1,
-                        self.slider_path_radius * 2 * 0.94
+                        (
+                            self.slider_path_radius
+                            - max(2, self.slider_path_radius * 0.07)
+                        )
+                        * 2
+                        * 0.98
                     )
+                    sliderball_diameter = sliderball_visible_diameter
                     sliderball_image = self.skin_images.get("sliderball")
                     if sliderball_image is not None:
                         opaque_width = self._alpha_width(
                             sliderball_image,
-                            threshold=96
+                            threshold=16
                         )
                         if opaque_width > 0:
-                            sliderball_diameter *= (
+                            sliderball_diameter = sliderball_visible_diameter * (
                                 sliderball_image.get_width()
                                 / opaque_width
                             )

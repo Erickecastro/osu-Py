@@ -4,7 +4,8 @@ def find_best_hit_object(
     pos,
     hit_radius,
     scale_position,
-    hit_result_for_delta
+    hit_result_for_delta,
+    can_attempt_hit=None
 ):
     best_note = None
     best_result = None
@@ -18,6 +19,9 @@ def find_best_hit_object(
             continue
 
         if note["type"] not in ("circle", "slider"):
+            continue
+
+        if can_attempt_hit is not None and not can_attempt_hit(note):
             continue
 
         delta = current_time - note["time"]
