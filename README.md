@@ -49,6 +49,7 @@ Coloque as musicas dentro da pasta `songs/`. Cada beatmap deve manter sua estrut
 
 - Arquivo `.osu`.
 - Arquivo de audio referenciado pelo `.osu`.
+- Arquivo da música principal `.wav/.mp3`.
 - Assets opcionais do beatmap, quando existirem.
 
 O loader percorre as subpastas de `songs/`, encontra arquivos `.osu` e monta a lista de dificuldades disponiveis.
