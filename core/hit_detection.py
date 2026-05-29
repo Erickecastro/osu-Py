@@ -29,10 +29,13 @@ def find_best_hit_object(
         if result is None:
             continue
 
-        scaled_x, scaled_y = scale_position(
-            note["x"],
-            note["y"]
-        )
+        scaled_pos = note.get("scaled_pos")
+        if scaled_pos is None:
+            scaled_pos = scale_position(
+                note["x"],
+                note["y"]
+            )
+        scaled_x, scaled_y = scaled_pos
         dx = pos[0] - scaled_x
         dy = pos[1] - scaled_y
         distance = (dx * dx + dy * dy) ** 0.5

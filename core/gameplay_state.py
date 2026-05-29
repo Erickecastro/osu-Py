@@ -37,14 +37,17 @@ def prune_inactive_notes(
     hit_fade_out_time,
     hit_explosion_duration
 ):
-    return [
-        note
-        for note in active_notes
+    write_index = 0
+    for note in active_notes:
         if current_time <= (
             note.get(
                 "end_time",
                 note["time"] + hit_fade_out_time
             )
             + hit_explosion_duration
-        )
-    ]
+        ):
+            active_notes[write_index] = note
+            write_index += 1
+
+    del active_notes[write_index:]
+    return active_notes

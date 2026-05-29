@@ -208,6 +208,7 @@ class GameplayScene(BaseScene):
         self.object_scale = self.scale
         self.object_offset_x = self.offset_x
         self.object_offset_y = self.offset_y
+        self._precompute_note_positions()
 
         self.music_path = find_audio_file(
             self.beatmap["path"]
@@ -331,10 +332,7 @@ class GameplayScene(BaseScene):
             miss_fade_end = self.current_time + self.miss_fade_out_time
             miss_pop_end = self.current_time + self.miss_pop_duration
             self._add_miss_indicator(
-                self.scale_position(
-                    note["x"],
-                    note["y"]
-                ),
+                self._note_screen_pos(note),
                 show_time=miss_fade_end + self.miss_indicator_delay
             )
             note["fade_out_start"] = self.current_time
@@ -372,10 +370,7 @@ class GameplayScene(BaseScene):
     def _add_hit_result_indicator(self, note, result):
         self.hit_result_indicators.append({
             "result": result,
-            "pos": self.scale_position(
-                note["x"],
-                note["y"]
-            ),
+            "pos": self._note_screen_pos(note),
             "show_time": self.current_time,
             "start_time": self.current_time
         })
@@ -473,10 +468,7 @@ class GameplayScene(BaseScene):
             if not self._note_is_clickable_target(note):
                 continue
 
-            scaled_x, scaled_y = self.scale_position(
-                note["x"],
-                note["y"]
-            )
+            scaled_x, scaled_y = self._note_screen_pos(note)
             dx = pos[0] - scaled_x
             dy = pos[1] - scaled_y
             distance = (dx * dx + dy * dy) ** 0.5
@@ -1013,10 +1005,7 @@ class GameplayScene(BaseScene):
             points = note.get("scaled_slider_points")
             if points:
                 return points[-1]
-        return self.scale_position(
-            note["x"],
-            note["y"]
-        )
+        return self._note_screen_pos(note)
 
     def _note_judged_time(self, note):
         if note["type"] == "slider":
@@ -1108,22 +1097,43 @@ class GameplayScene(BaseScene):
                 )
             judged_time = self._note_judged_time(next_note)
             fade_out_duration = max(
-                70.0,
-                min(180.0, gap * 0.22, beat_length * 0.22)
+                38.0,
+                min(92.0, gap * 0.12, beat_length * 0.12)
             )
-            end_time = (
-                judged_time + fade_out_duration
+            state = note.setdefault("followpoint_state", {})
+            state_index = next_note.get("render_index", index + 1)
+            if state.get("target") != state_index:
+                state.clear()
+                state["target"] = state_index
+
+            natural_fade_start = next_note["time"] + 18.0
+            requested_fade_start = (
+                judged_time
                 if judged_time is not None
-                else next_note["time"] + self.hit_window_50
+                else natural_fade_start
+            )
+            if (
+                self.current_time >= requested_fade_start
+                and "fade_start" not in state
+            ):
+                state["fade_start"] = self.current_time
+
+            fade_start = state.get("fade_start")
+            if state.get("hidden"):
+                continue
+
+            end_time = (
+                fade_start + fade_out_duration
+                if fade_start is not None
+                else natural_fade_start + fade_out_duration
             )
             if self.current_time < start_time or self.current_time > end_time:
+                if self.current_time > end_time:
+                    state["hidden"] = True
                 continue
 
             start = self._note_follow_anchor(note)
-            end = self.scale_position(
-                next_note["x"],
-                next_note["y"]
-            )
+            end = self._note_screen_pos(next_note)
             dx = end[0] - start[0]
             dy = end[1] - start[1]
             distance = (dx * dx + dy * dy) ** 0.5
@@ -1166,10 +1176,11 @@ class GameplayScene(BaseScene):
             )
             fade_in = self._clamp01(elapsed / fade_in_duration)
             fade_out = 1.0
-            if judged_time is not None:
-                fade_out = 1.0 - self._clamp01(
-                    (self.current_time - judged_time) / fade_out_duration
+            if fade_start is not None:
+                fade_out_progress = self._clamp01(
+                    (self.current_time - fade_start) / fade_out_duration
                 )
+                fade_out = (1.0 - fade_out_progress) ** 1.65
             alpha = int(
                 255
                 * fade_in
@@ -1467,6 +1478,25 @@ class GameplayScene(BaseScene):
 
         return scaled_x, scaled_y
 
+    def _precompute_note_positions(self):
+        for note in self.notes:
+            note["scaled_pos"] = (
+                self.object_offset_x + (note["x"] * self.object_scale),
+                self.object_offset_y + (note["y"] * self.object_scale)
+            )
+
+    def _note_screen_pos(self, note):
+        pos = note.get("scaled_pos")
+        if pos is not None:
+            return pos
+
+        pos = self.scale_position(
+            note["x"],
+            note["y"]
+        )
+        note["scaled_pos"] = pos
+        return pos
+
     def render(self, screen):
 
         self._draw_background(screen)
@@ -1511,7 +1541,7 @@ class GameplayScene(BaseScene):
             self.overlay_surface = pygame.Surface(
                 screen_size,
                 pygame.SRCALPHA
-            )
+            ).convert_alpha()
             self.overlay_surface_size = screen_size
 
         overlay = self.overlay_surface
@@ -1521,12 +1551,7 @@ class GameplayScene(BaseScene):
 
         for note in self.active_notes:
 
-            scaled_x, scaled_y = (
-                self.scale_position(
-                    note["x"],
-                    note["y"]
-                )
-            )
+            scaled_x, scaled_y = self._note_screen_pos(note)
             shake_x, shake_y = self._notelock_shake_offset(note)
             scaled_x += shake_x
             scaled_y += shake_y
@@ -1921,53 +1946,57 @@ class GameplayScene(BaseScene):
             if self.current_time < indicator["show_time"] + self.miss_indicator_duration
         ]
 
-        for indicator in self.miss_indicators + self.hit_result_indicators:
-            if self.current_time < indicator["show_time"]:
-                continue
+        for indicators in (
+            self.miss_indicators,
+            self.hit_result_indicators
+        ):
+            for indicator in indicators:
+                if self.current_time < indicator["show_time"]:
+                    continue
 
-            elapsed = self.current_time - indicator["show_time"]
-            progress = self._clamp01(
-                elapsed / self.miss_indicator_duration
-            )
-            eased = 1.0 - (progress ** 0.7)
-            alpha = int(255 * eased)
-            x, y = indicator["pos"]
-            y += int(elapsed * 0.03)
-
-            result = indicator.get("result", 0)
-            image = self.skin_images.get(
-                "hit100" if result == 100
-                else "hit50" if result == 50
-                else "miss"
-            )
-            if image is not None:
-                self._draw_image_centered(
-                    overlay,
-                    image,
-                    (x, y),
-                    diameter=self.scaled_radius * 1.28,
-                    alpha=alpha
+                elapsed = self.current_time - indicator["show_time"]
+                progress = self._clamp01(
+                    elapsed / self.miss_indicator_duration
                 )
-                continue
+                eased = 1.0 - (progress ** 0.7)
+                alpha = int(255 * eased)
+                x, y = indicator["pos"]
+                y += int(elapsed * 0.03)
 
-            size = int(self.scaled_radius * 0.30)
-            half = max(1, size // 2)
-            width = max(2, int(2 * eased))
+                result = indicator.get("result", 0)
+                image = self.skin_images.get(
+                    "hit100" if result == 100
+                    else "hit50" if result == 50
+                    else "miss"
+                )
+                if image is not None:
+                    self._draw_image_centered(
+                        overlay,
+                        image,
+                        (x, y),
+                        diameter=self.scaled_radius * 1.28,
+                        alpha=alpha
+                    )
+                    continue
 
-            pygame.draw.line(
-                overlay,
-                (255, 255, 255, alpha),
-                (x - half, y - half),
-                (x + half, y + half),
-                width
-            )
-            pygame.draw.line(
-                overlay,
-                (255, 255, 255, alpha),
-                (x - half, y + half),
-                (x + half, y - half),
-                width
-            )
+                size = int(self.scaled_radius * 0.30)
+                half = max(1, size // 2)
+                width = max(2, int(2 * eased))
+
+                pygame.draw.line(
+                    overlay,
+                    (255, 255, 255, alpha),
+                    (x - half, y - half),
+                    (x + half, y + half),
+                    width
+                )
+                pygame.draw.line(
+                    overlay,
+                    (255, 255, 255, alpha),
+                    (x - half, y + half),
+                    (x + half, y - half),
+                    width
+                )
 
         screen.blit(overlay, (0, 0))
 

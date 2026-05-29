@@ -5,6 +5,7 @@ class GameplayHUDRenderer:
     def __init__(self, font):
         self.font = font
         self.text_cache = {}
+        self.health_bar_cache = {}
 
     def text_surface(self, text, color=(255, 255, 255)):
         key = (text, tuple(color))
@@ -77,11 +78,24 @@ class GameplayHUDRenderer:
         x = (screen.get_width() - width) // 2
         y = 22
         fill_width = int(width * health)
+        cache_key = (width, height, fill_width)
+        cached = self.health_bar_cache.get(cache_key)
+        if cached is not None:
+            screen.blit(cached, (x, y))
+            return
+
+        if len(self.health_bar_cache) > 128:
+            self.health_bar_cache.clear()
+
+        surface = pygame.Surface(
+            (width, height),
+            pygame.SRCALPHA
+        )
 
         pygame.draw.rect(
-            screen,
+            surface,
             (18, 18, 18),
-            (x, y, width, height),
+            (0, 0, width, height),
             border_radius=height // 2
         )
         if fill_width > 0:
@@ -93,15 +107,17 @@ class GameplayHUDRenderer:
                 fill_color = (230, 86, 86)
 
             pygame.draw.rect(
-                screen,
+                surface,
                 fill_color,
-                (x, y, fill_width, height),
+                (0, 0, fill_width, height),
                 border_radius=height // 2
             )
         pygame.draw.rect(
-            screen,
+            surface,
             (255, 255, 255),
-            (x, y, width, height),
+            (0, 0, width, height),
             width=2,
             border_radius=height // 2
         )
+        self.health_bar_cache[cache_key] = surface
+        screen.blit(surface, (x, y))
