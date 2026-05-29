@@ -60,6 +60,7 @@ class GameplayScene(BaseScene):
         self.current_time = 0
         self.ready_start_time = pygame.time.get_ticks()
         self.pre_start_delay_ms = 1500
+        self.post_ready_delay_ms = 650
 
         combo_colors = self.DEFAULT_COMBO_COLORS
         self.notes = clone_notes_with_combo_data(
@@ -78,7 +79,7 @@ class GameplayScene(BaseScene):
         self.background_surface_size = None
         self.dim_surface = None
         self.dim_surface_size = None
-        self.background_dim_alpha = 185
+        self.background_dim_alpha = 240
 
         self.cs = self.beatmap[
             "difficulty"
@@ -147,21 +148,28 @@ class GameplayScene(BaseScene):
             )
         ) / 2
 
-        self.scaled_radius = int(
+        self.slider_base_radius = int(
             self.circle_radius
             * self.scale
-            * 0.80
+            * 0.7831296
+        )
+
+        self.scaled_radius = int(
+            self.slider_base_radius
+            * 1.1865
         )
 
         if self.scaled_radius < 40:
             self.scaled_radius = 40
+        if self.slider_base_radius < 40:
+            self.slider_base_radius = 40
 
         self.slider_head_radius = int(
             self.scaled_radius
         )
 
         self.slider_path_radius = int(
-            self.scaled_radius * 1.22
+            self.slider_base_radius * 1.22
         )
 
         self.safe_margin = (
@@ -690,7 +698,11 @@ class GameplayScene(BaseScene):
                 pygame.time.get_ticks()
                 - self.ready_start_time
             )
-            if ready_elapsed < self.pre_start_delay_ms:
+            total_intro_delay = (
+                self.pre_start_delay_ms
+                + self.post_ready_delay_ms
+            )
+            if ready_elapsed < total_intro_delay:
                 return
 
             self.start_time = start_music(
@@ -1096,6 +1108,9 @@ class GameplayScene(BaseScene):
             self.pre_start_delay_ms
             - (pygame.time.get_ticks() - self.ready_start_time)
         )
+        if remaining <= 0:
+            return
+
         dots = "." * (1 + int((self.pre_start_delay_ms - remaining) / 400) % 3)
         text = self.font.render(
             f"Ready{dots}",

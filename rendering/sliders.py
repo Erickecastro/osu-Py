@@ -157,7 +157,10 @@ class SliderRenderer:
 
         size, local_points, surface_pos = geometry
         outline_radius = self.scene.slider_path_radius
-        body_radius = int(self.scene.slider_path_radius * 0.76)
+        body_radius = max(
+            1,
+            int(outline_radius - max(2, outline_radius * 0.07))
+        )
         slider_surface = self._render_track_surface(
             size,
             local_points,
@@ -216,7 +219,10 @@ class SliderRenderer:
 
         size, local_points, surface_pos = geometry
         outline_radius = self.scene.slider_path_radius
-        body_radius = int(self.scene.slider_path_radius * 0.76)
+        body_radius = max(
+            1,
+            int(outline_radius - max(2, outline_radius * 0.07))
+        )
         slider_surface = self._render_track_surface(
             size,
             local_points,
@@ -499,24 +505,56 @@ class SliderRenderer:
 
         rgb = pygame.surfarray.pixels3d(surface)
         alpha = pygame.surfarray.pixels_alpha(surface)
-        outline_alpha = self._alpha_from_distance(
-            distances,
-            outline_radius,
-            220
+        radius = max(1.0, float(outline_radius))
+        radial = np.clip(
+            distances / radius,
+            0.0,
+            1.0
         )
-        body_alpha = self._alpha_from_distance(
-            distances,
-            body_radius,
-            255
+        coverage = np.clip(
+            radius + 0.5 - distances,
+            0.0,
+            1.0
         )
-        body_mask = body_alpha > 0
-        rgb[:, :, :] = (30, 30, 30)
-        alpha[:, :] = np.where(
-            body_mask.T,
-            body_alpha.T,
-            outline_alpha.T
+
+        center_strength = (1.0 - radial) ** 1.35
+        edge_strength = np.clip(
+            (radial - 0.58) / 0.42,
+            0.0,
+            1.0
+        ) ** 0.72
+        border_strength = np.clip(
+            (radial - 0.90) / 0.10,
+            0.0,
+            1.0
+        ) ** 0.45
+
+        luma = (
+            12.0
+            + (40.0 * center_strength)
+            - (12.0 * edge_strength)
+            + (44.0 * border_strength)
         )
-        rgb[body_mask.T] = (80, 80, 80)
+        luma = np.clip(luma, 4.0, 68.0).astype(np.uint8)
+
+        base_alpha = (
+            238.0
+            + (12.0 * center_strength)
+        )
+        edge_alpha = 252.0 * np.maximum(
+            edge_strength,
+            border_strength
+        )
+        final_alpha = np.maximum(
+            base_alpha,
+            edge_alpha
+        ) * coverage
+        final_alpha = np.clip(final_alpha, 0.0, 255.0).astype(np.uint8)
+
+        rgb[:, :, 0] = luma.T
+        rgb[:, :, 1] = luma.T
+        rgb[:, :, 2] = luma.T
+        alpha[:, :] = final_alpha.T
         del rgb
         del alpha
         return surface
@@ -546,8 +584,8 @@ class SliderRenderer:
             for point in points
         ]
         tracks = (
-            (outline_radius, (30, 30, 30, 220)),
-            (body_radius, (80, 80, 80, 255))
+            (outline_radius, (62, 62, 62, 250)),
+            (body_radius, (42, 42, 42, 248))
         )
         for radius, color in tracks:
             high_radius = max(1, int(round(radius * aa_scale)))

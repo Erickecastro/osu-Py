@@ -33,28 +33,6 @@ class GameplayHUDRenderer:
         combo,
         health=1.0
     ):
-        title = beatmap["metadata"].get(
-            "Title",
-            beatmap["name"]
-        )
-        version = beatmap["metadata"].get(
-            "Version",
-            "Unknown"
-        )
-
-        title_text = self.text_surface(
-            f"{title} [{version}]",
-            (255, 255, 255)
-        )
-        screen.blit(title_text, (20, 20))
-
-        display_time = int(current_time // 25) * 25
-        time_text = self.text_surface(
-            f"{display_time} ms",
-            (0, 255, 0)
-        )
-        screen.blit(time_text, (20, 60))
-
         score_text = self.text_surface(
             f"{score:08d}",
             (255, 255, 255)
