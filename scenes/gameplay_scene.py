@@ -127,14 +127,13 @@ class GameplayScene(BaseScene):
 
         self.playfield_width = 512
         self.playfield_height = 384
+        self.osu_base_width = 640
+        self.osu_base_height = 480
+        self.object_size_multiplier = 1.11
 
-        self.playfield_screen_height = (
-            self.game.HEIGHT * 0.78
-        )
-
-        self.scale = (
-            self.playfield_screen_height
-            / self.playfield_height
+        self.scale = min(
+            self.game.WIDTH / self.osu_base_width,
+            self.game.HEIGHT / self.osu_base_height
         )
 
         self.offset_x = (
@@ -151,12 +150,13 @@ class GameplayScene(BaseScene):
                 self.playfield_height
                 * self.scale
             )
-        ) / 2
+        ) / 2 + (8 * self.scale)
 
         self.slider_base_radius = int(
             self.circle_radius
             * self.scale
             * 0.675143859456
+            * self.object_size_multiplier
         )
 
         self.scaled_radius = int(
@@ -193,35 +193,16 @@ class GameplayScene(BaseScene):
         self.hit_explosion_duration = 380  # ms
 
         self.usable_width = (
-            (self.playfield_width * self.scale)
-            - (self.safe_margin * 2)
+            self.playfield_width * self.scale
         )
 
         self.usable_height = (
-            (self.playfield_height * self.scale)
-            - (self.safe_margin * 2)
+            self.playfield_height * self.scale
         )
 
-        self.object_scale = min(
-            self.usable_width / self.playfield_width,
-            self.usable_height / self.playfield_height
-        )
-        self.object_offset_x = (
-            self.offset_x
-            + self.safe_margin
-            + (
-                self.usable_width
-                - (self.playfield_width * self.object_scale)
-            ) / 2
-        )
-        self.object_offset_y = (
-            self.offset_y
-            + self.safe_margin
-            + (
-                self.usable_height
-                - (self.playfield_height * self.object_scale)
-            ) / 2
-        )
+        self.object_scale = self.scale
+        self.object_offset_x = self.offset_x
+        self.object_offset_y = self.offset_y
 
         self.music_path = find_audio_file(
             self.beatmap["path"]
@@ -1133,12 +1114,12 @@ class GameplayScene(BaseScene):
             )
             elapsed = self.current_time - start_time
             appear_duration = max(
-                95.0,
+                82.0,
                 min(
-                    320.0,
-                    gap * 0.58,
-                    beat_length * 0.54,
-                    max(95.0, (next_note["time"] - start_time) * 0.42)
+                    280.0,
+                    gap * 0.50,
+                    beat_length * 0.48,
+                    max(82.0, (next_note["time"] - start_time) * 0.36)
                 )
             )
             progress = self._clamp01(elapsed / appear_duration)
@@ -1180,8 +1161,8 @@ class GameplayScene(BaseScene):
             for point_index in range(1, count + 1):
                 t = point_index / (count + 1)
                 sequence_smoothing = max(
-                    1.15,
-                    min(2.65, gap / 165.0)
+                    1.0,
+                    min(2.35, gap / 180.0)
                 )
                 appear = self._clamp01(
                     (progress * (count + 7) - point_index + 2)
