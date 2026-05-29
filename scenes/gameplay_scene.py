@@ -31,6 +31,7 @@ from rendering.sliders import SliderRenderer
 
 
 class GameplayScene(BaseScene):
+    uses_ui = False
 
     MAX_SLIDER_SURFACE_SIZE = 4096
     MAX_SLIDER_POINTS = 4000
@@ -1341,7 +1342,7 @@ class GameplayScene(BaseScene):
     def update(self, dt):
         self.cursor_renderer.update(
             dt,
-            pygame.mouse.get_pos()
+            self.game.mouse_pos
         )
 
         if not self.music_started:
@@ -1442,7 +1443,7 @@ class GameplayScene(BaseScene):
 
         if not self.music_started and self.pre_music_started_at is None:
             self._render_ready(screen)
-            self.cursor_renderer.draw(screen)
+            self.cursor_renderer.draw(screen, self.game.mouse_pos)
             return
 
         if self.music_started:
@@ -1770,7 +1771,7 @@ class GameplayScene(BaseScene):
                         show_slider_follow
                         and not note.get("slider_follow_missed")
                     ):
-                        mouse_x, mouse_y = pygame.mouse.get_pos()
+                        mouse_x, mouse_y = self.game.mouse_pos
                         dx = mouse_x - ball_pos[0]
                         dy = mouse_y - ball_pos[1]
                         cursor_outside = (
@@ -1940,7 +1941,7 @@ class GameplayScene(BaseScene):
 
         screen.blit(overlay, (0, 0))
 
-        self.cursor_renderer.draw(screen)
+        self.cursor_renderer.draw(screen, self.game.mouse_pos)
 
     def _render_ready(self, screen):
         pygame.draw.rect(

@@ -7,13 +7,19 @@ from scenes.main_menu_scene import MainMenuScene
 
 class Game:
 
-    FPS = 144
+    FPS = 1000
 
     def __init__(self):
 
         # -------------------------
         # PYGAME
         # -------------------------
+        pygame.mixer.pre_init(
+            frequency=44100,
+            size=-16,
+            channels=2,
+            buffer=256
+        )
         pygame.init()
 
         pygame.mixer.init()
@@ -31,6 +37,7 @@ class Game:
         # CLOCK
         # -------------------------
         self.clock = pygame.time.Clock()
+        self.mouse_pos = pygame.mouse.get_pos()
 
         self.running = True
 
@@ -63,18 +70,27 @@ class Game:
     # CREATE WINDOW
     # -------------------------
     def create_window(self):
+        flags = pygame.DOUBLEBUF
 
         if self.fullscreen:
 
-            self.screen = pygame.display.set_mode(
-                (0, 0),
-                pygame.FULLSCREEN
-            )
+            flags |= pygame.FULLSCREEN
+            size = (0, 0)
 
         else:
 
+            size = (1280, 720)
+
+        try:
             self.screen = pygame.display.set_mode(
-                (1280, 720)
+                size,
+                flags,
+                vsync=0
+            )
+        except TypeError:
+            self.screen = pygame.display.set_mode(
+                size,
+                flags
             )
 
         self.WIDTH = self.screen.get_width()
@@ -115,7 +131,7 @@ class Game:
 
         while self.running:
 
-            dt = self.clock.tick(
+            dt = self.clock.tick_busy_loop(
                 self.FPS
             ) / 1000
 
@@ -131,8 +147,12 @@ class Game:
     # EVENTS
     # -------------------------
     def events(self):
+        current_scene = self.scene_manager.current_scene
+        uses_ui = getattr(current_scene, "uses_ui", True)
 
         for event in pygame.event.get():
+            if hasattr(event, "pos"):
+                self.mouse_pos = event.pos
 
             # -------------------------
             # QUIT
@@ -171,16 +191,21 @@ class Game:
             # -------------------------
             # UI EVENTS
             # -------------------------
-            self.ui_manager.process_events(
-                event
-            )
+            if uses_ui:
+                self.ui_manager.process_events(
+                    event
+                )
+
+        self.mouse_pos = pygame.mouse.get_pos()
 
     # -------------------------
     # UPDATE
     # -------------------------
     def update(self, dt):
+        current_scene = self.scene_manager.current_scene
 
-        self.ui_manager.update(dt)
+        if getattr(current_scene, "uses_ui", True):
+            self.ui_manager.update(dt)
 
         self.scene_manager.update(dt)
 
@@ -188,13 +213,16 @@ class Game:
     # RENDER
     # -------------------------
     def render(self):
+        current_scene = self.scene_manager.current_scene
+        self.mouse_pos = pygame.mouse.get_pos()
 
         self.scene_manager.render(
             self.screen
         )
 
-        self.ui_manager.draw_ui(
-            self.screen
-        )
+        if getattr(current_scene, "uses_ui", True):
+            self.ui_manager.draw_ui(
+                self.screen
+            )
 
         pygame.display.flip()

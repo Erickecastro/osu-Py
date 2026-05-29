@@ -1,4 +1,5 @@
 class BaseScene:
+    uses_ui = True
 
     def __init__(self, game):
 

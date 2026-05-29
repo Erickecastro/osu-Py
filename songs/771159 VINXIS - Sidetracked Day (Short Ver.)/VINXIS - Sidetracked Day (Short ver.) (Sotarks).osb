@@ -1,0 +1,36 @@
+[Events]
+//Background and Video events
+//Storyboard Layer 0 (Background)
+//Storyboard Layer 1 (Fail)
+//Storyboard Layer 2 (Pass)
+//Storyboard Layer 3 (Foreground)
+Sprite,Foreground,Centre,"SB\BGBlackWhite.jpg",320,240
+ S,0,19130,,0.459945
+ F,0,19130,107215,1
+ F,0,107215,112321,1
+ F,0,112321,137872,1
+Sprite,Foreground,Centre,"SB\Black.jpg",320,240
+ M,0,-2412,20407,320,240
+ S,0,19130,,0.8456986
+ F,0,19130,20407,1,0
+Sprite,Foreground,Centre,"SB\Black.jpg",320,240
+ S,0,40832,,1
+ F,0,40832,44502,0,1
+ F,0,44502,45938,1,0
+Sprite,Foreground,Centre,"SB\White.jpg",320,240
+ F,0,86789,87428,0.4389041,0
+Sprite,Foreground,Centre,"BGSotarks.jpg",320,240
+ S,0,107215,,0.4599451
+ F,0,107215,112002,1
+ F,0,112002,112321,1,0
+ F,0,112321,117109,0
+ F,0,117109,117428,0,1
+ F,0,117428,124768,1
+ F,0,124768,125087,1,0
+ F,0,125087,126284,0
+ F,0,126284,126364,0,1
+ F,0,126364,127561,1
+ F,0,127561,127641,1,0
+Sprite,Foreground,Centre,"SB\White.jpg",320,240
+ F,0,107215,107853,1,0
+//Storyboard Sound Samples

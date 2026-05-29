@@ -60,7 +60,10 @@ class CursorRenderer:
 
         self.trail = live_trail[-self.trail_max_points:]
 
-    def draw(self, screen):
+    def draw(self, screen, pos=None):
+        if pos is not None:
+            self.pos = pos
+
         screen_size = screen.get_size()
         if self.trail_surface is None or self.trail_surface_size != screen_size:
             self.trail_surface = pygame.Surface(
