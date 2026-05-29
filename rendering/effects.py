@@ -1,3 +1,6 @@
+import pygame
+
+
 class GameplayEffectsRenderer:
     def __init__(self, scene):
         self.scene = scene
@@ -23,6 +26,35 @@ class GameplayEffectsRenderer:
         self.combo_number_surface_cache[text] = surfaces
         return surfaces
 
+    def combo_number_image(self, text):
+        digits = self.scene.skin_images.get("combo_digits", {})
+        parts = [
+            digits.get(ch)
+            for ch in text
+        ]
+        if not parts or any(part is None for part in parts):
+            return None
+
+        key = ("image", text)
+        cached = self.combo_number_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        height = max(part.get_height() for part in parts)
+        width = sum(part.get_width() for part in parts)
+        surface = pygame.Surface(
+            (width, height),
+            pygame.SRCALPHA
+        )
+        x = 0
+        for part in parts:
+            y = (height - part.get_height()) // 2
+            surface.blit(part, (x, y))
+            x += part.get_width()
+
+        self.combo_number_surface_cache[key] = surface
+        return surface
+
     def draw_combo_number(
         self,
         target,
@@ -30,6 +62,25 @@ class GameplayEffectsRenderer:
         center,
         alpha=255
     ):
+        image = self.combo_number_image(text)
+        if image is not None:
+            height = max(1, int(self.scene.scaled_radius * 0.87))
+            width = max(
+                1,
+                int(image.get_width() * (height / image.get_height()))
+            )
+            scaled = self.scene._scaled_image(
+                image,
+                (width, height)
+            )
+            self.scene._draw_centered_text(
+                target,
+                scaled,
+                center,
+                alpha=alpha
+            )
+            return
+
         outline, main_text = self.combo_number_surfaces(text)
         outline.set_alpha(alpha)
 

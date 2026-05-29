@@ -22,7 +22,7 @@ class SliderRenderer:
     def _load_reverse_arrow(self):
         path = os.path.join(
             "assets",
-            "gameplay",
+            "novo_reversearrow",
             "reversearrow.png"
         )
         if not os.path.exists(path):
@@ -199,11 +199,18 @@ class SliderRenderer:
             slider_surface, surface_pos = cached
             slider_surface.set_alpha(a)
             screen.blit(slider_surface, surface_pos)
+            can_draw_head = (
+                draw_head_marker
+                and not (
+                    slider_start_time is not None
+                    and self.scene.current_time >= slider_start_time
+                )
+            )
             self._draw_markers(
                 screen,
                 slider_points,
                 a,
-                draw_head_marker,
+                can_draw_head,
                 draw_tail_marker,
                 draw_reverse_markers,
                 repeat_count,
@@ -238,11 +245,18 @@ class SliderRenderer:
 
         slider_surface.set_alpha(a)
         screen.blit(slider_surface, surface_pos)
+        can_draw_head = (
+            draw_head_marker
+            and not (
+                slider_start_time is not None
+                and self.scene.current_time >= slider_start_time
+            )
+        )
         self._draw_markers(
             screen,
             slider_points,
             a,
-            draw_head_marker,
+            can_draw_head,
             draw_tail_marker,
             draw_reverse_markers,
             repeat_count,
@@ -265,15 +279,21 @@ class SliderRenderer:
         span_duration
     ):
         if draw_head_marker:
-            self.scene._draw_aa_circle(
+            if not self.scene._draw_hitcircle_skin(
                 screen,
                 slider_points[0],
-                self.scene.slider_head_radius,
-                fill_color=object_color,
-                outline_color=(255, 255, 255),
-                outline_width=3,
+                object_color,
                 alpha=alpha
-            )
+            ):
+                self.scene._draw_aa_circle(
+                    screen,
+                    slider_points[0],
+                    self.scene.slider_head_radius,
+                    fill_color=object_color,
+                    outline_color=(255, 255, 255),
+                    outline_width=3,
+                    alpha=alpha
+                )
 
         if draw_tail_marker:
             self.scene._draw_aa_circle(
@@ -321,7 +341,7 @@ class SliderRenderer:
 
         arrow_size = max(
             18,
-            int(self.scene.scaled_radius * 0.56 * pulse_scale)
+            int(self.scene.scaled_radius * 1.18 * pulse_scale)
         )
 
         repeat_index = 1
