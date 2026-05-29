@@ -89,8 +89,6 @@ class GameplayScene(BaseScene):
         self.background_source = None
         self.background_surface = None
         self.background_surface_size = None
-        self.dim_surface = None
-        self.dim_surface_size = None
         self.background_dim_alpha = 240
 
         self.cs = self.beatmap[
@@ -1308,39 +1306,32 @@ class GameplayScene(BaseScene):
         scaled = pygame.transform.smoothscale(
             source,
             target_size
-        )
+        ).convert()
         position = (
             (screen_w - target_size[0]) // 2,
             (screen_h - target_size[1]) // 2
         )
+        dim_overlay = pygame.Surface(
+            target_size,
+            pygame.SRCALPHA
+        )
+        dim_overlay.fill((0, 0, 0, self.background_dim_alpha))
+        scaled.blit(dim_overlay, (0, 0))
 
         self.background_surface = (scaled, position)
         self.background_surface_size = screen_size
         return self.background_surface
 
     def _draw_background(self, screen):
-        screen.fill((5, 5, 5))
         background = self._scaled_background(
             screen.get_size()
         )
         if background is None:
+            screen.fill((5, 5, 5))
             return
 
         surface, position = background
         screen.blit(surface, position)
-
-        if (
-            self.dim_surface is None
-            or self.dim_surface_size != screen.get_size()
-        ):
-            self.dim_surface = pygame.Surface(
-                screen.get_size(),
-                pygame.SRCALPHA
-            )
-            self.dim_surface.fill((0, 0, 0, self.background_dim_alpha))
-            self.dim_surface_size = screen.get_size()
-
-        screen.blit(self.dim_surface, (0, 0))
 
     def handle_event(self, event):
 

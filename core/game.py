@@ -154,9 +154,14 @@ class Game:
             self.raw_mouse_enabled = False
             pygame.event.set_grab(False)
 
+        if self.raw_mouse_enabled:
+            pygame.event.set_blocked(pygame.MOUSEMOTION)
+
         pygame.mouse.get_rel()
 
     def disable_raw_mouse(self):
+        pygame.event.set_allowed(pygame.MOUSEMOTION)
+
         if hasattr(pygame.mouse, "set_relative_mode"):
             try:
                 pygame.mouse.set_relative_mode(False)
@@ -223,8 +228,6 @@ class Game:
             )
 
         for event in pygame.event.get():
-            if self.raw_mouse_enabled and event.type == pygame.MOUSEMOTION:
-                continue
             if not self.raw_mouse_enabled and hasattr(event, "pos"):
                 self.mouse_pos = event.pos
 
