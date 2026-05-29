@@ -134,7 +134,7 @@ class GameplayScene(BaseScene):
         self.playfield_height = 384
         self.osu_base_width = 640
         self.osu_base_height = 480
-        self.object_size_multiplier = 1.11
+        self.object_size_multiplier = 1.1433
 
         self.scale = min(
             self.game.WIDTH / self.osu_base_width,
@@ -174,6 +174,8 @@ class GameplayScene(BaseScene):
         if self.slider_base_radius < 40:
             self.slider_base_radius = 40
 
+        self.followpoint_visual_radius = self.scaled_radius / 1.03
+
         self.slider_head_radius = int(
             self.scaled_radius
         )
@@ -181,6 +183,7 @@ class GameplayScene(BaseScene):
         self.slider_path_radius = int(
             self.slider_base_radius * 1.22
         )
+        self.slider_follow_radius = self.scaled_radius * 1.89
 
         self.safe_margin = (
             max(
@@ -208,6 +211,12 @@ class GameplayScene(BaseScene):
         self.object_scale = self.scale
         self.object_offset_x = self.offset_x
         self.object_offset_y = self.offset_y
+        self.playfield_rect = (
+            self.offset_x,
+            self.offset_y,
+            self.playfield_width * self.scale,
+            self.playfield_height * self.scale
+        )
         self._precompute_note_positions()
 
         self.music_path = find_audio_file(
@@ -283,6 +292,7 @@ class GameplayScene(BaseScene):
         self.effects_renderer = GameplayEffectsRenderer(self)
         self.hud_renderer = GameplayHUDRenderer(self.font)
         self.skin_images = self._load_skin_images()
+        self.sliderball_diameter = self._calculate_sliderball_diameter()
         self._precache_gameplay_surfaces()
         
         self.miss_indicators = []
@@ -863,6 +873,32 @@ class GameplayScene(BaseScene):
         self.image_surface_cache[key] = width
         return width
 
+    def _calculate_sliderball_diameter(self):
+        sliderball_visible_diameter = max(
+            1,
+            (
+                self.slider_path_radius
+                - max(2, self.slider_path_radius * 0.07)
+            )
+            * 2
+            * 0.98
+        )
+        sliderball_image = self.skin_images.get("sliderball")
+        if sliderball_image is None:
+            return sliderball_visible_diameter
+
+        opaque_width = self._alpha_width(
+            sliderball_image,
+            threshold=16
+        )
+        if opaque_width <= 0:
+            return sliderball_visible_diameter
+
+        return sliderball_visible_diameter * (
+            sliderball_image.get_width()
+            / opaque_width
+        )
+
     def _cropped_alpha_image(self, image):
         if image is None:
             return None
@@ -1189,13 +1225,14 @@ class GameplayScene(BaseScene):
             if alpha <= 0:
                 continue
 
-            segment_width = max(22, int(self.scaled_radius * 0.86))
+            followpoint_radius = self.followpoint_visual_radius
+            segment_width = max(22, int(followpoint_radius * 0.86))
             spacing = max(10, int(segment_width * 0.48))
             count = max(1, int(distance / spacing))
             frame = self._cropped_alpha_image(frames[-1])
             size = (
                 int(segment_width * 1.42),
-                max(9, int(self.scaled_radius * 0.22))
+                max(9, int(followpoint_radius * 0.22))
             )
             scaled = self._scaled_image(frame, size)
             if scaled is None:
@@ -1523,14 +1560,7 @@ class GameplayScene(BaseScene):
 
             (40, 40, 40),
 
-            (
-                self.offset_x,
-                self.offset_y,
-                self.playfield_width
-                * self.scale,
-                self.playfield_height
-                * self.scale
-            ),
+            self.playfield_rect,
 
             3
         )
@@ -1817,7 +1847,7 @@ class GameplayScene(BaseScene):
                         total_length
                     )
 
-                    follow_radius = self.scaled_radius * 1.89
+                    follow_radius = self.slider_follow_radius
                     show_slider_follow = (
                         note.get("head_hit")
                         and self.current_time <= note["time"] + slider_total_duration
@@ -1896,33 +1926,13 @@ class GameplayScene(BaseScene):
                             alpha=int(follow_alpha)
                         )
 
-                    sliderball_visible_diameter = max(
-                        1,
-                        (
-                            self.slider_path_radius
-                            - max(2, self.slider_path_radius * 0.07)
-                        )
-                        * 2
-                        * 0.98
-                    )
-                    sliderball_diameter = sliderball_visible_diameter
                     sliderball_image = self.skin_images.get("sliderball")
-                    if sliderball_image is not None:
-                        opaque_width = self._alpha_width(
-                            sliderball_image,
-                            threshold=16
-                        )
-                        if opaque_width > 0:
-                            sliderball_diameter = sliderball_visible_diameter * (
-                                sliderball_image.get_width()
-                                / opaque_width
-                            )
 
                     if not self._draw_image_centered(
                         overlay,
                         sliderball_image,
                         ball_pos,
-                        diameter=sliderball_diameter,
+                        diameter=self.sliderball_diameter,
                         alpha=slider_ball_alpha
                     ):
                         self._draw_aa_circle(
@@ -2007,10 +2017,7 @@ class GameplayScene(BaseScene):
             screen,
             (40, 40, 40),
             (
-                self.offset_x,
-                self.offset_y,
-                self.playfield_width * self.scale,
-                self.playfield_height * self.scale
+                self.playfield_rect
             ),
             3
         )
