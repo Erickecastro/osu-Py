@@ -129,13 +129,19 @@ class Game:
 
         if current_scene:
 
-            if hasattr(current_scene, "destroy"):
+            if getattr(current_scene, "uses_ui", True):
 
-                current_scene.destroy()
+                if hasattr(current_scene, "destroy"):
 
-            if hasattr(current_scene, "create_ui"):
+                    current_scene.destroy()
 
-                current_scene.create_ui()
+                if hasattr(current_scene, "create_ui"):
+
+                    current_scene.create_ui()
+
+            elif hasattr(current_scene, "on_resize"):
+
+                current_scene.on_resize()
 
     def enable_raw_mouse(self, pos=None):
         if pos is None:

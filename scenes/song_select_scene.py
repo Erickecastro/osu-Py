@@ -46,7 +46,7 @@ class SongSelectScene(BaseScene):
                     (button_width, button_height)
                 ),
 
-                text=beatmap["name"],
+                text=beatmap.get("display_name", beatmap["name"]),
 
                 manager=self.game.ui_manager
             )

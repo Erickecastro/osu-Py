@@ -1,4 +1,5 @@
 import os
+import re
 
 from core.osu_hitobjects import parse_hitobjects_section
 from core.osu_sections import (
@@ -35,6 +36,7 @@ class BeatmapLoader:
 
             beatmap_data = {
                 "name": folder,
+                "display_name": self.clean_folder_name(folder),
                 "path": path,
                 "difficulties": []
             }
@@ -48,27 +50,63 @@ class BeatmapLoader:
                     self.load_errors.append((osu_file, str(exc)))
 
             if beatmap_data["difficulties"]:
+                beatmap_data["display_name"] = self.display_name_from_metadata(
+                    beatmap_data["difficulties"][0]["metadata"],
+                    folder
+                )
                 beatmaps.append(beatmap_data)
 
-        beatmaps.sort(key=lambda item: item["name"].lower())
+        beatmaps.sort(key=lambda item: item["display_name"].lower())
         return beatmaps
 
     def load_difficulty(self, path, folder, osu_file):
         lines = read_osu_lines(osu_file)
+        metadata = parse_metadata_section(lines)
         return {
             "name": folder,
+            "display_name": self.display_name_from_metadata(
+                metadata,
+                folder
+            ),
             "path": path,
             "osu_file": osu_file,
             "notes": parse_hitobjects_section(
                 lines,
                 self.generate_slider_path
             ),
-            "metadata": parse_metadata_section(lines),
+            "metadata": metadata,
             "difficulty": parse_difficulty_section(lines),
             "timing_points": parse_timing_points_section(lines),
             "combo_colors": parse_colours_section(lines),
             "background": parse_background_event(lines)
         }
+
+    def clean_folder_name(self, folder):
+        name = re.sub(r"^\s*\d+\s+", "", folder).strip()
+        return name or folder
+
+    def display_name_from_metadata(self, metadata, fallback):
+        title = metadata.get("Title") or metadata.get("TitleUnicode") or ""
+        artist = metadata.get("Artist") or metadata.get("ArtistUnicode") or ""
+
+        title = self.clean_display_text(title)
+        artist = self.clean_display_text(artist)
+
+        if title and title != "Unknown" and artist and artist != "Unknown":
+            return f"{artist} - {title}"
+
+        if title and title != "Unknown":
+            return title
+
+        return self.clean_folder_name(fallback)
+
+    def clean_display_text(self, text):
+        text = "".join(
+            ch
+            for ch in str(text)
+            if ch.isprintable() and ch not in "\ufffd□■"
+        ).strip()
+        return " ".join(text.split())
 
     def parse_metadata(self, osu_file):
         return parse_metadata_section(read_osu_lines(osu_file))
