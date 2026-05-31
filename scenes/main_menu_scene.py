@@ -423,6 +423,7 @@ class PulseCircle:
         self._base_font = None
         self.small_font = None
         self._font_radius = 0
+        self._title_surface_cache = {}
 
     def layout(self, width, height):
         self.center = (width // 2, height // 2)
@@ -430,6 +431,7 @@ class PulseCircle:
 
         if self._font_radius != self.base_radius:
             self._font_radius = self.base_radius
+            self._title_surface_cache.clear()
             title_size = max(54, int(self.base_radius * 0.53))
             self.font = self._rounded_font(title_size)
             self._base_font = self._rounded_font(title_size)
@@ -545,15 +547,8 @@ class PulseCircle:
             max(3, border_width // 3)
         )
 
-        title = self._base_font.render(self.title, True, (255, 255, 255))
         text_scale = 1.0 + ((self.pulse_scale - 1.0) * 0.72)
-        title = pygame.transform.smoothscale(
-            title,
-            (
-                max(1, int(title.get_width() * text_scale)),
-                max(1, int(title.get_height() * text_scale))
-            )
-        )
+        title = self._title_surface(text_scale)
         title_rect = title.get_rect(center=(local_center[0], local_center[1] - int(radius * 0.02)))
         layer.blit(title, title_rect)
 
@@ -607,6 +602,25 @@ class PulseCircle:
             pygame.draw.polygon(geometry, (255, 255, 255, 28), points)
 
         layer.blit(geometry, (0, 0))
+
+    def _title_surface(self, text_scale):
+        key = int(text_scale * 100)
+        cached = self._title_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        base = self._base_font.render(self.title, True, (255, 255, 255))
+        scaled = pygame.transform.smoothscale(
+            base,
+            (
+                max(1, int(base.get_width() * text_scale)),
+                max(1, int(base.get_height() * text_scale))
+            )
+        )
+        if len(self._title_surface_cache) > 48:
+            self._title_surface_cache.clear()
+        self._title_surface_cache[key] = scaled
+        return scaled
 
 
 class MainMenuScene(BaseScene):

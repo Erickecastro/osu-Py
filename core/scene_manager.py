@@ -1,8 +1,13 @@
+import pygame
+
+
 class SceneManager:
 
     def __init__(self):
 
         self.scene_stack = []
+        self.transition_start = 0
+        self.transition_duration = 220
 
     # -------------------------
     # CURRENT SCENE
@@ -32,6 +37,7 @@ class SceneManager:
 
         # adiciona nova cena
         self.scene_stack.append(scene)
+        self._start_transition()
 
     # -------------------------
     # POP SCENE
@@ -60,6 +66,7 @@ class SceneManager:
             if hasattr(current, "create_ui"):
 
                 current.create_ui()
+        self._start_transition()
 
     # -------------------------
     # SET SCENE
@@ -77,6 +84,7 @@ class SceneManager:
 
         # adiciona nova cena
         self.scene_stack.append(scene)
+        self._start_transition()
 
     # -------------------------
     # EVENTS
@@ -110,3 +118,23 @@ class SceneManager:
         if current:
 
             current.render(screen)
+
+        self._draw_transition(screen)
+
+    def _start_transition(self):
+        self.transition_start = pygame.time.get_ticks()
+
+    def _draw_transition(self, screen):
+        if not self.transition_start:
+            return
+
+        elapsed = pygame.time.get_ticks() - self.transition_start
+        if elapsed >= self.transition_duration:
+            self.transition_start = 0
+            return
+
+        progress = elapsed / self.transition_duration
+        alpha = int((1.0 - progress) * 190)
+        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, alpha))
+        screen.blit(overlay, (0, 0))

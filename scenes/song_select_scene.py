@@ -1,133 +1,518 @@
-import pygame
-import pygame_gui
+import math
+from pathlib import Path
 
+import pygame
+
+from core.audio import find_audio_file
+from core.beatmap_info import BeatmapParser, LocalScoreManager
 from scenes.base_scene import BaseScene
-from scenes.difficulty_select_scene import (
-    DifficultySelectScene
-)
+from scenes.gameplay_scene import GameplayScene
+
+
+def clamp(value, minimum, maximum):
+    return max(minimum, min(maximum, value))
+
+
+def lerp(current, target, amount):
+    return current + ((target - current) * clamp(amount, 0.0, 1.0))
+
+
+def ease_out(value):
+    value = clamp(value, 0.0, 1.0)
+    return 1.0 - pow(1.0 - value, 3)
+
+
+class SongCard:
+    def __init__(self, info):
+        self.info = info
+        self.x = 0.0
+        self.y = 0.0
+        self.scale = 0.85
+        self.alpha = 0.0
+        self.hover = 0.0
+
+    def update(self, dt, target, mouse_pos):
+        tx, ty, scale, alpha, rect = target
+        speed = 1.0 - math.exp(-dt * 14.0)
+        self.x = lerp(self.x, tx, speed)
+        self.y = lerp(self.y, ty, speed)
+        self.scale = lerp(self.scale, scale, speed)
+        self.alpha = lerp(self.alpha, alpha, speed)
+        self.hover = lerp(
+            self.hover,
+            1.0 if rect.collidepoint(mouse_pos) and alpha > 0.45 else 0.0,
+            1.0 - math.exp(-dt * 18.0)
+        )
+
+    def draw(self, screen, scene, selected=False):
+        if self.alpha <= 0.02:
+            return
+
+        width = int(scene.card_width * self.scale)
+        height = int(scene.card_height * self.scale)
+        rect = pygame.Rect(0, 0, width, height)
+        rect.center = (int(self.x), int(self.y))
+        layer = pygame.Surface((width + 22, height + 18), pygame.SRCALPHA)
+        body = pygame.Rect(10, 7, width, height)
+        slant = int(height * 0.18)
+        points = [
+            (body.left + slant, body.top),
+            (body.right, body.top),
+            (body.right - slant, body.bottom),
+            (body.left, body.bottom)
+        ]
+
+        base_alpha = int(self.alpha * (220 if selected else 150))
+        pygame.draw.polygon(layer, (0, 0, 0, int(self.alpha * 95)), [(x + 5, y + 5) for x, y in points])
+
+        pygame.draw.polygon(layer, (35, 32, 70, base_alpha), points)
+        pygame.draw.polygon(layer, (82, 64, 182, int(self.alpha * (145 + self.hover * 45))), [
+            points[0],
+            points[1],
+            (body.right - int(slant * 0.5), body.top + int(height * 0.48)),
+            (body.left + int(slant * 0.45), body.top + int(height * 0.36))
+        ])
+
+        border = (255, 255, 255, int(self.alpha * (170 if selected else 60)))
+        pygame.draw.lines(layer, border, True, points, max(2, int(2 * self.scale)))
+
+        title = scene.card_title_font.render(self.info.title, True, (255, 255, 255))
+        artist = scene.card_small_font.render(self.info.artist, True, (230, 230, 240))
+        version = scene.card_small_font.render(f"{self.info.version}  {self.info.stars:.2f}*", True, (255, 232, 130))
+        stats = scene.card_tiny_font.render(f"BPM {self.info.bpm_text}  {self.info.length_text}", True, (220, 220, 230))
+        for surf, alpha in (
+            (title, int(self.alpha * 255)),
+            (artist, int(self.alpha * 220)),
+            (version, int(self.alpha * 230)),
+            (stats, int(self.alpha * 180))
+        ):
+            surf.set_alpha(alpha)
+
+        text_x = body.left + int(width * 0.08)
+        layer.blit(title, (text_x, body.top + int(height * 0.16)))
+        layer.blit(artist, (text_x, body.top + int(height * 0.46)))
+        layer.blit(version, (text_x, body.top + int(height * 0.66)))
+        layer.blit(stats, (text_x, body.top + int(height * 0.82)))
+
+        screen.blit(layer, (rect.x - 10, rect.y - 7))
+
+
+class SongCarousel:
+    def __init__(self):
+        self.cards = {}
+
+    def card_for(self, info):
+        key = info.osu_file
+        if key not in self.cards:
+            self.cards[key] = SongCard(info)
+        return self.cards[key]
+
+    def trim(self, visible_infos):
+        visible = {info.osu_file for _, info in visible_infos}
+        for key in list(self.cards):
+            if key not in visible:
+                del self.cards[key]
 
 
 class SongSelectScene(BaseScene):
+    uses_ui = False
+
+    SORT_MODES = ("Title", "Artist", "BPM", "Stars", "Date", "Difficulty")
 
     def __init__(self, game):
-
         super().__init__(game)
+        self.infos = BeatmapParser.from_loaded_beatmaps(self.game.beatmaps)
+        self.filtered = list(self.infos)
+        self.score_manager = LocalScoreManager()
+        self.carousel = SongCarousel()
+        self.selected_index = 0
+        self.browse_index = 0
+        self.search_text = ""
+        self.search_active = False
+        self.sort_mode_index = 0
+        self.background_cache = {}
+        self.current_background_key = None
+        self.current_background = None
+        self.previous_background = None
+        self.background_t = 1.0
+        self.time = 0.0
+        self._layout()
+        self._apply_filter()
+        self._confirm_selection(0, play_preview=True)
+        pygame.mouse.set_visible(True)
+        if hasattr(self.game, "disable_raw_mouse"):
+            self.game.disable_raw_mouse()
 
-        self.buttons = []
+    def _layout(self):
+        w, h = self.game.WIDTH, self.game.HEIGHT
+        self.card_width = int(clamp(w * 0.42, 460, 720))
+        self.card_height = int(clamp(h * 0.115, 82, 116))
+        self.card_center_x = int(w - (self.card_width * 0.43))
+        self.card_center_y = int(h * 0.52)
+        self.card_spacing = int(self.card_height * 0.86)
+        self.margin = int(max(18, w * 0.018))
 
-        self.create_ui()
+        self.title_font = pygame.font.SysFont("arial", max(30, h // 24), bold=True)
+        self.medium_font = pygame.font.SysFont("arial", max(20, h // 38), bold=True)
+        self.small_font = pygame.font.SysFont("arial", max(15, h // 55))
+        self.tiny_font = pygame.font.SysFont("arial", max(13, h // 70))
+        self.card_title_font = pygame.font.SysFont("arial", max(18, h // 43), bold=True)
+        self.card_small_font = pygame.font.SysFont("arial", max(14, h // 58))
+        self.card_tiny_font = pygame.font.SysFont("arial", max(12, h // 72))
 
-    # -------------------------
-    # UI
-    # -------------------------
     def create_ui(self):
+        self._layout()
 
-        # evita duplicação
-        self.destroy()
+    def on_resize(self):
+        self._layout()
+        self.background_cache.clear()
+        self.current_background = None
+        self.previous_background = None
+        self.current_background_key = None
 
-        # centralização automática
-        button_width = 500
-        button_height = 55
-
-        x = (
-            self.game.WIDTH - button_width
-        ) // 2
-
-        y = 120
-
-        beatmaps = self.game.beatmaps
-
-        for beatmap in beatmaps:
-
-            btn = pygame_gui.elements.UIButton(
-
-                relative_rect=pygame.Rect(
-                    (x, y),
-                    (button_width, button_height)
-                ),
-
-                text=beatmap.get("display_name", beatmap["name"]),
-
-                manager=self.game.ui_manager
-            )
-
-            self.buttons.append(
-                (btn, beatmap)
-            )
-
-            y += 70
-
-    # -------------------------
-    # EVENTS
-    # -------------------------
     def handle_event(self, event):
-
-        # voltar para menu principal
         if event.type == pygame.KEYDOWN:
-
             if event.key == pygame.K_ESCAPE:
-
+                if self.search_active and self.search_text:
+                    self.search_text = ""
+                    self._apply_filter()
+                    return
                 self.game.scene_manager.pop_scene()
+                return
+            if event.key in (pygame.K_DOWN, pygame.K_s):
+                self._move_browse(1)
+                return
+            if event.key in (pygame.K_UP, pygame.K_w):
+                self._move_browse(-1)
+                return
+            if event.key == pygame.K_RETURN:
+                self._play_selected()
+                return
+            if event.key == pygame.K_f and pygame.key.get_mods() & pygame.KMOD_CTRL:
+                self.search_active = True
+                return
+            if event.key == pygame.K_BACKSPACE and self.search_active:
+                self.search_text = self.search_text[:-1]
+                self._apply_filter()
+                return
+            if event.key == pygame.K_TAB:
+                self._cycle_sort()
+                return
+            if event.unicode and (self.search_active or event.unicode.strip()):
+                if event.unicode.isprintable() and event.unicode not in "\r\n\t":
+                    self.search_active = True
+                    self.search_text += event.unicode
+                    self._apply_filter()
+                return
 
-        # clique nos botões
-        if event.type == pygame_gui.UI_BUTTON_PRESSED:
+        if event.type == pygame.MOUSEWHEEL:
+            self._move_browse(-event.y)
+            return
 
-            for btn, beatmap in self.buttons:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self._handle_search_click(event.pos):
+                return
+            clicked = self._card_index_at(event.pos)
+            if clicked is not None:
+                if clicked == self.selected_index:
+                    self._play_selected()
+                else:
+                    self._confirm_selection(clicked, play_preview=True)
 
-                if event.ui_element == btn:
-
-                    self.game.scene_manager.push_scene(
-
-                        DifficultySelectScene(
-                            self.game,
-                            beatmap
-                        )
-                    )
-
-    # -------------------------
-    # UPDATE
-    # -------------------------
     def update(self, dt):
+        self.time += min(dt, 1.0 / 20.0)
+        if not self.filtered:
+            return
 
-        pass
+        self.selected_index = max(0, min(self.selected_index, len(self.filtered) - 1))
+        self.browse_index = max(0, min(self.browse_index, len(self.filtered) - 1))
+        selected = self.filtered[self.selected_index]
+        self._ensure_background(selected)
+        self.background_t = min(1.0, self.background_t + dt * 3.0)
 
-    # -------------------------
-    # RENDER
-    # -------------------------
+        visible = self._visible_infos()
+        self.carousel.trim(visible)
+        mouse_pos = self.game.mouse_pos
+        for index, info in visible:
+            card = self.carousel.card_for(info)
+            card.update(dt, self._target_for_index(index), mouse_pos)
+
     def render(self, screen):
+        self._draw_background(screen)
+        self._draw_search_bar(screen)
+        self._draw_info_panel(screen)
+        self._draw_rank_panel(screen)
+        self._draw_cards(screen)
+        self._draw_bottom_bar(screen)
 
-        screen.fill((40, 40, 60))
-
-        # título
-        font = pygame.font.SysFont(
-            "arial",
-            48
-        )
-
-        text = font.render(
-            "Select Song",
-            True,
-            (255, 255, 255)
-        )
-
-        screen.blit(
-            text,
-            (
-                self.game.WIDTH // 2
-                - text.get_width() // 2,
-                40
-            )
-        )
-
-    # -------------------------
-    # DESTROY
-    # -------------------------
     def destroy(self):
+        pygame.mixer.music.stop()
 
-        for btn, _ in self.buttons:
+    def _move_browse(self, amount):
+        if not self.filtered:
+            return
+        self.browse_index = int(clamp(self.browse_index + amount, 0, len(self.filtered) - 1))
 
-            if btn.alive():
+    def _confirm_selection(self, index, play_preview=False):
+        if not self.filtered:
+            return
+        self.selected_index = int(clamp(index, 0, len(self.filtered) - 1))
+        self.browse_index = self.selected_index
+        self._ensure_background(self.filtered[self.selected_index])
+        if play_preview:
+            self._start_preview_music(self.filtered[self.selected_index])
 
-                btn.kill()
+    def _start_preview_music(self, info):
+        music_path = find_audio_file(info.folder_path)
+        if not music_path:
+            return
+        try:
+            pygame.mixer.music.load(music_path)
+            pygame.mixer.music.set_volume(0.48)
+            pygame.mixer.music.play()
+        except pygame.error:
+            pass
 
-        self.buttons.clear()
+    def _play_selected(self):
+        if not self.filtered:
+            return
+        self.game.scene_manager.push_scene(
+            GameplayScene(self.game, self.filtered[self.selected_index].difficulty_data)
+        )
+
+    def _cycle_sort(self):
+        self.sort_mode_index = (self.sort_mode_index + 1) % len(self.SORT_MODES)
+        self._apply_filter()
+
+    def _handle_search_click(self, pos):
+        rect = self._search_rect()
+        if rect.collidepoint(pos):
+            self.search_active = True
+            return True
+        return False
+
+    def _card_index_at(self, pos):
+        for index, _info in enumerate(self.filtered):
+            target = self._target_for_index(index)
+            if target[4].collidepoint(pos) and target[3] > 0.35:
+                return index
+        return None
+
+    def _apply_filter(self):
+        query = self.search_text.strip().lower()
+        if query:
+            self.filtered = [info for info in self.infos if query in info.search_text]
+        else:
+            self.filtered = list(self.infos)
+
+        sort_mode = self.SORT_MODES[self.sort_mode_index]
+        key_funcs = {
+            "Title": lambda info: (info.title.lower(), info.artist.lower(), info.version.lower()),
+            "Artist": lambda info: (info.artist.lower(), info.title.lower(), info.version.lower()),
+            "BPM": lambda info: (info.bpm_max, info.title.lower()),
+            "Stars": lambda info: (info.stars, info.title.lower()),
+            "Date": lambda info: (info.added_time, info.title.lower()),
+            "Difficulty": lambda info: (info.version.lower(), info.title.lower())
+        }
+        reverse = sort_mode in ("BPM", "Stars", "Date")
+        self.filtered.sort(key=key_funcs[sort_mode], reverse=reverse)
+        self.selected_index = int(clamp(self.selected_index, 0, max(0, len(self.filtered) - 1)))
+        self.browse_index = int(clamp(self.browse_index, 0, max(0, len(self.filtered) - 1)))
+
+    def _visible_infos(self):
+        if not self.filtered:
+            return []
+        start = max(0, self.browse_index - 6)
+        end = min(len(self.filtered), self.browse_index + 7)
+        return list(enumerate(self.filtered[start:end], start=start))
+
+    def _target_for_index(self, index):
+        offset = index - self.browse_index
+        distance = abs(offset)
+        selected = offset == 0
+        scale = 1.08 if selected else max(0.72, 0.92 - distance * 0.045)
+        alpha = 1.0 if selected else max(0.18, 0.72 - distance * 0.08)
+        x_shift = int((distance ** 1.15) * 24)
+        x = self.card_center_x + x_shift
+        y = self.card_center_y + offset * self.card_spacing
+        rect = pygame.Rect(0, 0, int(self.card_width * scale), int(self.card_height * scale))
+        rect.center = (int(x), int(y))
+        return x, y, scale, alpha, rect
+
+    def _draw_background(self, screen):
+        if self.current_background is None:
+            self._draw_fallback_background(screen)
+        else:
+            if self.previous_background and self.background_t < 1.0:
+                screen.blit(self.previous_background, (0, 0))
+                bg = self.current_background.copy()
+                bg.set_alpha(int(ease_out(self.background_t) * 255))
+                screen.blit(bg, (0, 0))
+            else:
+                screen.blit(self.current_background, (0, 0))
+
+        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 178))
+        screen.blit(overlay, (0, 0))
+
+    def _draw_fallback_background(self, screen):
+        w, h = screen.get_size()
+        screen.fill((18, 18, 34))
+        for i in range(10):
+            angle = self.time * 0.08 + i * 0.8
+            center = (
+                int(w * 0.5 + math.cos(angle) * w * 0.35),
+                int(h * 0.5 + math.sin(angle) * h * 0.28)
+            )
+            pygame.draw.circle(screen, (60, 55, 105), center, int(min(w, h) * (0.12 + i * 0.012)), 2)
+
+    def _ensure_background(self, info):
+        key = info.background_path
+        if key == self.current_background_key:
+            return
+
+        self.previous_background = self.current_background
+        self.current_background_key = key
+        self.current_background = self._load_background_surface(key)
+        self.background_t = 0.0
+
+    def _load_background_surface(self, path):
+        if not path:
+            return None
+        if path in self.background_cache:
+            return self.background_cache[path]
+        try:
+            image = pygame.image.load(path).convert()
+        except pygame.error:
+            return None
+        surface = self._cover_scale(image, self.game.screen.get_size())
+        self.background_cache[path] = surface
+        return surface
+
+    def thumbnail_for(self, info, size):
+        path = info.background_path
+        if not path:
+            return None
+        key = (path, size)
+        if key in self.thumbnail_cache:
+            return self.thumbnail_cache[key]
+        try:
+            image = pygame.image.load(path).convert()
+        except pygame.error:
+            return None
+        thumb = self._cover_scale(image, size)
+        self.thumbnail_cache[key] = thumb
+        return thumb
+
+    def _cover_scale(self, image, target_size):
+        target_w, target_h = target_size
+        source_w, source_h = image.get_size()
+        scale = max(target_w / source_w, target_h / source_h)
+        scaled_size = (max(1, int(source_w * scale)), max(1, int(source_h * scale)))
+        scaled = pygame.transform.smoothscale(image, scaled_size)
+        result = pygame.Surface(target_size).convert()
+        result.blit(scaled, ((target_w - scaled_size[0]) // 2, (target_h - scaled_size[1]) // 2))
+        return result
+
+    def _draw_search_bar(self, screen):
+        rect = self._search_rect()
+        pygame.draw.rect(screen, (13, 14, 26, 220), rect, border_radius=7)
+        pygame.draw.rect(screen, (92, 135, 255, 145), rect, 2, border_radius=7)
+        text = self.small_font.render(
+            f"Search: {self.search_text or 'Type to search!'}",
+            True,
+            (235, 238, 255)
+        )
+        screen.blit(text, (rect.x + 16, rect.y + rect.height // 2 - text.get_height() // 2))
+
+    def _search_rect(self):
+        width = int(clamp(self.game.WIDTH * 0.34, 360, 560))
+        return pygame.Rect(
+            self.game.WIDTH - width - 18,
+            22,
+            width,
+            42
+        )
+
+    def _draw_info_panel(self, screen):
+        if not self.filtered:
+            self._draw_empty(screen)
+            return
+        info = self.filtered[self.selected_index]
+        x = self.margin
+        y = 18
+        width = int(self.game.WIDTH * 0.51)
+        height = int(clamp(self.game.HEIGHT * 0.18, 118, 150))
+        rect = pygame.Rect(x, y, width, height)
+        pygame.draw.rect(screen, (0, 0, 0, 185), rect, border_radius=8)
+        pygame.draw.rect(screen, (78, 130, 255, 185), rect, 2, border_radius=8)
+
+        title_text = f"{info.artist} - {info.title} [{info.version}]"
+        title = self.medium_font.render(title_text, True, (255, 255, 255))
+        mapper = self.small_font.render(f"Mapped by {info.creator}", True, (230, 235, 245))
+        stats1 = self.small_font.render(
+            f"Length: {info.length_text}  BPM: {info.bpm_text}  Objects: {info.object_count}",
+            True,
+            (238, 238, 245)
+        )
+        stats2 = self.small_font.render(
+            f"Circles: {info.circle_count}  Sliders: {info.slider_count}  Spinners: {info.spinner_count}",
+            True,
+            (238, 238, 245)
+        )
+        stats3 = self.tiny_font.render(
+            f"CS:{info.cs:g} AR:{info.ar:g} OD:{info.od:g} HP:{info.hp:g}  Star Rating: {info.stars:.2f}",
+            True,
+            (225, 230, 245)
+        )
+        for surf, yy in (
+            (title, y + 10),
+            (mapper, y + 40),
+            (stats1, y + 67),
+            (stats2, y + 91),
+            (stats3, y + 116)
+        ):
+            screen.blit(surf, (x + 14, yy))
+
+    def _draw_rank_panel(self, screen):
+        x = self.margin
+        y = int(self.game.HEIGHT * 0.205)
+        w = int(self.game.WIDTH * 0.42)
+        h = int(self.game.HEIGHT * 0.095)
+        rect = pygame.Rect(x, y, w, h)
+        pygame.draw.rect(screen, (15, 15, 26, 145), rect, border_radius=8)
+        pygame.draw.rect(screen, (78, 130, 255, 155), rect, 2, border_radius=8)
+        title = self.small_font.render("Local Ranking", True, (255, 255, 255))
+        screen.blit(title, (x + 14, y + 9))
+
+        records = []
+        if self.filtered:
+            records = self.score_manager.records_for(self.filtered[self.selected_index].osu_file)
+        if not records:
+            text = self.tiny_font.render("No records set!", True, (210, 210, 225))
+            screen.blit(text, (x + 14, y + 38))
+
+    def _draw_cards(self, screen):
+        if not self.filtered:
+            return
+        visible = self._visible_infos()
+        visible.sort(key=lambda item: abs(item[0] - self.browse_index), reverse=True)
+        for index, info in visible:
+            self.carousel.card_for(info).draw(screen, self, selected=index == self.browse_index)
+
+    def _draw_bottom_bar(self, screen):
+        h = 58
+        y = self.game.HEIGHT - h
+        pygame.draw.rect(screen, (10, 10, 18, 205), (0, y, self.game.WIDTH, h))
+        back = pygame.Rect(18, y + 10, 118, 38)
+        pygame.draw.rect(screen, (130, 70, 120, 220), back, border_radius=6)
+        pygame.draw.rect(screen, (255, 255, 255, 80), back, 1, border_radius=6)
+        screen.blit(self.medium_font.render("Back", True, (255, 255, 255)), (back.x + 33, back.y + 7))
+        guest = self.small_font.render("Guest", True, (230, 230, 240))
+        screen.blit(guest, (self.game.WIDTH - guest.get_width() - 22, y + 20))
+        action = self.small_font.render("Enter: play   Up/Down or wheel: navigate   Ctrl+F: search   Tab: sort", True, (200, 200, 215))
+        screen.blit(action, (160, y + 20))
+
+    def _draw_empty(self, screen):
+        text = self.title_font.render("No beatmaps found", True, (255, 255, 255))
+        screen.blit(text, text.get_rect(center=(self.game.WIDTH // 2, self.game.HEIGHT // 2)))
