@@ -1,6 +1,6 @@
 # osu-Py
 
-osu-Py e um projeto fan-made de jogo de ritmo inspirado no osu!, feito em Python com pygame-ce. O objetivo e carregar beatmaps no formato `.osu`, tocar a musica correspondente e renderizar uma gameplay jogavel com hit circles, sliders, approach circles, combo, score, accuracy, cursor customizado e selecao de musicas/dificuldades.
+OSU-Py é um projeto fan-made de jogo de ritmo inspirado no osu!, feito em Python com pygame-ce. O objetivo e carregar beatmaps no formato `.osu`, tocar a musica correspondente e renderizar uma gameplay jogavel com hit circles, sliders, approach circles, combo, score, accuracy, cursor customizado e selecao de musicas/dificuldades.
 
 O projeto ainda esta em desenvolvimento, mas a gameplay principal ja esta funcional e vem sendo reorganizada aos poucos para facilitar a manutencao, melhorar a performance e separar melhor as responsabilidades entre loader, cenas, renderizadores e regras de jogo.
 
