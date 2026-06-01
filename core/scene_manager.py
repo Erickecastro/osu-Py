@@ -8,6 +8,8 @@ class SceneManager:
         self.scene_stack = []
         self.transition_start = 0
         self.transition_duration = 220
+        self.transition_overlay = None
+        self.transition_overlay_size = None
 
     # -------------------------
     # CURRENT SCENE
@@ -135,6 +137,10 @@ class SceneManager:
 
         progress = elapsed / self.transition_duration
         alpha = int((1.0 - progress) * 190)
-        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, alpha))
-        screen.blit(overlay, (0, 0))
+        size = screen.get_size()
+        if self.transition_overlay is None or self.transition_overlay_size != size:
+            self.transition_overlay = pygame.Surface(size, pygame.SRCALPHA)
+            self.transition_overlay_size = size
+
+        self.transition_overlay.fill((0, 0, 0, alpha))
+        screen.blit(self.transition_overlay, (0, 0))

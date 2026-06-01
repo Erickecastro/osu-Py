@@ -167,16 +167,17 @@ class GameplayScene(BaseScene):
             * self.object_size_multiplier
         )
 
-        if self.slider_base_radius < 40:
-            self.slider_base_radius = 40
+        if self.slider_base_radius < 8:
+            self.slider_base_radius = 8
 
         self.slider_path_radius = int(
             self.slider_base_radius * 1.22
         )
-        if self.slider_path_radius < 40:
-            self.slider_path_radius = 40
+        if self.slider_path_radius < 10:
+            self.slider_path_radius = 10
 
         self.scaled_radius = int(self.slider_path_radius)
+        self.note_visual_radius = self.scaled_radius * 0.90
 
         self.followpoint_visual_radius = self.scaled_radius / 1.03
 
@@ -242,18 +243,9 @@ class GameplayScene(BaseScene):
             self.beatmap.get("timing_points", [])
         )
 
-        self.hit_window_300 = max(20, 80 - (6 * self.od))
-        self.hit_window_100 = max(20, 140 - (8 * self.od))
-        self.hit_window_50 = max(20, 200 - (10 * self.od))
-        self.hit_window_300 = min(
-            self.hit_window_300 * 1.18,
-            self.hit_window_100 - 1
-        )
-        self.hit_window_100 = min(
-            self.hit_window_100 * 1.12,
-            self.hit_window_50 - 1
-        )
-        self.hit_window_50 *= 1.08
+        self.hit_window_300 = 80 - (6 * self.od)
+        self.hit_window_100 = 140 - (8 * self.od)
+        self.hit_window_50 = 200 - (10 * self.od)
 
         self.score = 0
         self.combo = 0
@@ -297,11 +289,14 @@ class GameplayScene(BaseScene):
         self.effects_renderer = GameplayEffectsRenderer(self)
         self.hud_renderer = GameplayHUDRenderer(self.font)
         self.skin_images = self._load_skin_images()
+        self.hit_sound = self._load_hit_sound()
         self.sliderball_diameter = self._calculate_sliderball_diameter()
         self._precache_gameplay_surfaces()
         
         self.miss_indicators = []
         self.hit_result_indicators = []
+        self.hit_error_markers = []
+        self.hit_error_marker_duration = 3000
         self.hit_keys_held = set()
         self.hit_mouse_buttons_held = set()
         self.input_controller = GameplayInputController(self)
@@ -314,6 +309,11 @@ class GameplayScene(BaseScene):
         self.intro_skip_ms = self._calculate_intro_skip_ms()
         self.intro_skip_used = False
         self.skip_button_rect = None
+        self.skip_button_surface = None
+        self.skip_button_surface_size = None
+        self.center_overlay_cache = {}
+        self.center_overlay_shade = None
+        self.center_overlay_shade_size = None
         self.title_overlay_font = pygame.font.SysFont("arial", 54, bold=True)
         self.medium_overlay_font = pygame.font.SysFont("arial", 28, bold=True)
         self.small_overlay_font = pygame.font.SysFont("arial", 18)
@@ -366,6 +366,9 @@ class GameplayScene(BaseScene):
         self.judged_objects += 1
         self.hit_counts[result] += 1
         self._update_health_target(result)
+        if result > 0:
+            self._play_hit_sound()
+            self._add_hit_error_marker(note, result)
         if result in (50, 100):
             self._add_hit_result_indicator(note, result)
 
@@ -373,6 +376,8 @@ class GameplayScene(BaseScene):
             note["head_hit"] = result > 0
             note["head_hit_result"] = result
             note["head_hit_time"] = self.current_time
+            if result > 0:
+                note["slider_hit_sound_index"] = 1
 
         if result == 0:
             miss_fade_end = self.current_time + self.miss_fade_out_time
@@ -421,6 +426,42 @@ class GameplayScene(BaseScene):
             "start_time": self.current_time
         })
 
+    def _add_hit_error_marker(self, note, result):
+        if note["type"] not in ("circle", "slider"):
+            return
+
+        self.hit_error_markers.append({
+            "delta": self.current_time - note["time"],
+            "result": result,
+            "time": self.current_time,
+            "duration": self.hit_error_marker_duration
+        })
+
+    def _load_hit_sound(self):
+        candidates = (
+            os.path.join("assets", "spinner", "normal-hitnormal.wav"),
+            os.path.join("assets", "spinner", "normal-hitclap.wav"),
+            os.path.join("assets", "spinner", "normal-hitfinish.wav")
+        )
+        for path in candidates:
+            if not os.path.exists(path):
+                continue
+            try:
+                sound = pygame.mixer.Sound(path)
+                sound.set_volume(0.58)
+                return sound
+            except pygame.error:
+                continue
+        return None
+
+    def _play_hit_sound(self):
+        if self.hit_sound is None:
+            return
+        try:
+            self.hit_sound.play()
+        except pygame.error:
+            pass
+
     def _add_spinner_bonus_indicator(self, bonus_count, pos):
         self.hit_result_indicators.append({
             "result": "spinner_bonus",
@@ -468,11 +509,6 @@ class GameplayScene(BaseScene):
         self.score += result + bonus
 
     def _hit_result_for_delta(self, delta):
-        if delta < -self.hit_window_50:
-            early_delta = abs(delta)
-            if early_delta <= self._early_hit_limit_ms():
-                return 50
-
         return hit_result_for_delta(
             delta,
             self.hit_window_300,
@@ -481,13 +517,7 @@ class GameplayScene(BaseScene):
         )
 
     def _early_hit_limit_ms(self):
-        return max(
-            self.hit_window_50 * 1.15,
-            min(
-                self.approach_time * 0.30,
-                self.hit_window_50 * 1.55
-            )
-        )
+        return self.hit_window_50
 
     def _note_can_receive_early_hit(self, note):
         return self.current_time >= note["time"] - self._early_hit_limit_ms()
@@ -559,7 +589,7 @@ class GameplayScene(BaseScene):
             dx = pos[0] - scaled_x
             dy = pos[1] - scaled_y
             distance = (dx * dx + dy * dy) ** 0.5
-            if distance > self.scaled_radius:
+            if distance > self.note_visual_radius:
                 continue
             if best_distance is None or distance < best_distance:
                 best_note = note
@@ -599,7 +629,7 @@ class GameplayScene(BaseScene):
             self.active_notes,
             self.current_time,
             pos,
-            self.scaled_radius,
+            self.note_visual_radius,
             self.scale_position,
             self._hit_result_for_delta,
             can_attempt_hit
@@ -629,13 +659,21 @@ class GameplayScene(BaseScene):
         v = self._clamp01(v)
         return 1.0 - ((1.0 - v) ** 3)
 
+    def _smoothstep(self, v):
+        v = self._clamp01(v)
+        return v * v * (3.0 - (2.0 * v))
+
     def _fade_in_progress(self, note):
         start = note.get("start_time", note["time"] - self.approach_time)
         hit_time = note["time"]
         approach_len = max(1, hit_time - start)
-        fade_in_len = max(180, min(420, approach_len * 0.42))
+        fade_fraction = 0.50 + (self._clamp01(self.ar / 10.0) * 0.30)
+        fade_in_len = max(
+            220.0,
+            min(approach_len, approach_len * fade_fraction)
+        )
 
-        return self._ease_out_cubic(
+        return self._smoothstep(
             (self.current_time - start) / fade_in_len
         )
 
@@ -971,7 +1009,7 @@ class GameplayScene(BaseScene):
                 - max(2, self.slider_path_radius * 0.07)
             )
             * 2
-            * 0.98
+            * 0.882
         )
         sliderball_image = self.skin_images.get("sliderball")
         if sliderball_image is None:
@@ -1062,7 +1100,7 @@ class GameplayScene(BaseScene):
         if circle is None or overlay is None:
             return False
 
-        diameter = self.scaled_radius * 2 * 1.12
+        diameter = self.note_visual_radius * 2 * 1.12
         tinted = self._tinted_image(
             circle,
             color
@@ -1125,6 +1163,29 @@ class GameplayScene(BaseScene):
 
     def _hit_input_held(self):
         return bool(self.hit_keys_held or self.hit_mouse_buttons_held)
+
+    def _is_hit_held(self):
+        return self._hit_input_held()
+
+    def _update_slider_checkpoint_sounds(self, note):
+        if note["type"] != "slider" or not note.get("head_hit"):
+            return
+
+        span_duration = float(note.get("span_duration", 0.0))
+        repeat_count = int(note.get("repeat_count", 1))
+        if span_duration <= 0 or repeat_count <= 0:
+            return
+
+        next_index = int(note.get("slider_hit_sound_index", 1))
+        while next_index <= repeat_count:
+            checkpoint_time = note["time"] + (span_duration * next_index)
+            if self.current_time < checkpoint_time:
+                break
+
+            self._play_hit_sound()
+            next_index += 1
+
+        note["slider_hit_sound_index"] = next_index
 
     def _note_follow_anchor(self, note):
         if note["type"] == "slider":
@@ -1527,6 +1588,10 @@ class GameplayScene(BaseScene):
         pygame.mixer.music.stop()
         pygame.mouse.set_visible(True)
 
+    def _sync_music_time_now(self):
+        if self.start_time is not None and self.music_started:
+            self.current_time = pygame.time.get_ticks() - self.start_time
+
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
             if self.failed:
@@ -1562,6 +1627,7 @@ class GameplayScene(BaseScene):
             self._skip_intro()
             return
 
+        self._sync_music_time_now()
         self.input_controller.handle_event(event)
 
     def update(self, dt):
@@ -1656,6 +1722,8 @@ class GameplayScene(BaseScene):
                     dt,
                     self.game.mouse_pos
                 )
+            elif note["type"] == "slider":
+                self._update_slider_checkpoint_sounds(note)
 
         self.active_notes = prune_inactive_notes(
             self.active_notes,
@@ -1768,6 +1836,11 @@ class GameplayScene(BaseScene):
             return
 
         if self.music_started:
+            self.hit_error_markers = [
+                marker
+                for marker in self.hit_error_markers
+                if self.current_time < marker["time"] + marker["duration"]
+            ]
             self.hud_renderer.draw(
                 screen,
                 self.beatmap,
@@ -1775,7 +1848,11 @@ class GameplayScene(BaseScene):
                 self.score,
                 self._accuracy(),
                 self.combo,
-                self.health
+                self.health,
+                self.hit_error_markers,
+                self.hit_window_300,
+                self.hit_window_100,
+                self.hit_window_50
             )
 
         pygame.draw.rect(
@@ -1849,13 +1926,13 @@ class GameplayScene(BaseScene):
             ):
                 continue
 
-            scaled_hit_radius = self.scaled_radius
+            scaled_hit_radius = self.note_visual_radius
 
             approach_radius = int(
-                self.scaled_radius * 1.12
+                scaled_hit_radius * 1.12
                 + (
                     progress
-                    * self.scaled_radius
+                    * scaled_hit_radius
                     * 2.82
                 )
             )
@@ -2310,25 +2387,34 @@ class GameplayScene(BaseScene):
             self.game.HEIGHT - 28
         )
         self.skip_button_rect = rect
-        surface = pygame.Surface(rect.size, pygame.SRCALPHA)
-        pygame.draw.rect(
-            surface,
-            (18, 18, 28, 130),
-            surface.get_rect(),
-            border_radius=rect.height // 2
-        )
-        pygame.draw.rect(
-            surface,
-            (255, 255, 255, 92),
-            surface.get_rect(),
-            1,
-            border_radius=rect.height // 2
-        )
-        surface.blit(text, (pad_x, pad_y))
-        screen.blit(surface, rect)
+        if self.skip_button_surface is None or self.skip_button_surface_size != rect.size:
+            surface = pygame.Surface(rect.size, pygame.SRCALPHA)
+            pygame.draw.rect(
+                surface,
+                (18, 18, 28, 130),
+                surface.get_rect(),
+                border_radius=rect.height // 2
+            )
+            pygame.draw.rect(
+                surface,
+                (255, 255, 255, 92),
+                surface.get_rect(),
+                1,
+                border_radius=rect.height // 2
+            )
+            surface.blit(text, (pad_x, pad_y))
+            self.skip_button_surface = surface
+            self.skip_button_surface_size = rect.size
+
+        screen.blit(self.skip_button_surface, rect)
 
     def _draw_center_overlay(self, screen, title, subtitle, accent):
-        shade = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        size = screen.get_size()
+        if self.center_overlay_shade is None or self.center_overlay_shade_size != size:
+            self.center_overlay_shade = pygame.Surface(size, pygame.SRCALPHA)
+            self.center_overlay_shade_size = size
+
+        shade = self.center_overlay_shade
         alpha = 178
         overlay_factor = 1.0
         if self.failed and self.fail_time is not None:
@@ -2343,34 +2429,45 @@ class GameplayScene(BaseScene):
         panel_h = int(min(screen.get_height() * 0.30, 230))
         panel = pygame.Rect(0, 0, panel_w, panel_h)
         panel.center = (screen.get_width() // 2, screen.get_height() // 2)
-        panel_surface = pygame.Surface(panel.size, pygame.SRCALPHA)
-        pygame.draw.rect(
-            panel_surface,
-            (16, 15, 30, int(232 * overlay_factor)),
-            panel_surface.get_rect(),
-            border_radius=14
-        )
-        pygame.draw.rect(
-            panel_surface,
-            (*accent[:3], int(255 * overlay_factor)),
-            panel_surface.get_rect(),
-            3,
-            border_radius=14
-        )
+        cache_key = (panel.size, title, subtitle, tuple(accent[:3]))
+        panel_surface = self.center_overlay_cache.get(cache_key)
+        if panel_surface is None:
+            if len(self.center_overlay_cache) > 8:
+                self.center_overlay_cache.clear()
 
-        title_surface = self.title_overlay_font.render(title, True, (255, 255, 255))
-        subtitle_surface = self.small_overlay_font.render(subtitle, True, (230, 235, 250))
-        title_surface.set_alpha(int(255 * overlay_factor))
-        subtitle_surface.set_alpha(int(255 * overlay_factor))
-        panel_surface.blit(
-            title_surface,
-            title_surface.get_rect(center=(panel_w // 2, int(panel_h * 0.38)))
-        )
-        panel_surface.blit(
-            subtitle_surface,
-            subtitle_surface.get_rect(center=(panel_w // 2, int(panel_h * 0.66)))
-        )
+            panel_surface = pygame.Surface(panel.size, pygame.SRCALPHA)
+            pygame.draw.rect(
+                panel_surface,
+                (16, 15, 30, 232),
+                panel_surface.get_rect(),
+                border_radius=14
+            )
+            pygame.draw.rect(
+                panel_surface,
+                (*accent[:3], 255),
+                panel_surface.get_rect(),
+                3,
+                border_radius=14
+            )
+
+            title_surface = self.title_overlay_font.render(title, True, (255, 255, 255))
+            subtitle_surface = self.small_overlay_font.render(subtitle, True, (230, 235, 250))
+            panel_surface.blit(
+                title_surface,
+                title_surface.get_rect(center=(panel_w // 2, int(panel_h * 0.38)))
+            )
+            panel_surface.blit(
+                subtitle_surface,
+                subtitle_surface.get_rect(center=(panel_w // 2, int(panel_h * 0.66)))
+            )
+            self.center_overlay_cache[cache_key] = panel_surface
+
+        previous_alpha = panel_surface.get_alpha()
+        if overlay_factor < 1.0:
+            panel_surface.set_alpha(int(255 * overlay_factor))
         screen.blit(panel_surface, panel)
+        if overlay_factor < 1.0:
+            panel_surface.set_alpha(previous_alpha)
 
     def _draw_pause_overlay(self, screen):
         self._draw_center_overlay(

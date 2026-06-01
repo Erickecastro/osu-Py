@@ -166,7 +166,7 @@ class SliderRenderer:
         outline_radius = self.scene.slider_path_radius
         body_radius = max(
             1,
-            int(outline_radius - max(2, outline_radius * 0.07))
+            int(outline_radius - max(3, outline_radius * 0.11))
         )
         slider_surface = self._render_track_surface(
             size,
@@ -235,7 +235,7 @@ class SliderRenderer:
         outline_radius = self.scene.slider_path_radius
         body_radius = max(
             1,
-            int(outline_radius - max(2, outline_radius * 0.07))
+            int(outline_radius - max(3, outline_radius * 0.11))
         )
         slider_surface = self._render_track_surface(
             size,
@@ -405,7 +405,8 @@ class SliderRenderer:
             )
             self.reverse_arrow_cache[cache_key] = cached
 
-        image = cached.copy()
+        image = cached
+        previous_alpha = image.get_alpha()
         image.set_alpha(max(0, min(255, int(alpha))))
         rect = image.get_rect(
             center=(
@@ -414,6 +415,7 @@ class SliderRenderer:
             )
         )
         target.blit(image, rect)
+        image.set_alpha(previous_alpha)
 
     def _point_line_distance(self, point, start, end):
         dx = end[0] - start[0]
@@ -550,19 +552,36 @@ class SliderRenderer:
             0.0,
             1.0
         ) ** 0.72
-        border_strength = np.clip(
-            (radial - 0.90) / 0.10,
+        border_strength = self._smoothstep(
+            np.clip(
+                (radial - 0.84) / 0.055,
+                0.0,
+                1.0
+            )
+        )
+        border_alpha_strength = self._smoothstep(
+            np.clip(
+                (radial - 0.86) / 0.055,
+                0.0,
+                1.0
+            )
+        )
+        outer_aa = np.clip(
+            (1.0 - radial) / 0.035,
             0.0,
             1.0
-        ) ** 0.45
+        )
 
-        luma = (
+        body_luma = (
             12.0
             + (40.0 * center_strength)
             - (12.0 * edge_strength)
-            + (44.0 * border_strength)
         )
-        luma = np.clip(luma, 4.0, 68.0).astype(np.uint8)
+        luma = (
+            body_luma * (1.0 - border_strength)
+            + 68.0 * border_strength
+        )
+        luma = np.clip(luma, 4.0, 96.0).astype(np.uint8)
 
         base_alpha = (
             238.0
@@ -570,12 +589,12 @@ class SliderRenderer:
         )
         edge_alpha = 252.0 * np.maximum(
             edge_strength,
-            border_strength
+            border_alpha_strength
         )
         final_alpha = np.maximum(
             base_alpha,
             edge_alpha
-        ) * coverage
+        ) * coverage * outer_aa
         final_alpha = np.clip(final_alpha, 0.0, 255.0).astype(np.uint8)
 
         rgb[:, :, 0] = luma.T
@@ -585,6 +604,9 @@ class SliderRenderer:
         del rgb
         del alpha
         return surface
+
+    def _smoothstep(self, values):
+        return values * values * (3.0 - (2.0 * values))
 
     def _render_track_surface_supersampled(
         self,
@@ -611,7 +633,7 @@ class SliderRenderer:
             for point in points
         ]
         tracks = (
-            (outline_radius, (62, 62, 62, 250)),
+            (outline_radius, (68, 68, 68, 255)),
             (body_radius, (42, 42, 42, 248))
         )
         for radius, color in tracks:

@@ -68,7 +68,12 @@ class GameplayEffectsRenderer:
     ):
         image = self.combo_number_image(text)
         if image is not None:
-            height = max(1, int(self.scene.scaled_radius * 0.565))
+            visual_radius = getattr(
+                self.scene,
+                "note_visual_radius",
+                self.scene.scaled_radius
+            )
+            height = max(1, int(visual_radius * 0.565))
             width = max(
                 1,
                 int(image.get_width() * (height / image.get_height()))

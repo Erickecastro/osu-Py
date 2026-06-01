@@ -60,8 +60,31 @@ Baixe as músicas do seu interese diretamente no site oficial do game, https://o
 - `Z` ou `X`: acertar objetos.
 - `Clique esquerdo` ou `clioque direito` do mouse para acertar os objetos.
 - `Esc`: sair da gameplay ou voltar uma cena.
+- `F3`: alternar profiler de performance.
 - `F11`: alternar fullscreen.
 - `Alt + F4`: sair do jogo.
+
+## Performance e profiler
+
+Durante testes em PCs fracos, pressione `F3` para abrir o profiler interno. Ele mostra FPS, tempo medio do frame, p95, piores frames e custo de eventos/update/render/flip/pacer. O mesmo resumo tambem aparece no terminal a cada poucos segundos.
+
+Tambem e possivel iniciar o jogo ja com o profiler ativo:
+
+```bash
+$env:PYOSU_PROFILE="1"; py -3.12 main.py
+```
+
+O jogo usa `240 FPS` como alvo padrao para reduzir stutter em PCs fracos. Para testar outro limite:
+
+```bash
+$env:PYOSU_TARGET_FPS="360"; py -3.12 main.py
+```
+
+Para testar o modo de menor latencia com maior uso de CPU:
+
+```bash
+$env:PYOSU_BUSY_FRAME_PACER="1"; py -3.12 main.py
+```
 
 ## Estrutura do projeto
 

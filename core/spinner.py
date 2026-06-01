@@ -40,7 +40,7 @@ class SpinnerEffects:
         base = Path("assets") / "spinner"
         self.spin_sound = self._load_sound(base / "spinnerspin.wav")
         self.bonus_sound = self._load_sound(base / "spinnerbonus.ogg")
-        self.complete_sound = self._load_sound(base / "normal-hitclap.wav")
+        self.complete_sound = self._load_sound(base / "normal-hitnormal.wav")
 
     def _load_sound(self, path):
         try:
@@ -95,6 +95,7 @@ class SpinnerManager:
         dx = mouse_pos[0] - center[0]
         dy = mouse_pos[1] - center[1]
         radius = math.hypot(dx, dy)
+        hit_held = self.scene._is_hit_held()
         if radius >= max(24.0, self.scene.scaled_radius * 0.55):
             angle = math.atan2(dy, dx)
             previous_angle = note.get("spinner_previous_angle", angle)
@@ -102,6 +103,9 @@ class SpinnerManager:
             note["spinner_previous_angle"] = angle
 
             noise_floor = 0.008
+            if not hit_held:
+                delta = 0.0
+
             if abs(delta) >= noise_floor:
                 direction = 1 if delta > 0 else -1
                 previous_direction = note.get("spinner_direction", direction)
@@ -117,6 +121,10 @@ class SpinnerManager:
                 note["spinner_rpm"] += (
                     instantaneous_rpm - note["spinner_rpm"]
                 ) * _clamp(dt * 14.0, 0.0, 1.0)
+            elif not hit_held:
+                note["spinner_rpm"] += (
+                    0.0 - note["spinner_rpm"]
+                ) * _clamp(dt * 12.0, 0.0, 1.0)
         else:
             note["spinner_rpm"] += (0.0 - note["spinner_rpm"]) * _clamp(dt * 8.0, 0.0, 1.0)
 
@@ -144,13 +152,15 @@ class SpinnerManager:
 
         if current_time < end:
             score_bank = note.get("spinner_score_bank", 0.0)
-            score_bank += note["spinner_rpm"] * dt * 0.42
+            if hit_held:
+                score_bank += note["spinner_rpm"] * dt * 0.42
             whole_points = int(score_bank)
             if whole_points > 0:
                 self.scene.score += whole_points
                 score_bank -= whole_points
             note["spinner_score_bank"] = score_bank
-            self.effects.update_sounds(note, current_time)
+            if hit_held:
+                self.effects.update_sounds(note, current_time)
             return
 
         result = self.scoring.result_for_progress(progress)

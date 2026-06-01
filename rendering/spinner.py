@@ -63,17 +63,31 @@ class SpinnerRenderer:
         if image is None:
             return False
         scaled = self._scaled(image, diameter)
-        scaled.set_alpha(alpha)
+        previous_alpha = scaled.get_alpha()
+        if alpha != 255:
+            scaled.set_alpha(alpha)
         target.blit(scaled, scaled.get_rect(center=center))
+        if alpha != 255:
+            scaled.set_alpha(previous_alpha)
         return True
 
     def _draw_rotated_centered(self, target, image, center, diameter, angle, alpha=255):
         if image is None:
             return False
-        scaled = self._scaled(image, diameter)
-        rotated = pygame.transform.rotozoom(scaled, angle, 1.0)
-        rotated.set_alpha(alpha)
+        angle_key = int(round(angle / 2.0) * 2) % 360
+        key = ("rotated", id(image), max(1, int(diameter)), angle_key)
+        rotated = self.cache.get(key)
+        if rotated is None:
+            scaled = self._scaled(image, diameter)
+            rotated = pygame.transform.rotozoom(scaled, angle_key, 1.0)
+            self.cache[key] = rotated
+
+        previous_alpha = rotated.get_alpha()
+        if alpha != 255:
+            rotated.set_alpha(alpha)
         target.blit(rotated, rotated.get_rect(center=center))
+        if alpha != 255:
+            rotated.set_alpha(previous_alpha)
         return True
 
     def _scaled(self, image, diameter):
@@ -83,4 +97,4 @@ class SpinnerRenderer:
         if cached is None:
             cached = pygame.transform.smoothscale(image, (diameter, diameter)).convert_alpha()
             self.cache[key] = cached
-        return cached.copy()
+        return cached

@@ -55,8 +55,6 @@ class SongCard:
         height = int(scene.card_height * self.scale)
         rect = pygame.Rect(0, 0, width, height)
         rect.center = (int(self.x), int(self.y))
-        layer = pygame.Surface((width, height), pygame.SRCALPHA)
-        body = pygame.Rect(0, 0, width, height)
 
         selected_group = scene.selected_group_key()
         same_group = meta and meta.get("group") == selected_group
@@ -72,49 +70,22 @@ class SongCard:
         if selected:
             card_alpha = 255
 
-        base_image = scene.card_background_surface(body.size)
-        if base_image is None:
-            base_image = pygame.Surface(body.size, pygame.SRCALPHA)
-            base_image.fill((72, 92, 160, 255))
-        if tint is not None:
-            base_image.fill(tint, special_flags=pygame.BLEND_RGBA_MULT)
-        if not same_group:
-            base_image.fill((66, 66, 78, 255), special_flags=pygame.BLEND_RGBA_MULT)
-        if selected and not is_difficulty:
-            base_image.fill((150, 170, 255, 255), special_flags=pygame.BLEND_RGBA_ADD)
-        if is_selected_difficulty:
-            base_image.fill((70, 58, 0, 255), special_flags=pygame.BLEND_RGBA_ADD)
-        base_image.set_alpha(int(self.alpha * card_alpha))
-        layer.blit(base_image, body.topleft)
-
-        title = scene.card_title_font.render(self.info.title, True, (255, 255, 255))
-        artist = scene.card_small_font.render(self.info.artist, True, (230, 230, 240))
-        if meta and meta.get("type") == "group" and meta.get("count", 1) > 1:
-            marker = "EXPANDED" if meta.get("group") in scene.expanded_groups else "CLICK TO EXPAND"
-            version_text = f"BEATMAP GROUP  |  {meta['count']} DIFFICULTIES  |  {marker}"
-        else:
-            prefix = "   DIFFICULTY  |  " if is_difficulty else ""
-            version_text = f"{prefix}{self.info.version}  {self.info.stars:.2f}*"
-        version_color = (255, 250, 145) if same_group else (215, 205, 170)
-        if is_selected_difficulty:
-            version_color = (255, 255, 210)
-        version = scene.card_small_font.render(version_text, True, version_color)
-        stats = scene.card_tiny_font.render(f"BPM {self.info.bpm_text}  {self.info.length_text}", True, (220, 220, 230))
-        for surf, alpha in (
-            (title, int(self.alpha * 255)),
-            (artist, int(self.alpha * 220)),
-            (version, int(self.alpha * 230)),
-            (stats, int(self.alpha * 180))
-        ):
-            surf.set_alpha(alpha)
-
-        text_x = body.left + int(width * (0.10 if is_difficulty else 0.07))
-        layer.blit(title, (text_x, body.top + int(height * 0.16)))
-        layer.blit(artist, (text_x, body.top + int(height * 0.46)))
-        layer.blit(version, (text_x, body.top + int(height * 0.66)))
-        layer.blit(stats, (text_x, body.top + int(height * 0.82)))
-
+        layer = scene.card_layer_surface(
+            (width, height),
+            self.info,
+            meta,
+            same_group,
+            selected,
+            is_difficulty,
+            is_selected_difficulty,
+            card_alpha,
+            tint
+        )
+        layer.set_alpha(int(self.alpha * 255))
         screen.blit(layer, rect)
+
+    def _legacy_draw_unused(self):
+        pass
 
 
 class SongCarousel:
@@ -140,6 +111,87 @@ class SongSelectScene(BaseScene):
 
     SORT_MODES = ("Title", "Artist", "BPM", "Stars", "Date", "Difficulty")
 
+    def card_layer_surface(
+        self,
+        size,
+        info,
+        meta,
+        same_group,
+        selected,
+        is_difficulty,
+        is_selected_difficulty,
+        card_alpha,
+        tint
+    ):
+        key = (
+            tuple(size),
+            str(info.osu_file),
+            meta.get("type") if meta else None,
+            meta.get("count") if meta else None,
+            meta.get("group") in self.expanded_groups if meta else False,
+            bool(same_group),
+            bool(selected),
+            bool(is_difficulty),
+            bool(is_selected_difficulty),
+            int(card_alpha),
+            tuple(tint) if tint else None
+        )
+        cached = self.card_layer_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if len(self.card_layer_cache) > 256:
+            self.card_layer_cache.clear()
+
+        width, height = size
+        body = pygame.Rect(0, 0, width, height)
+        layer = pygame.Surface((width, height), pygame.SRCALPHA)
+
+        base_image = self.card_background_surface(body.size)
+        if base_image is None:
+            base_image = pygame.Surface(body.size, pygame.SRCALPHA)
+            base_image.fill((72, 92, 160, 255))
+        if tint is not None:
+            base_image.fill(tint, special_flags=pygame.BLEND_RGBA_MULT)
+        if not same_group:
+            base_image.fill((66, 66, 78, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        if selected and not is_difficulty:
+            base_image.fill((150, 170, 255, 255), special_flags=pygame.BLEND_RGBA_ADD)
+        if is_selected_difficulty:
+            base_image.fill((70, 58, 0, 255), special_flags=pygame.BLEND_RGBA_ADD)
+        base_image.set_alpha(card_alpha)
+        layer.blit(base_image, body.topleft)
+
+        title = self.card_title_font.render(info.title, True, (255, 255, 255))
+        artist = self.card_small_font.render(info.artist, True, (230, 230, 240))
+        if meta and meta.get("type") == "group" and meta.get("count", 1) > 1:
+            marker = "EXPANDED" if meta.get("group") in self.expanded_groups else "CLICK TO EXPAND"
+            version_text = f"BEATMAP GROUP  |  {meta['count']} DIFFICULTIES  |  {marker}"
+        else:
+            prefix = "   DIFFICULTY  |  " if is_difficulty else ""
+            version_text = f"{prefix}{info.version}  {info.stars:.2f}*"
+        version_color = (255, 250, 145) if same_group else (215, 205, 170)
+        if is_selected_difficulty:
+            version_color = (255, 255, 210)
+        version = self.card_small_font.render(version_text, True, version_color)
+        stats = self.card_tiny_font.render(f"BPM {info.bpm_text}  {info.length_text}", True, (220, 220, 230))
+        for surf, alpha in (
+            (title, 255),
+            (artist, 220),
+            (version, 230),
+            (stats, 180)
+        ):
+            surf.set_alpha(alpha)
+
+        text_x = body.left + int(width * (0.10 if is_difficulty else 0.07))
+        layer.blit(title, (text_x, body.top + int(height * 0.16)))
+        layer.blit(artist, (text_x, body.top + int(height * 0.46)))
+        layer.blit(version, (text_x, body.top + int(height * 0.66)))
+        layer.blit(stats, (text_x, body.top + int(height * 0.82)))
+
+        self.card_layer_cache[key] = layer
+        return layer
+
     def __init__(self, game, initial_music_path=None):
         super().__init__(game)
         self.initial_music_path = str(initial_music_path) if initial_music_path else None
@@ -158,6 +210,8 @@ class SongSelectScene(BaseScene):
         self.current_background_key = None
         self.current_background = None
         self.previous_background = None
+        self.background_overlay = None
+        self.background_overlay_size = None
         self.background_t = 1.0
         self.time = 0.0
         self.preview_volume = 0.48
@@ -167,6 +221,8 @@ class SongSelectScene(BaseScene):
         self.current_preview_path = None
         self.card_base_image = self._load_card_base_image()
         self.card_image_cache = {}
+        self.card_layer_cache = {}
+        self.text_cache = {}
         self._layout()
         self._apply_filter()
         initial_index = self._index_for_music_path(self.initial_music_path)
@@ -229,6 +285,8 @@ class SongSelectScene(BaseScene):
         self.previous_background = None
         self.current_background_key = None
         self.card_image_cache.clear()
+        self.card_layer_cache.clear()
+        self.text_cache.clear()
 
     def handle_event(self, event):
         if self.pending_play_info is not None:
@@ -526,15 +584,21 @@ class SongSelectScene(BaseScene):
         else:
             if self.previous_background and self.background_t < 1.0:
                 screen.blit(self.previous_background, (0, 0))
-                bg = self.current_background.copy()
-                bg.set_alpha(int(ease_out(self.background_t) * 255))
-                screen.blit(bg, (0, 0))
+                previous_alpha = self.current_background.get_alpha()
+                self.current_background.set_alpha(
+                    int(ease_out(self.background_t) * 255)
+                )
+                screen.blit(self.current_background, (0, 0))
+                self.current_background.set_alpha(previous_alpha)
             else:
                 screen.blit(self.current_background, (0, 0))
 
-        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 178))
-        screen.blit(overlay, (0, 0))
+        size = screen.get_size()
+        if self.background_overlay is None or self.background_overlay_size != size:
+            self.background_overlay = pygame.Surface(size, pygame.SRCALPHA)
+            self.background_overlay.fill((0, 0, 0, 178))
+            self.background_overlay_size = size
+        screen.blit(self.background_overlay, (0, 0))
 
     def _draw_fallback_background(self, screen):
         w, h = screen.get_size()
@@ -599,9 +663,9 @@ class SongSelectScene(BaseScene):
         rect = self._search_rect()
         pygame.draw.rect(screen, (13, 14, 26, 220), rect, border_radius=7)
         pygame.draw.rect(screen, (92, 135, 255, 145), rect, 2, border_radius=7)
-        text = self.small_font.render(
+        text = self._text_surface(
+            self.small_font,
             f"Search: {self.search_text or 'Type to search!'}",
-            True,
             (235, 238, 255)
         )
         screen.blit(text, (rect.x + 16, rect.y + rect.height // 2 - text.get_height() // 2))
@@ -629,21 +693,21 @@ class SongSelectScene(BaseScene):
         pygame.draw.rect(screen, (78, 130, 255, 185), rect, 2, border_radius=8)
 
         title_text = f"{info.artist} - {info.title} [{info.version}]"
-        title = self.medium_font.render(title_text, True, (255, 255, 255))
-        mapper = self.small_font.render(f"Mapped by {info.creator}", True, (230, 235, 245))
-        stats1 = self.small_font.render(
+        title = self._text_surface(self.medium_font, title_text, (255, 255, 255))
+        mapper = self._text_surface(self.small_font, f"Mapped by {info.creator}", (230, 235, 245))
+        stats1 = self._text_surface(
+            self.small_font,
             f"Length: {info.length_text}  BPM: {info.bpm_text}  Objects: {info.object_count}",
-            True,
             (238, 238, 245)
         )
-        stats2 = self.small_font.render(
+        stats2 = self._text_surface(
+            self.small_font,
             f"Circles: {info.circle_count}  Sliders: {info.slider_count}  Spinners: {info.spinner_count}",
-            True,
             (238, 238, 245)
         )
-        stats3 = self.tiny_font.render(
+        stats3 = self._text_surface(
+            self.tiny_font,
             f"CS:{info.cs:g} AR:{info.ar:g} OD:{info.od:g} HP:{info.hp:g}  Star Rating: {info.stars:.2f}",
-            True,
             (225, 230, 245)
         )
         for surf, yy in (
@@ -663,14 +727,14 @@ class SongSelectScene(BaseScene):
         rect = pygame.Rect(x, y, w, h)
         pygame.draw.rect(screen, (15, 15, 26, 145), rect, border_radius=8)
         pygame.draw.rect(screen, (78, 130, 255, 155), rect, 2, border_radius=8)
-        title = self.small_font.render("Local Ranking", True, (255, 255, 255))
+        title = self._text_surface(self.small_font, "Local Ranking", (255, 255, 255))
         screen.blit(title, (x + 14, y + 9))
 
         records = []
         if self.items:
             records = self.score_manager.records_for(self.items[self.selected_index]["info"].osu_file)
         if not records:
-            text = self.tiny_font.render("No records set!", True, (210, 210, 225))
+            text = self._text_surface(self.tiny_font, "No records set!", (210, 210, 225))
             screen.blit(text, (x + 14, y + 38))
 
     def _draw_cards(self, screen):
@@ -693,12 +757,25 @@ class SongSelectScene(BaseScene):
         back = pygame.Rect(18, y + 10, 118, 38)
         pygame.draw.rect(screen, (130, 70, 120, 220), back, border_radius=6)
         pygame.draw.rect(screen, (255, 255, 255, 80), back, 1, border_radius=6)
-        screen.blit(self.medium_font.render("Back", True, (255, 255, 255)), (back.x + 33, back.y + 7))
-        guest = self.small_font.render("Guest", True, (230, 230, 240))
+        screen.blit(self._text_surface(self.medium_font, "Back", (255, 255, 255)), (back.x + 33, back.y + 7))
+        guest = self._text_surface(self.small_font, "Guest", (230, 230, 240))
         screen.blit(guest, (self.game.WIDTH - guest.get_width() - 22, y + 20))
-        action = self.small_font.render("Enter: play   Up/Down or wheel: navigate   Ctrl+F: search   Tab: sort", True, (200, 200, 215))
+        action = self._text_surface(self.small_font, "Enter: play   Up/Down or wheel: navigate   Ctrl+F: search   Tab: sort", (200, 200, 215))
         screen.blit(action, (160, y + 20))
 
     def _draw_empty(self, screen):
-        text = self.title_font.render("No beatmaps found", True, (255, 255, 255))
+        text = self._text_surface(self.title_font, "No beatmaps found", (255, 255, 255))
         screen.blit(text, text.get_rect(center=(self.game.WIDTH // 2, self.game.HEIGHT // 2)))
+
+    def _text_surface(self, font, text, color):
+        key = (id(font), str(text), tuple(color))
+        cached = self.text_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if len(self.text_cache) > 192:
+            self.text_cache.clear()
+
+        surface = font.render(str(text), True, color)
+        self.text_cache[key] = surface
+        return surface

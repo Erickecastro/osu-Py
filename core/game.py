@@ -3,14 +3,17 @@ import pygame_gui
 
 from core.beatmap_loader import BeatmapLoader
 from core.performance import (
+    MAX_FRAME_DT,
     MIXER_BUFFER,
     MIXER_CHANNELS,
     MIXER_FREQUENCY,
     MIXER_SIZE,
     RAW_MOUSE_SENSITIVITY,
     TARGET_FPS,
+    USE_BUSY_FRAME_PACER,
     configure_low_latency_environment
 )
+from core.profiler import FrameProfiler
 from core.scene_manager import SceneManager
 from scenes.main_menu_scene import MainMenuScene
 
@@ -48,6 +51,8 @@ class Game:
         # CLOCK
         # -------------------------
         self.clock = pygame.time.Clock()
+        self.dt = 1.0 / self.FPS
+        self.profiler = FrameProfiler()
         self.mouse_pos = pygame.mouse.get_pos()
         self.raw_mouse_enabled = False
         self.raw_mouse_sensitivity = RAW_MOUSE_SENSITIVITY
@@ -214,15 +219,35 @@ class Game:
 
         while self.running:
 
-            dt = self.clock.tick_busy_loop(
-                self.FPS
-            ) / 1000
+            self.profiler.begin_frame()
 
+            self.profiler.start("events")
             self.events()
+            self.profiler.end("events")
 
-            self.update(dt)
+            self.profiler.start("update")
+            self.update(self.dt)
+            self.profiler.end("update")
 
+            self.profiler.start("render")
             self.render()
+            self.profiler.end("render")
+
+            self.profiler.start("pacer")
+            if USE_BUSY_FRAME_PACER:
+                elapsed_ms = self.clock.tick_busy_loop(self.FPS)
+            else:
+                elapsed_ms = self.clock.tick(self.FPS)
+            self.profiler.end("pacer")
+
+            self.dt = min(MAX_FRAME_DT, elapsed_ms / 1000)
+            current_scene = self.scene_manager.current_scene
+            scene_name = (
+                current_scene.__class__.__name__
+                if current_scene is not None
+                else "None"
+            )
+            self.profiler.end_frame(scene_name, self.clock.get_fps())
 
         pygame.quit()
 
@@ -269,6 +294,10 @@ class Game:
 
                     self.toggle_fullscreen()
 
+                if event.key == pygame.K_F3:
+
+                    self.profiler.toggle()
+
             # -------------------------
             # SCENE EVENTS
             # -------------------------
@@ -310,13 +339,31 @@ class Game:
         else:
             self.mouse_pos = pygame.mouse.get_pos()
 
+        self.profiler.start("scene_render")
         self.scene_manager.render(
             self.screen
         )
+        self.profiler.end("scene_render")
 
         if getattr(current_scene, "uses_ui", True):
+            self.profiler.start("ui_draw")
             self.ui_manager.draw_ui(
                 self.screen
             )
+            self.profiler.end("ui_draw")
 
+        current_scene = self.scene_manager.current_scene
+        scene_name = (
+            current_scene.__class__.__name__
+            if current_scene is not None
+            else "None"
+        )
+        self.profiler.draw_overlay(
+            self.screen,
+            scene_name,
+            self.clock.get_fps()
+        )
+
+        self.profiler.start("flip")
         pygame.display.flip()
+        self.profiler.end("flip")

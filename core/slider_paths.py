@@ -224,10 +224,6 @@ class SliderPathGenerator:
             else ccw_start_end - (2 * math.pi)
         )
 
-        if slider_distance > 0 and radius > 1e-6:
-            direction = 1.0 if span >= 0 else -1.0
-            span = direction * (float(slider_distance) / radius)
-
         arc_length = abs(span) * radius
         samples = max(
             16,
@@ -297,8 +293,8 @@ class SliderPathGenerator:
             smooth_points = self.generate_linear_path(path_points, steps=32)
 
         smooth_points = self._densify_uniform(smooth_points, spacing=2.5)
-        if curve_type != "P" and slider_distance > 0 and len(smooth_points) > 1:
-            smooth_points = self._normalize_slider_length(
+        if slider_distance > 0 and len(smooth_points) > 1:
+            smooth_points = self._fit_path_to_length(
                 smooth_points,
                 slider_distance
             )
@@ -520,3 +516,71 @@ class SliderPathGenerator:
         if abs(final_length - target_length) > target_length * 0.3:
             return points
         return resampled
+
+    def _path_length(self, points):
+        total = 0.0
+        for index in range(len(points) - 1):
+            total += math.hypot(
+                points[index + 1]["x"] - points[index]["x"],
+                points[index + 1]["y"] - points[index]["y"]
+            )
+        return total
+
+    def _fit_path_to_length(self, points, target_length):
+        current_length = self._path_length(points)
+        if current_length <= 1e-6:
+            return points
+
+        if current_length >= target_length:
+            return self._trim_path_to_length(points, target_length)
+
+        extended = list(points)
+        remaining = target_length - current_length
+        last = extended[-1]
+        previous = extended[-2]
+        dx = last["x"] - previous["x"]
+        dy = last["y"] - previous["y"]
+        distance = math.hypot(dx, dy)
+        if distance <= 1e-6:
+            return extended
+
+        ux = dx / distance
+        uy = dy / distance
+        steps = max(1, int(remaining / 2.5))
+        for step in range(1, steps + 1):
+            amount = remaining * (step / steps)
+            extended.append({
+                "x": last["x"] + (ux * amount),
+                "y": last["y"] + (uy * amount)
+            })
+
+        return self._dedupe_points(extended)
+
+    def _trim_path_to_length(self, points, target_length):
+        if len(points) < 2 or target_length <= 0:
+            return points
+
+        trimmed = [points[0]]
+        travelled = 0.0
+        for index in range(len(points) - 1):
+            start = points[index]
+            end = points[index + 1]
+            segment = math.hypot(
+                end["x"] - start["x"],
+                end["y"] - start["y"]
+            )
+            if segment <= 1e-6:
+                continue
+
+            if travelled + segment >= target_length:
+                t = (target_length - travelled) / segment
+                trimmed.append({
+                    "x": start["x"] + ((end["x"] - start["x"]) * t),
+                    "y": start["y"] + ((end["y"] - start["y"]) * t)
+                })
+                return self._dedupe_points(trimmed)
+
+            trimmed.append(end)
+            travelled += segment
+
+        return self._dedupe_points(trimmed)

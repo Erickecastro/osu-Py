@@ -192,7 +192,17 @@ class MenuOption:
 
         layer = pygame.transform.smoothscale(shape_layer, layer_size)
 
-        text = font.render(self.label, True, (255, 255, 255))
+        available_width = max(24, body.right - (body.left + int(body.width * 0.42)) - int(body.height * 0.22))
+        render_font = font
+        text = render_font.render(self.label, True, (255, 255, 255))
+        if text.get_width() > available_width:
+            target_height = max(12, int(font.get_height() * (available_width / text.get_width())))
+            render_font = pygame.font.Font(font.get_name() if False else None, target_height)
+            text = render_font.render(self.label, True, (255, 255, 255))
+            while text.get_width() > available_width and target_height > 12:
+                target_height -= 1
+                render_font = pygame.font.Font(None, target_height)
+                text = render_font.render(self.label, True, (255, 255, 255))
         text.set_alpha(alpha)
         text_rect = text.get_rect(
             midleft=(body.left + int(body.width * 0.42), body.centery)
@@ -207,19 +217,32 @@ class MenuOption:
 
 
 class CircularVisualizer:
-    def __init__(self, bar_count=144):
+    def __init__(self, bar_count=108):
         self.bar_count = bar_count
         self.levels = [0.0] * bar_count
         self.phases = [
             (i * 0.61803398875) % 1.0
             for i in range(bar_count)
         ]
+        self.angle_ts = [
+            i / bar_count
+            for i in range(bar_count)
+        ]
+        self.unit_vectors = [
+            (
+                math.cos((i / bar_count) * math.tau),
+                math.sin((i / bar_count) * math.tau)
+            )
+            for i in range(bar_count)
+        ]
+        self._layer = None
+        self._layer_size = None
 
     def update(self, dt, time_seconds, beat_level, hover, beat_phase, music_energy):
         energy = clamp(music_energy, 0.0, 1.0)
         for index in range(self.bar_count):
             phase = self.phases[index]
-            angle_t = index / self.bar_count
+            angle_t = self.angle_ts[index]
             rotation = (time_seconds * (0.012 + energy * 0.026)) % 1.0
             sweep = 1.0 - abs(((angle_t - beat_phase - rotation + 0.5) % 1.0) - 0.5) * 2.0
             sweep = pow(clamp(sweep, 0.0, 1.0), 3.4)
@@ -252,22 +275,28 @@ class CircularVisualizer:
         max_length = max(120, radius * (0.583 + energy * 1.064))
         layer_radius = int(inner_radius + base_length + max_length + 12)
         layer_size = layer_radius * 2
-        layer = pygame.Surface((layer_size, layer_size), pygame.SRCALPHA)
+        size = (layer_size, layer_size)
+        if self._layer is None or self._layer_size != size:
+            self._layer = pygame.Surface(size, pygame.SRCALPHA)
+            self._layer_size = size
+
+        layer = self._layer
+        layer.fill((0, 0, 0, 0))
         local_center = (layer_radius, layer_radius)
 
         for index, level in enumerate(self.levels):
-            angle = (index / self.bar_count) * math.tau
+            ux, uy = self.unit_vectors[index]
             length = base_length + (max_length * pow(level, 0.86))
             start_radius = inner_radius
             end_radius = start_radius + length
 
             start = (
-                int(local_center[0] + (math.cos(angle) * start_radius)),
-                int(local_center[1] + (math.sin(angle) * start_radius))
+                int(local_center[0] + (ux * start_radius)),
+                int(local_center[1] + (uy * start_radius))
             )
             end = (
-                int(local_center[0] + (math.cos(angle) * end_radius)),
-                int(local_center[1] + (math.sin(angle) * end_radius))
+                int(local_center[0] + (ux * end_radius)),
+                int(local_center[1] + (uy * end_radius))
             )
             alpha = int((58 + (197 * level)) * clamp(level * 2.55, 0.0, 1.0))
             width = max(5, int(radius * 0.02 + level * radius * 0.032))
@@ -308,6 +337,7 @@ class MenuSnow:
         self.particles = []
         self.spawn_timer = 0.0
         self.image = None
+        self.max_particles = 22
 
     def load(self):
         self.image = self._load_image()
@@ -317,8 +347,8 @@ class MenuSnow:
             return
 
         self.spawn_timer -= dt
-        if self.spawn_timer <= 0.0 and len(self.particles) < 34:
-            self.spawn_timer = self.random.uniform(0.22, 0.62)
+        if self.spawn_timer <= 0.0 and len(self.particles) < self.max_particles:
+            self.spawn_timer = self.random.uniform(0.30, 0.78)
             self.particles.append(self._new_particle(width, height))
 
         next_particles = []
@@ -424,6 +454,7 @@ class PulseCircle:
         self.small_font = None
         self._font_radius = 0
         self._title_surface_cache = {}
+        self._scratch_surfaces = {}
 
     def layout(self, width, height):
         self.center = (width // 2, height // 2)
@@ -495,7 +526,7 @@ class PulseCircle:
         center_x, center_y = self.center
         padding = int(radius * 0.42)
         size = (radius * 2) + (padding * 2)
-        layer = pygame.Surface((size, size), pygame.SRCALPHA)
+        layer = self._scratch_surface("circle", (size, size))
         local_center = (size // 2, size // 2)
 
         for index in range(9, 0, -1):
@@ -516,7 +547,7 @@ class PulseCircle:
         )
         pygame.draw.circle(layer, (*magenta, 255), local_center, radius)
 
-        effects = pygame.Surface((size, size), pygame.SRCALPHA)
+        effects = self._scratch_surface("effects", (size, size))
         shine_radius = int(radius * (0.82 + beat_level * 0.06))
         pygame.draw.circle(
             effects,
@@ -524,7 +555,7 @@ class PulseCircle:
             (local_center[0] - int(radius * 0.22), local_center[1] - int(radius * 0.22)),
             shine_radius
         )
-        circle_mask = pygame.Surface((size, size), pygame.SRCALPHA)
+        circle_mask = self._scratch_surface("mask", (size, size))
         pygame.draw.circle(circle_mask, (255, 255, 255, 255), local_center, radius)
         effects.blit(circle_mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
         layer.blit(effects, (0, 0))
@@ -567,7 +598,7 @@ class PulseCircle:
         )
 
     def _draw_inner_geometry(self, layer, center, radius, time_seconds):
-        geometry = pygame.Surface(layer.get_size(), pygame.SRCALPHA)
+        geometry = self._scratch_surface("geometry", layer.get_size())
         cx, cy = center
         alpha = 34
         spin = time_seconds * 0.25
@@ -602,6 +633,14 @@ class PulseCircle:
             pygame.draw.polygon(geometry, (255, 255, 255, 28), points)
 
         layer.blit(geometry, (0, 0))
+
+    def _scratch_surface(self, key, size):
+        surface = self._scratch_surfaces.get(key)
+        if surface is None or surface.get_size() != size:
+            surface = pygame.Surface(size, pygame.SRCALPHA)
+            self._scratch_surfaces[key] = surface
+        surface.fill((0, 0, 0, 0))
+        return surface
 
     def _title_surface(self, text_scale):
         key = int(text_scale * 100)
@@ -663,6 +702,7 @@ class MainMenuScene(BaseScene):
         )
         self.option_font = None
         self.footer_font = None
+        self.footer_cache = {}
 
         self.circle = PulseCircle(self.title)
         self.visualizer = CircularVisualizer()
@@ -681,6 +721,8 @@ class MainMenuScene(BaseScene):
         self.background_size = None
         self.fallback_background = None
         self.fallback_background_size = None
+        self.fallback_orbit = None
+        self.fallback_orbit_size = None
         self.overlay_cache = {}
         self.fallback_points = [
             ((i * 97) % 1000 / 1000.0, (i * 193) % 1000 / 1000.0, 0.35 + ((i % 5) * 0.12))
@@ -706,6 +748,7 @@ class MainMenuScene(BaseScene):
             bold=True
         )
         self.footer_font = pygame.font.SysFont("arial", max(14, height // 64))
+        self.footer_cache.clear()
 
         option_width = int(clamp(width * 0.312, 288, 496))
         option_height = int(clamp(height * 0.067, 46, 67))
@@ -742,6 +785,8 @@ class MainMenuScene(BaseScene):
         self.background_size = None
         self.fallback_background = None
         self.fallback_background_size = None
+        self.fallback_orbit = None
+        self.fallback_orbit_size = None
         self.overlay_cache.clear()
 
     def handle_event(self, event):
@@ -987,6 +1032,7 @@ class MainMenuScene(BaseScene):
         track = self.music_tracks[self.current_track_index]
         self.music_path = track["path"]
         self.music_title = track["title"]
+        self.footer_cache.clear()
         self.music_bpm = track["bpm"]
         self.music_energy = track["energy"]
         self.current_timing_points = track.get("timing_points", [])
@@ -1169,7 +1215,12 @@ class MainMenuScene(BaseScene):
 
         screen.blit(self.fallback_background, (0, 0))
 
-        orbit = pygame.Surface((width, height), pygame.SRCALPHA)
+        if self.fallback_orbit is None or self.fallback_orbit_size != size:
+            self.fallback_orbit = pygame.Surface(size, pygame.SRCALPHA)
+            self.fallback_orbit_size = size
+
+        orbit = self.fallback_orbit
+        orbit.fill((0, 0, 0, 0))
         for x_factor, y_factor, speed in self.fallback_points:
             x = int((x_factor * width + math.sin(self.time_seconds * speed) * 28) % width)
             y = int((y_factor * height + math.cos(self.time_seconds * speed * 0.8) * 24) % height)
@@ -1206,8 +1257,8 @@ class MainMenuScene(BaseScene):
         if self.menu_open:
             hint += "  |  ESC back"
 
-        text = self.footer_font.render(music_text, True, (255, 255, 255))
-        hint_surface = self.footer_font.render(hint, True, (255, 255, 255))
+        text = self._footer_surface(music_text, 110)
+        hint_surface = self._footer_surface(hint, 100)
         text.set_alpha(110)
         hint_surface.set_alpha(100)
         screen.blit(text, (18, self.game.HEIGHT - text.get_height() - 16))
@@ -1218,6 +1269,19 @@ class MainMenuScene(BaseScene):
                 self.game.HEIGHT - hint_surface.get_height() - 16
             )
         )
-        signature = self.footer_font.render("OSU! made with python by a fan", True, (255, 255, 255))
-        signature.set_alpha(118)
+        signature = self._footer_surface("OSU! made with python by a fan", 118)
         screen.blit(signature, (18, 18))
+
+    def _footer_surface(self, text, alpha):
+        key = (text, int(alpha), id(self.footer_font))
+        cached = self.footer_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if len(self.footer_cache) > 16:
+            self.footer_cache.clear()
+
+        surface = self.footer_font.render(text, True, (255, 255, 255))
+        surface.set_alpha(alpha)
+        self.footer_cache[key] = surface
+        return surface
