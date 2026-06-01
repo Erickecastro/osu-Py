@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pygame
 
 
@@ -6,8 +8,18 @@ class GameplayHUDRenderer:
         self.font = font
         self.text_cache = {}
         self.health_bar_cache = {}
+        self.health_bar_image = self._load_health_bar_image()
+        self.health_bar_scaled_cache = {}
         self.hit_error_bar_cache = {}
         self.hit_error_marker_cache = {}
+
+    def _load_health_bar_image(self):
+        path = Path("assets") / "HP" / "scorebar-colour.png"
+        try:
+            image = pygame.image.load(str(path)).convert_alpha()
+        except (pygame.error, FileNotFoundError):
+            return None
+        return image
 
     def text_surface(self, text, color=(255, 255, 255)):
         key = (text, tuple(color))
@@ -87,12 +99,38 @@ class GameplayHUDRenderer:
 
     def draw_health_bar(self, screen, health):
         health = max(0.0, min(1.0, float(health)))
-        width = min(420, max(220, int(screen.get_width() * 0.28)))
-        height = 16
-        x = (screen.get_width() - width) // 2
-        y = 22
+        width = min(760, max(360, int(screen.get_width() * 0.56)))
+        source_ratio = (
+            self.health_bar_image.get_height()
+            / max(1, self.health_bar_image.get_width())
+            if self.health_bar_image is not None
+            else 0.028
+        )
+        height = max(12, int(width * source_ratio))
+        x = max(14, int(screen.get_width() * 0.018))
+        y = max(12, int(screen.get_height() * 0.024))
         fill_width = int(width * health)
-        cache_key = (width, height, fill_width)
+
+        if self.health_bar_image is not None:
+            scaled_key = (width, height)
+            scaled = self.health_bar_scaled_cache.get(scaled_key)
+            if scaled is None:
+                if len(self.health_bar_scaled_cache) > 8:
+                    self.health_bar_scaled_cache.clear()
+                scaled = pygame.transform.smoothscale(
+                    self.health_bar_image,
+                    (width, height)
+                )
+                self.health_bar_scaled_cache[scaled_key] = scaled
+            if fill_width > 0:
+                screen.blit(
+                    scaled,
+                    (x, y),
+                    pygame.Rect(0, 0, fill_width, height)
+                )
+            return
+
+        cache_key = (width, height, fill_width, self.health_bar_image is not None)
         cached = self.health_bar_cache.get(cache_key)
         if cached is not None:
             screen.blit(cached, (x, y))
@@ -106,33 +144,13 @@ class GameplayHUDRenderer:
             pygame.SRCALPHA
         )
 
-        pygame.draw.rect(
-            surface,
-            (18, 18, 18),
-            (0, 0, width, height),
-            border_radius=height // 2
-        )
         if fill_width > 0:
-            if health > 0.55:
-                fill_color = (104, 220, 116)
-            elif health > 0.25:
-                fill_color = (235, 202, 83)
-            else:
-                fill_color = (230, 86, 86)
-
             pygame.draw.rect(
                 surface,
-                fill_color,
+                (248, 248, 248),
                 (0, 0, fill_width, height),
-                border_radius=height // 2
+                border_radius=max(2, height // 2)
             )
-        pygame.draw.rect(
-            surface,
-            (255, 255, 255),
-            (0, 0, width, height),
-            width=2,
-            border_radius=height // 2
-        )
         self.health_bar_cache[cache_key] = surface
         screen.blit(surface, (x, y))
 

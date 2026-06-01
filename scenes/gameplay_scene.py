@@ -305,6 +305,8 @@ class GameplayScene(BaseScene):
         self.paused = False
         self.failed = False
         self.fail_time = None
+        self.fail_fall_duration_ms = 2310
+        self.lose_overlay_delay_ms = 720
         self.pause_started_at = None
         self.intro_skip_ms = self._calculate_intro_skip_ms()
         self.intro_skip_used = False
@@ -448,7 +450,7 @@ class GameplayScene(BaseScene):
                 continue
             try:
                 sound = pygame.mixer.Sound(path)
-                sound.set_volume(0.58)
+                sound.set_volume(0.29)
                 return sound
             except pygame.error:
                 continue
@@ -477,6 +479,9 @@ class GameplayScene(BaseScene):
             result,
             self.hp
         )
+        if self.target_health <= 0.001:
+            self.health = 0.0
+            self._fail()
 
     def _finish_spinner(self, note, result):
         if note.get("judged"):
@@ -1585,6 +1590,8 @@ class GameplayScene(BaseScene):
         self.failed = True
         self.paused = False
         self.fail_time = pygame.time.get_ticks()
+        self.health = 0.0
+        self.target_health = 0.0
         pygame.mixer.music.stop()
         pygame.mouse.set_visible(True)
 
@@ -1695,7 +1702,8 @@ class GameplayScene(BaseScene):
             self.target_health - self.health
         ) * health_speed
 
-        if self.health <= 0.001:
+        if self.target_health <= 0.001:
+            self.health = 0.0
             self._fail()
             return
 
@@ -1848,23 +1856,12 @@ class GameplayScene(BaseScene):
                 self.score,
                 self._accuracy(),
                 self.combo,
-                self.health,
+                self.target_health,
                 self.hit_error_markers,
                 self.hit_window_300,
                 self.hit_window_100,
                 self.hit_window_50
             )
-
-        pygame.draw.rect(
-
-            screen,
-
-            (40, 40, 40),
-
-            self.playfield_rect,
-
-            3
-        )
 
         # Camada transparente para permitir alpha real (fade in/out suave).
         screen_size = screen.get_size()
@@ -2041,7 +2038,14 @@ class GameplayScene(BaseScene):
                     render_slider_points = slider_points
                     slider_cache_key = note.get("render_index")
 
-                if fail_offset_y:
+                if self.failed:
+                    render_slider_points = self._fail_transform_slider_points(
+                        note,
+                        render_slider_points,
+                        fail_offset_y
+                    )
+                    slider_cache_key = None
+                elif fail_offset_y:
                     render_slider_points = [
                         (x, y + fail_offset_y)
                         for x, y in render_slider_points
@@ -2348,18 +2352,54 @@ class GameplayScene(BaseScene):
         if self.paused:
             self._draw_pause_overlay(screen)
         elif self.failed:
-            self._draw_lose_overlay(screen)
+            if self.fail_time is None:
+                self._draw_lose_overlay(screen)
+            elif (
+                pygame.time.get_ticks() - self.fail_time
+                >= self.lose_overlay_delay_ms
+            ):
+                self._draw_lose_overlay(screen)
 
     def _fail_object_motion(self):
         if not self.failed or self.fail_time is None:
             return 0, 1.0
 
         elapsed = pygame.time.get_ticks() - self.fail_time
-        progress = self._clamp01(elapsed / 1650.0)
+        progress = self._clamp01(elapsed / self.fail_fall_duration_ms)
         eased = progress * progress * (3.0 - 2.0 * progress)
         fall = int((self.game.HEIGHT * 0.28) * eased)
         alpha = 1.0 - (progress * 0.72)
         return fall, max(0.20, alpha)
+
+    def _fail_transform_slider_points(self, note, points, fall):
+        if not points or self.fail_time is None:
+            return points
+
+        elapsed = pygame.time.get_ticks() - self.fail_time
+        progress = self._clamp01(elapsed / self.fail_fall_duration_ms)
+        if progress <= 0:
+            return [(x, y + fall) for x, y in points] if fall else points
+
+        xs = [x for x, _ in points]
+        ys = [y for _, y in points]
+        center_x = (min(xs) + max(xs)) * 0.5
+        center_y = (min(ys) + max(ys)) * 0.5
+        render_index = int(note.get("render_index", 0))
+        direction = -1 if render_index % 2 else 1
+        angle = direction * (8.0 + ((render_index * 17) % 18)) * progress
+        radians = math.radians(angle)
+        cos_a = math.cos(radians)
+        sin_a = math.sin(radians)
+
+        transformed = []
+        for x, y in points:
+            dx = x - center_x
+            dy = y - center_y
+            transformed.append((
+                center_x + dx * cos_a - dy * sin_a,
+                center_y + dx * sin_a + dy * cos_a + fall
+            ))
+        return transformed
 
     def _draw_skip_button(self, screen):
         self.skip_button_rect = None
@@ -2418,8 +2458,14 @@ class GameplayScene(BaseScene):
         alpha = 178
         overlay_factor = 1.0
         if self.failed and self.fail_time is not None:
+            elapsed = max(
+                0,
+                pygame.time.get_ticks()
+                - self.fail_time
+                - self.lose_overlay_delay_ms
+            )
             overlay_factor = self._clamp01(
-                (pygame.time.get_ticks() - self.fail_time) / 520.0
+                elapsed / 520.0
             )
             alpha = int(178 * overlay_factor)
         shade.fill((0, 0, 0, alpha))
@@ -2486,15 +2532,6 @@ class GameplayScene(BaseScene):
         )
 
     def _render_ready(self, screen):
-        pygame.draw.rect(
-            screen,
-            (40, 40, 40),
-            (
-                self.playfield_rect
-            ),
-            3
-        )
-
         remaining = max(
             0,
             self.pre_start_delay_ms
