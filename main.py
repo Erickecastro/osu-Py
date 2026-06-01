@@ -1,5 +1,3 @@
-## Faz o projeto inteiro iniciar com o comando: "py main.py"
-
 from core.game import Game
 
 def main():
