@@ -5,6 +5,7 @@ from pathlib import Path
 import pygame
 import pygame.sndarray
 
+from core.assets import ACTIVE_SKIN_DIR, asset_path
 from scenes.base_scene import BaseScene
 from scenes.song_select_scene import SongSelectScene
 
@@ -326,6 +327,7 @@ class CircularVisualizer:
 
 class MenuSnow:
     IMAGE_NAMES = (
+        "menu-snow.png",
         "snow.png",
         "snow_note.png",
         "menu_snow.png"
@@ -430,7 +432,7 @@ class MenuSnow:
 
     def _load_image(self):
         for name in self.IMAGE_NAMES:
-            path = self.assets_dir / name
+            path = asset_path(name, "menu")
             if path.exists():
                 try:
                     return pygame.image.load(str(path)).convert_alpha()
@@ -676,7 +678,8 @@ class MainMenuScene(BaseScene):
     def __init__(self, game):
         super().__init__(game)
 
-        self.assets_dir = Path("assets") / "menu"
+        self.assets_dir = ACTIVE_SKIN_DIR
+        self.menu_music_dir = Path("assets") / "menu"
         self.title = "OSU!"
         self.time_seconds = 0.0
         self.beat_phase = 0.0
@@ -995,7 +998,7 @@ class MainMenuScene(BaseScene):
         return sum(self.audio_envelope[start:end]) / max(1, end - start)
 
     def _load_background(self):
-        root_background = Path("assets") / "menu-bg.jpg"
+        root_background = asset_path("menu-bg.jpg")
         if root_background.exists():
             try:
                 return pygame.image.load(str(root_background)).convert()
@@ -1063,7 +1066,7 @@ class MainMenuScene(BaseScene):
     def _build_music_playlist(self):
         tracks = []
 
-        for path in self._iter_asset_files(self.assets_dir, self.AUDIO_EXTENSIONS):
+        for path in self._iter_asset_files(self.menu_music_dir, self.AUDIO_EXTENSIONS):
             title = self._clean_display_text(
                 path.stem.replace("_", " ").replace("-", " ").strip()
             )

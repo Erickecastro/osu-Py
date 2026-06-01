@@ -9,7 +9,7 @@ O projeto ainda esta em desenvolvimento, mas a gameplay principal ja esta funcio
 - Leitura de pastas de beatmaps dentro de `songs/`.
 - Parse de metadata, difficulty, timing points, hit circles, sliders e cores de combo.
 - Gameplay com circles, sliders, reverse markers, slider ball, fade in/out, miss pop, score, combo e accuracy.
-- Renderizacao de cursor e cursor trail usando assets em `assets/cursor/`.
+- Renderizacao de cursor, notas, sliders, spinner, HUD e menu usando a skin em `assets/skins/default/`.
 - Menus com `pygame_gui` para selecionar musica e dificuldade.
 - Suporte a fullscreen e troca de fullscreen com `F11`.
 
@@ -86,13 +86,21 @@ Para testar o modo de menor latencia com maior uso de CPU:
 $env:PYOSU_BUSY_FRAME_PACER="1"; py -3.12 main.py
 ```
 
+## Skins
+
+Os assets padrao ficam concentrados em `assets/skins/default/`. Para testar outra skin mantendo os mesmos nomes de arquivo:
+
+```bash
+$env:PYOSU_SKIN_DIR="assets/skins/minha-skin"; py -3.12 main.py
+```
+
 ## Estrutura do projeto
 
 - `main.py`: ponto de entrada.
 - `core/`: loop principal, audio, loader de beatmaps, scene manager e calculos de gameplay.
 - `scenes/`: menus, selecao de musica/dificuldade e cena de gameplay.
 - `rendering/`: renderizacao de primitivas, cursor e sliders.
-- `assets/`: assets globais do jogo.
+- `assets/skins/default/`: skin padrao com imagens e sons usados pelo jogo.
 - `songs/`: beatmaps usados nos testes.
 - `ui/`: espaco reservado para componentes/temas de interface.
 

@@ -1,9 +1,9 @@
 import math
-import os
 from bisect import bisect_right
 
 import pygame
 
+from core.assets import asset_path
 from core.beatmap_timing import effective_beat_length_at
 
 try:
@@ -20,16 +20,12 @@ class SliderRenderer:
         self.precache_index = 0
 
     def _load_reverse_arrow(self):
-        path = os.path.join(
-            "assets",
-            "novo_reversearrow",
-            "reversearrow.png"
-        )
-        if not os.path.exists(path):
+        path = asset_path("reversearrow.png", "novo_reversearrow")
+        if not path.exists():
             return None
 
         try:
-            return pygame.image.load(path).convert_alpha()
+            return pygame.image.load(str(path)).convert_alpha()
         except pygame.error:
             return None
 

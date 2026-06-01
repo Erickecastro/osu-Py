@@ -1,7 +1,8 @@
 import math
-from pathlib import Path
 
 import pygame
+
+from core.assets import asset_path
 
 
 class SpinnerRenderer:
@@ -14,7 +15,7 @@ class SpinnerRenderer:
         self.cache = {}
 
     def _load_image(self, filename):
-        path = Path("assets") / "spinner" / filename
+        path = asset_path(filename, "spinner")
         try:
             return pygame.image.load(str(path)).convert_alpha()
         except pygame.error:

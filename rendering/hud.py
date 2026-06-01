@@ -1,6 +1,6 @@
-from pathlib import Path
-
 import pygame
+
+from core.assets import asset_path
 
 
 class GameplayHUDRenderer:
@@ -14,7 +14,7 @@ class GameplayHUDRenderer:
         self.hit_error_marker_cache = {}
 
     def _load_health_bar_image(self):
-        path = Path("assets") / "HP" / "scorebar-colour.png"
+        path = asset_path("scorebar-colour.png", "HP")
         try:
             image = pygame.image.load(str(path)).convert_alpha()
         except (pygame.error, FileNotFoundError):

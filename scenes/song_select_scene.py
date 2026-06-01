@@ -4,6 +4,7 @@ from pathlib import Path
 import pygame
 
 from core.audio import find_audio_file
+from core.assets import asset_path
 from core.beatmap_info import BeatmapParser, LocalScoreManager
 from scenes.base_scene import BaseScene
 from scenes.gameplay_scene import GameplayScene
@@ -251,7 +252,7 @@ class SongSelectScene(BaseScene):
         self.card_tiny_font = pygame.font.SysFont("arial", max(12, h // 72))
 
     def _load_card_base_image(self):
-        path = Path("assets") / "songselect_cards" / "menu-button-background.png"
+        path = asset_path("menu-button-background.png", "songselect_cards")
         try:
             return pygame.image.load(str(path)).convert_alpha()
         except pygame.error:

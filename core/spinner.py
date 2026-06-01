@@ -1,7 +1,8 @@
 import math
-from pathlib import Path
 
 import pygame
+
+from core.assets import asset_path
 
 
 def _clamp(value, minimum, maximum):
@@ -37,9 +38,8 @@ class SpinnerScoring:
 
 class SpinnerEffects:
     def __init__(self):
-        base = Path("assets") / "spinner"
-        self.spin_sound = self._load_sound(base / "spinnerspin.wav")
-        self.bonus_sound = self._load_sound(base / "spinnerbonus.ogg")
+        self.spin_sound = self._load_sound(asset_path("spinnerspin.wav", "spinner"))
+        self.bonus_sound = self._load_sound(asset_path("spinnerbonus.ogg", "spinner"))
         self.complete_sound = None
 
     def _load_sound(self, path):

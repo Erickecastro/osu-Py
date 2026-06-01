@@ -2,6 +2,8 @@ import os
 
 import pygame
 
+from core.assets import asset_path
+
 
 class CursorRenderer:
     def __init__(
@@ -90,16 +92,13 @@ class CursorRenderer:
         )
 
     def _load_asset(self, filename, scale=1.0):
-        path = os.path.join(
-            self.asset_dir,
-            filename
-        )
+        path = asset_path(filename, "cursor")
 
-        if not os.path.exists(path):
+        if not path.exists():
             return None
 
         try:
-            image = pygame.image.load(path).convert_alpha()
+            image = pygame.image.load(str(path)).convert_alpha()
         except pygame.error:
             return None
 

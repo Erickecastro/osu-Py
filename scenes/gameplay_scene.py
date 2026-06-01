@@ -6,6 +6,7 @@ import pygame
 
 from scenes.base_scene import BaseScene
 from core.audio import find_audio_file, start_music
+from core.assets import asset_path
 from core.gameplay import calculate_accuracy, hit_result_for_delta
 from core.health import apply_health_drain, apply_health_result
 from core.hit_detection import find_best_hit_object
@@ -438,15 +439,15 @@ class GameplayScene(BaseScene):
 
     def _load_hit_sound(self):
         candidates = (
-            os.path.join("assets", "spinner", "normal-hitnormal.wav"),
-            os.path.join("assets", "spinner", "normal-hitclap.wav"),
-            os.path.join("assets", "spinner", "normal-hitfinish.wav")
+            asset_path("normal-hitnormal.wav", "spinner"),
+            asset_path("normal-hitclap.wav", "spinner"),
+            asset_path("normal-hitfinish.wav", "spinner")
         )
         for path in candidates:
-            if not os.path.exists(path):
+            if not path.exists():
                 continue
             try:
-                sound = pygame.mixer.Sound(path)
+                sound = pygame.mixer.Sound(str(path))
                 sound.set_volume(0.29)
                 return sound
             except pygame.error:
@@ -462,11 +463,11 @@ class GameplayScene(BaseScene):
             pass
 
     def _load_fail_sound(self):
-        path = os.path.join("assets", "failsound", "failsound.wav")
-        if not os.path.exists(path):
+        path = asset_path("failsound.wav", "failsound")
+        if not path.exists():
             return None
         try:
-            sound = pygame.mixer.Sound(path)
+            sound = pygame.mixer.Sound(str(path))
             sound.set_volume(0.72)
             return sound
         except pygame.error:
@@ -907,12 +908,14 @@ class GameplayScene(BaseScene):
         )
 
     def _load_image(self, *parts):
-        path = os.path.join("assets", *parts)
-        if not os.path.exists(path):
+        if not parts:
+            return None
+        path = asset_path(parts[-1], *parts[:-1])
+        if not path.exists():
             return None
 
         try:
-            return pygame.image.load(path).convert_alpha()
+            return pygame.image.load(str(path)).convert_alpha()
         except pygame.error:
             return None
 
