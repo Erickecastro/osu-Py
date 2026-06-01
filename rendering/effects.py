@@ -123,6 +123,21 @@ class GameplayEffectsRenderer:
 
         radius = max(1, int(radius))
         progress = self.scene._clamp01(1.0 - (alpha / 255.0))
+        base_radius = max(
+            1,
+            float(getattr(self.scene, "note_visual_radius", radius))
+        )
+        scale = (radius / base_radius) * (1.0 - progress * 0.42)
+        skin_alpha = int(alpha * (1.0 - progress * 0.10))
+        if self.scene._draw_hitcircle_skin(
+            target,
+            center,
+            color,
+            alpha=skin_alpha,
+            diameter_scale=max(0.12, scale)
+        ):
+            return
+
         eased = progress * progress * progress * (
             progress * (progress * 6.0 - 15.0) + 10.0
         )
@@ -178,9 +193,23 @@ class GameplayEffectsRenderer:
             1.0,
             explosion_elapsed / self.scene.hit_explosion_duration
         )
-        expansion_factor = 1.0 + (explosion_progress * 0.4)
+        base_radius = max(
+            1,
+            float(getattr(self.scene, "note_visual_radius", radius))
+        )
+        eased = 1.0 - ((1.0 - explosion_progress) ** 3)
+        expansion_factor = (radius / base_radius) * (1.0 + eased * 0.34)
+        explosion_alpha = int(alpha * ((1.0 - explosion_progress) ** 0.78))
+        if self.scene._draw_hitcircle_skin(
+            target,
+            center,
+            color,
+            alpha=explosion_alpha,
+            diameter_scale=expansion_factor
+        ):
+            return
+
         explosion_radius = int(radius * expansion_factor)
-        explosion_alpha = int(alpha * (1.0 - explosion_progress))
 
         self.scene._draw_aa_circle(
             target,

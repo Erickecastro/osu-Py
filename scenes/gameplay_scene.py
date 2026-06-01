@@ -197,10 +197,10 @@ class GameplayScene(BaseScene):
         # Aproximação do comportamento do osu! para visibilidade:
         # fade-in durante o approach e fade-out logo após o hit.
         self.hit_fade_out_time = 460  # ms
-        self.miss_fade_out_time = 180  # ms
-        self.miss_pop_duration = 112  # ms
-        self.hit_number_fade_out_time = 220  # ms
-        self.hit_explosion_duration = 380  # ms
+        self.miss_fade_out_time = 260  # ms
+        self.miss_pop_duration = 260  # ms
+        self.hit_number_fade_out_time = 120  # ms
+        self.hit_explosion_duration = 360  # ms
 
         self.usable_width = (
             self.playfield_width * self.scale
@@ -407,12 +407,8 @@ class GameplayScene(BaseScene):
 
         if note["type"] == "circle":
             note["fade_out_start"] = self.current_time
-            if result in (50, 100):
-                note["fade_out_duration"] = 1
-                note["end_time"] = self.current_time + 1
-            else:
-                note["fade_out_duration"] = self.hit_number_fade_out_time
-                note["end_time"] = self.current_time + self.hit_number_fade_out_time
+            note["fade_out_duration"] = self.hit_explosion_duration
+            note["end_time"] = self.current_time + self.hit_explosion_duration
 
         self.combo += 1
         self.max_combo = max(self.max_combo, self.combo)
@@ -817,7 +813,7 @@ class GameplayScene(BaseScene):
         duration = (
             self.miss_pop_duration
             if result == 0
-            else self.hit_number_fade_out_time
+            else self.hit_explosion_duration
         )
         progress = self._clamp01(
             elapsed / max(1, duration)
@@ -1099,13 +1095,23 @@ class GameplayScene(BaseScene):
         )
         return True
 
-    def _draw_hitcircle_skin(self, target, center, color, alpha=255):
+    def _draw_hitcircle_skin(
+        self,
+        target,
+        center,
+        color,
+        alpha=255,
+        diameter_scale=1.0
+    ):
         circle = self.skin_images.get("hitcircle")
         overlay = self.skin_images.get("hitcircle_overlay")
         if circle is None or overlay is None:
             return False
 
-        diameter = self.note_visual_radius * 2 * 1.12
+        diameter = max(
+            1,
+            int(round(self.note_visual_radius * 2 * 1.12 * diameter_scale / 2.0)) * 2
+        )
         tinted = self._tinted_image(
             circle,
             color
@@ -1856,7 +1862,7 @@ class GameplayScene(BaseScene):
                 self.score,
                 self._accuracy(),
                 self.combo,
-                self.target_health,
+                self.health,
                 self.hit_error_markers,
                 self.hit_window_300,
                 self.hit_window_100,
@@ -1974,7 +1980,7 @@ class GameplayScene(BaseScene):
                         circle_color,
                         alpha=pop_alpha
                     )
-                elif hit_result == 300:
+                elif hit_result in (50, 100, 300):
                     hit_time = note.get("hit_time", self.current_time)
                     self.effects_renderer.draw_hit_explosion(
                         overlay,
@@ -2104,7 +2110,7 @@ class GameplayScene(BaseScene):
                         note.get("combo_color", (0, 150, 255)),
                         alpha=pop_alpha
                     )
-                elif head_result == 300 and head_alpha > 0:
+                elif head_result in (50, 100, 300) and head_alpha > 0:
                     self.effects_renderer.draw_hit_explosion(
                         overlay,
                         slider_head_pos,

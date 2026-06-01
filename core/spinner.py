@@ -40,7 +40,7 @@ class SpinnerEffects:
         base = Path("assets") / "spinner"
         self.spin_sound = self._load_sound(base / "spinnerspin.wav")
         self.bonus_sound = self._load_sound(base / "spinnerbonus.ogg")
-        self.complete_sound = self._load_sound(base / "normal-hitnormal.wav")
+        self.complete_sound = None
 
     def _load_sound(self, path):
         try:
