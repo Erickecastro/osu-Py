@@ -63,6 +63,13 @@ class SliderRenderer:
         if len(filtered_points) > self.scene.MAX_SLIDER_POINTS:
             filtered_points = filtered_points[::2]
 
+        offset_x, offset_y = note.get("stack_offset", (0.0, 0.0))
+        if offset_x or offset_y:
+            filtered_points = [
+                (point[0] + offset_x, point[1] + offset_y)
+                for point in filtered_points
+            ]
+
         return filtered_points
 
     def path_metrics(self, points):

@@ -220,6 +220,7 @@ class GameplayScene(BaseScene):
         )
         self.overlay_dirty_rect = self._build_overlay_dirty_rect()
         self._precompute_note_positions()
+        self._apply_stack_offsets()
 
         self.music_path = find_audio_file(
             self.beatmap["path"],
@@ -416,6 +417,15 @@ class GameplayScene(BaseScene):
         self.hit_result_indicators.append({
             "result": result,
             "pos": self._note_screen_pos(note),
+            "show_time": self.current_time,
+            "start_time": self.current_time
+        })
+
+    def _add_spinner_bonus_indicator(self, bonus_count, pos):
+        self.hit_result_indicators.append({
+            "result": "spinner_bonus",
+            "bonus_count": bonus_count,
+            "pos": pos,
             "show_time": self.current_time,
             "start_time": self.current_time
         })
@@ -1675,6 +1685,46 @@ class GameplayScene(BaseScene):
                 self.object_offset_y + (note["y"] * self.object_scale)
             )
 
+    def _apply_stack_offsets(self):
+        stackable = {"circle", "slider"}
+        distance_limit = self.scaled_radius * 0.74
+        time_limit = 850
+        offset_step = max(3.0, self.scaled_radius * 0.105)
+
+        for index, note in enumerate(self.notes):
+            note["stack_count"] = 0
+            note["stack_offset"] = (0.0, 0.0)
+            if note["type"] not in stackable:
+                continue
+
+            base_x, base_y = note["scaled_pos"]
+            stack_count = 0
+            lookback = index - 1
+            while lookback >= 0:
+                previous = self.notes[lookback]
+                if note["time"] - previous["time"] > time_limit:
+                    break
+                if previous["type"] in stackable:
+                    px, py = previous["scaled_pos"]
+                    if ((base_x - px) ** 2 + (base_y - py) ** 2) ** 0.5 <= distance_limit:
+                        stack_count = max(
+                            stack_count,
+                            previous.get("stack_count", 0) + 1
+                        )
+                lookback -= 1
+
+            if stack_count <= 0:
+                continue
+
+            stack_count = min(stack_count, 5)
+            note["stack_count"] = stack_count
+            shift = offset_step * stack_count
+            note["stack_offset"] = (-shift, -shift)
+            note["scaled_pos"] = (
+                base_x - shift,
+                base_y - shift
+            )
+
     def _build_overlay_dirty_rect(self):
         margin = int(
             max(
@@ -2162,6 +2212,20 @@ class GameplayScene(BaseScene):
                 y += int(elapsed * 0.03)
 
                 result = indicator.get("result", 0)
+                if result == "spinner_bonus":
+                    text = self.medium_overlay_font.render(
+                        "+1000",
+                        True,
+                        (255, 232, 92)
+                    )
+                    text.set_alpha(alpha)
+                    bonus_y = y - int(elapsed * 0.08)
+                    overlay.blit(
+                        text,
+                        text.get_rect(center=(int(x), int(bonus_y)))
+                    )
+                    continue
+
                 image = self.skin_images.get(
                     "hit100" if result == 100
                     else "hit50" if result == 50

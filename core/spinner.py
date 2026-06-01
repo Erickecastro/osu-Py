@@ -135,13 +135,21 @@ class SpinnerManager:
             if bonus_count > note.get("spinner_bonus_count", 0):
                 note["spinner_bonus_count"] = bonus_count
                 self.scene.score += 1000
+                self.scene._add_spinner_bonus_indicator(
+                    bonus_count,
+                    self.center
+                )
                 self.scene.combo += 1
                 self.scene.max_combo = max(self.scene.max_combo, self.scene.combo)
 
         if current_time < end:
-            base_points = int(note["spinner_rpm"] * dt * 0.34)
-            if base_points > 0:
-                self.scene.score += base_points
+            score_bank = note.get("spinner_score_bank", 0.0)
+            score_bank += note["spinner_rpm"] * dt * 0.42
+            whole_points = int(score_bank)
+            if whole_points > 0:
+                self.scene.score += whole_points
+                score_bank -= whole_points
+            note["spinner_score_bank"] = score_bank
             self.effects.update_sounds(note, current_time)
             return
 
@@ -156,6 +164,7 @@ class SpinnerManager:
         note["spinner_progress"] = 0.0
         note["spinner_visual_angle"] = 0.0
         note["spinner_bonus_count"] = 0
+        note["spinner_score_bank"] = 0.0
         note["spinner_required_rotations"] = self.scoring.required_rotations(note)
 
         dx = mouse_pos[0] - self.center[0]

@@ -55,73 +55,37 @@ class SongCard:
         height = int(scene.card_height * self.scale)
         rect = pygame.Rect(0, 0, width, height)
         rect.center = (int(self.x), int(self.y))
-        layer = pygame.Surface((width + 24, height + 20), pygame.SRCALPHA)
-        body = pygame.Rect(10, 7, width, height)
-        radius = max(12, int(height * 0.26))
+        layer = pygame.Surface((width, height), pygame.SRCALPHA)
+        body = pygame.Rect(0, 0, width, height)
 
-        base_alpha = int(self.alpha * (220 if selected else 150))
-        pygame.draw.rect(
-            layer,
-            (0, 0, 0, int(self.alpha * 92)),
-            body.move(5, 6),
-            border_radius=radius
-        )
+        selected_group = scene.selected_group_key()
+        same_group = meta and meta.get("group") == selected_group
+        is_selected_difficulty = selected and is_difficulty
+        card_alpha = 82
+        tint = None
+        if same_group:
+            card_alpha = 255 if is_group else 248
+            if is_difficulty:
+                tint = (255, 235, 66, 255)
+            if is_selected_difficulty:
+                tint = (255, 250, 118, 255)
+        if selected:
+            card_alpha = 255
 
-        base_color = (35, 32, 70)
-        glow_color = (82, 64, 182)
-        if is_difficulty:
-            base_color = (22, 25, 48)
-            glow_color = (62, 92, 155)
-        pygame.draw.rect(
-            layer,
-            (*base_color, base_alpha),
-            body,
-            border_radius=radius
-        )
-        highlight = pygame.Surface(body.size, pygame.SRCALPHA)
-        pygame.draw.rect(
-            highlight,
-            (*glow_color, int(self.alpha * (118 + self.hover * 54))),
-            highlight.get_rect(),
-            border_radius=radius
-        )
-        mask = pygame.Surface(body.size, pygame.SRCALPHA)
-        pygame.draw.polygon(
-            mask,
-            (255, 255, 255, 255),
-            [
-                (0, 0),
-                (int(width * 0.72), 0),
-                (int(width * 0.56), int(height * 0.62)),
-                (0, int(height * 0.44))
-            ]
-        )
-        highlight.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-        layer.blit(highlight, body.topleft)
-
-        stripe_color = (255, 216, 92) if is_group else (105, 205, 255)
-        stripe_width = max(8, int(width * (0.024 if is_group else 0.017)))
-        stripe_rect = pygame.Rect(body.x, body.y, stripe_width, body.height)
-        pygame.draw.rect(
-            layer,
-            (*stripe_color, int(self.alpha * 205)),
-            stripe_rect,
-            border_radius=radius
-        )
-        pygame.draw.rect(
-            layer,
-            (*stripe_color, int(self.alpha * 205)),
-            pygame.Rect(body.x + stripe_width // 2, body.y, stripe_width, body.height)
-        )
-
-        border = (255, 255, 255, int(self.alpha * (170 if selected else 60)))
-        pygame.draw.rect(
-            layer,
-            border,
-            body,
-            max(2, int(2 * self.scale)),
-            border_radius=radius
-        )
+        base_image = scene.card_background_surface(body.size)
+        if base_image is None:
+            base_image = pygame.Surface(body.size, pygame.SRCALPHA)
+            base_image.fill((72, 92, 160, 255))
+        if tint is not None:
+            base_image.fill(tint, special_flags=pygame.BLEND_RGBA_MULT)
+        if not same_group:
+            base_image.fill((66, 66, 78, 255), special_flags=pygame.BLEND_RGBA_MULT)
+        if selected and not is_difficulty:
+            base_image.fill((150, 170, 255, 255), special_flags=pygame.BLEND_RGBA_ADD)
+        if is_selected_difficulty:
+            base_image.fill((70, 58, 0, 255), special_flags=pygame.BLEND_RGBA_ADD)
+        base_image.set_alpha(int(self.alpha * card_alpha))
+        layer.blit(base_image, body.topleft)
 
         title = scene.card_title_font.render(self.info.title, True, (255, 255, 255))
         artist = scene.card_small_font.render(self.info.artist, True, (230, 230, 240))
@@ -131,7 +95,10 @@ class SongCard:
         else:
             prefix = "   DIFFICULTY  |  " if is_difficulty else ""
             version_text = f"{prefix}{self.info.version}  {self.info.stars:.2f}*"
-        version = scene.card_small_font.render(version_text, True, (255, 232, 130))
+        version_color = (255, 250, 145) if same_group else (215, 205, 170)
+        if is_selected_difficulty:
+            version_color = (255, 255, 210)
+        version = scene.card_small_font.render(version_text, True, version_color)
         stats = scene.card_tiny_font.render(f"BPM {self.info.bpm_text}  {self.info.length_text}", True, (220, 220, 230))
         for surf, alpha in (
             (title, int(self.alpha * 255)),
@@ -141,13 +108,13 @@ class SongCard:
         ):
             surf.set_alpha(alpha)
 
-        text_x = body.left + int(width * (0.12 if is_difficulty else 0.08))
+        text_x = body.left + int(width * (0.10 if is_difficulty else 0.07))
         layer.blit(title, (text_x, body.top + int(height * 0.16)))
         layer.blit(artist, (text_x, body.top + int(height * 0.46)))
         layer.blit(version, (text_x, body.top + int(height * 0.66)))
         layer.blit(stats, (text_x, body.top + int(height * 0.82)))
 
-        screen.blit(layer, (rect.x - 10, rect.y - 7))
+        screen.blit(layer, rect)
 
 
 class SongCarousel:
@@ -198,6 +165,8 @@ class SongSelectScene(BaseScene):
         self.pending_play_elapsed = 0.0
         self.pending_play_duration = 0.22
         self.current_preview_path = None
+        self.card_base_image = self._load_card_base_image()
+        self.card_image_cache = {}
         self._layout()
         self._apply_filter()
         initial_index = self._index_for_music_path(self.initial_music_path)
@@ -225,6 +194,31 @@ class SongSelectScene(BaseScene):
         self.card_small_font = pygame.font.SysFont("arial", max(14, h // 58))
         self.card_tiny_font = pygame.font.SysFont("arial", max(12, h // 72))
 
+    def _load_card_base_image(self):
+        path = Path("assets") / "songselect_cards" / "menu-button-background.png"
+        try:
+            return pygame.image.load(str(path)).convert_alpha()
+        except pygame.error:
+            return None
+
+    def card_background_surface(self, size):
+        if self.card_base_image is None:
+            return None
+        key = tuple(size)
+        cached = self.card_image_cache.get(key)
+        if cached is None:
+            cached = pygame.transform.smoothscale(
+                self.card_base_image,
+                key
+            ).convert_alpha()
+            self.card_image_cache[key] = cached
+        return cached.copy()
+
+    def selected_group_key(self):
+        if not self.items:
+            return None
+        return self.items[self.selected_index].get("group")
+
     def create_ui(self):
         self._layout()
 
@@ -234,6 +228,7 @@ class SongSelectScene(BaseScene):
         self.current_background = None
         self.previous_background = None
         self.current_background_key = None
+        self.card_image_cache.clear()
 
     def handle_event(self, event):
         if self.pending_play_info is not None:
@@ -355,7 +350,10 @@ class SongSelectScene(BaseScene):
             else:
                 self.expanded_groups.add(group)
             self._rebuild_items()
-            self.browse_index = min(index, len(self.items) - 1)
+            self.selected_index = min(index, len(self.items) - 1)
+            self.browse_index = self.selected_index
+            self._ensure_background(self.items[self.selected_index]["info"])
+            self._start_preview_music(self.items[self.selected_index]["info"])
             return
 
         self.selected_index = index

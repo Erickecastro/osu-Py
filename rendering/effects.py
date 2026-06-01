@@ -29,7 +29,7 @@ class GameplayEffectsRenderer:
     def combo_number_image(self, text):
         digits = self.scene.skin_images.get("combo_digits", {})
         parts = [
-            digits.get(ch)
+            self.scene._cropped_alpha_image(digits.get(ch))
             for ch in text
         ]
         if not parts or any(part is None for part in parts):
@@ -41,16 +41,20 @@ class GameplayEffectsRenderer:
             return cached
 
         height = max(part.get_height() for part in parts)
-        width = sum(part.get_width() for part in parts)
+        spacing = -max(1, int(height * 0.13))
+        width = (
+            sum(part.get_width() for part in parts)
+            + spacing * max(0, len(parts) - 1)
+        )
         surface = pygame.Surface(
-            (width, height),
+            (max(1, width), height),
             pygame.SRCALPHA
         )
         x = 0
         for part in parts:
             y = (height - part.get_height()) // 2
             surface.blit(part, (x, y))
-            x += part.get_width()
+            x += part.get_width() + spacing
 
         self.combo_number_surface_cache[key] = surface
         return surface
@@ -64,7 +68,7 @@ class GameplayEffectsRenderer:
     ):
         image = self.combo_number_image(text)
         if image is not None:
-            height = max(1, int(self.scene.scaled_radius * 0.87))
+            height = max(1, int(self.scene.scaled_radius * 0.565))
             width = max(
                 1,
                 int(image.get_width() * (height / image.get_height()))
