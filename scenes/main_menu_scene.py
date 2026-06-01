@@ -646,6 +646,7 @@ class MainMenuScene(BaseScene):
         self.menu_t = 0.0
         self.light_overlay = False
         self.music_started = False
+        self.keep_music_on_destroy = False
         self.music_path = None
         self.music_title = "simulated pulse"
         self.music_bpm = 118.0
@@ -835,13 +836,18 @@ class MainMenuScene(BaseScene):
         self._draw_footer(screen)
 
     def destroy(self):
-        if self.music_started:
+        if self.music_started and not self.keep_music_on_destroy:
             pygame.mixer.music.stop()
             self.music_started = False
+        self.keep_music_on_destroy = False
 
     def _open_song_select(self):
+        self.keep_music_on_destroy = True
         self.game.scene_manager.push_scene(
-            SongSelectScene(self.game)
+            SongSelectScene(
+                self.game,
+                initial_music_path=str(self.music_path) if self.music_path else None
+            )
         )
 
     def _toggle_overlay_mode(self):

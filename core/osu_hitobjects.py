@@ -93,6 +93,25 @@ def parse_hitobjects_section(lines, generate_slider_path):
                 "combo_offset": parse_combo_offset(object_type),
                 "active": False
             })
+            continue
+
+        if object_type & 8:
+            try:
+                end_time = int(parts[5])
+            except (IndexError, ValueError):
+                continue
+
+            notes.append({
+                "type": "spinner",
+                "x": 256,
+                "y": 192,
+                "time": time,
+                "end_time": max(time, end_time),
+                "spinner_duration": max(0, end_time - time),
+                "new_combo": bool(object_type & 4),
+                "combo_offset": parse_combo_offset(object_type),
+                "active": False
+            })
 
     notes.sort(
         key=lambda note: note["time"]

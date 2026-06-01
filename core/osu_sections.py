@@ -46,6 +46,29 @@ def parse_metadata_section(lines):
     return metadata
 
 
+def parse_general_section(lines):
+    general = {
+        "AudioFilename": "",
+        "AudioLeadIn": 0
+    }
+
+    for line in section_lines(lines, "General"):
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        if key == "AudioLeadIn":
+            try:
+                general[key] = int(float(value))
+            except ValueError:
+                general[key] = 0
+        else:
+            general[key] = value
+
+    return general
+
+
 def parse_timing_points_section(lines):
     timing_points = []
 

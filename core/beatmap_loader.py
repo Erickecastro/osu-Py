@@ -6,6 +6,7 @@ from core.osu_sections import (
     parse_background_event,
     parse_colours_section,
     parse_difficulty_section,
+    parse_general_section,
     parse_metadata_section,
     parse_timing_points_section,
     read_osu_lines
@@ -62,6 +63,7 @@ class BeatmapLoader:
     def load_difficulty(self, path, folder, osu_file):
         lines = read_osu_lines(osu_file)
         metadata = parse_metadata_section(lines)
+        general = parse_general_section(lines)
         return {
             "name": folder,
             "display_name": self.display_name_from_metadata(
@@ -75,6 +77,9 @@ class BeatmapLoader:
                 self.generate_slider_path
             ),
             "metadata": metadata,
+            "general": general,
+            "audio_filename": general.get("AudioFilename", ""),
+            "audio_lead_in": general.get("AudioLeadIn", 0),
             "difficulty": parse_difficulty_section(lines),
             "timing_points": parse_timing_points_section(lines),
             "combo_colors": parse_colours_section(lines),

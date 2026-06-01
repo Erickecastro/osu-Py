@@ -20,6 +20,7 @@ from core.gameplay_state import (
     judge_missed_notes,
     prune_inactive_notes
 )
+from core.spinner import SpinnerManager
 from rendering.cursor import CursorRenderer
 from rendering.effects import GameplayEffectsRenderer
 from rendering.hud import GameplayHUDRenderer
@@ -30,6 +31,7 @@ from rendering.primitives import (
     draw_centered_text
 )
 from rendering.sliders import SliderRenderer
+from rendering.spinner import SpinnerRenderer
 
 
 class GameplayScene(BaseScene):
@@ -165,15 +167,16 @@ class GameplayScene(BaseScene):
             * self.object_size_multiplier
         )
 
-        self.scaled_radius = int(
-            self.slider_base_radius
-            * 1.1865
-        )
-
-        if self.scaled_radius < 40:
-            self.scaled_radius = 40
         if self.slider_base_radius < 40:
             self.slider_base_radius = 40
+
+        self.slider_path_radius = int(
+            self.slider_base_radius * 1.22
+        )
+        if self.slider_path_radius < 40:
+            self.slider_path_radius = 40
+
+        self.scaled_radius = int(self.slider_path_radius)
 
         self.followpoint_visual_radius = self.scaled_radius / 1.03
 
@@ -181,9 +184,6 @@ class GameplayScene(BaseScene):
             self.scaled_radius
         )
 
-        self.slider_path_radius = int(
-            self.slider_base_radius * 1.22
-        )
         self.slider_follow_radius = self.scaled_radius * 1.89
 
         self.safe_margin = (
@@ -222,8 +222,10 @@ class GameplayScene(BaseScene):
         self._precompute_note_positions()
 
         self.music_path = find_audio_file(
-            self.beatmap["path"]
+            self.beatmap["path"],
+            self.beatmap.get("audio_filename")
         )
+        self.audio_lead_in = int(self.beatmap.get("audio_lead_in", 0) or 0)
         self._load_background_surface()
         self._scaled_background(
             (self.game.WIDTH, self.game.HEIGHT)
@@ -304,6 +306,18 @@ class GameplayScene(BaseScene):
         self.input_controller = GameplayInputController(self)
         self.miss_indicator_delay = 25  # ms before the X appears
         self.miss_indicator_duration = 520  # ms X stays visible
+        self.paused = False
+        self.failed = False
+        self.fail_time = None
+        self.pause_started_at = None
+        self.intro_skip_ms = self._calculate_intro_skip_ms()
+        self.intro_skip_used = False
+        self.skip_button_rect = None
+        self.title_overlay_font = pygame.font.SysFont("arial", 54, bold=True)
+        self.medium_overlay_font = pygame.font.SysFont("arial", 28, bold=True)
+        self.small_overlay_font = pygame.font.SysFont("arial", 18)
+        self.spinner_manager = SpinnerManager(self)
+        self.spinner_renderer = SpinnerRenderer(self)
 
     def _accuracy(self):
         return calculate_accuracy(
@@ -324,6 +338,24 @@ class GameplayScene(BaseScene):
             return
 
         self.pre_music_lead_in_ms = minimum_lead_in - first_note_time
+
+    def _calculate_intro_skip_ms(self):
+        if not self.notes:
+            return 0
+
+        first_note = self.notes[0]
+        first_time = first_note["time"]
+        if first_time < 5000:
+            return 0
+
+        first_visible_time = first_note.get(
+            "start_time",
+            first_time - self.approach_time
+        )
+        skip_to = max(0, int(first_visible_time - 350))
+        if skip_to < 1200:
+            return 0
+        return skip_to
 
     def _add_hit_result(self, note, result):
         note["judged"] = True
@@ -395,6 +427,36 @@ class GameplayScene(BaseScene):
             self.hp
         )
 
+    def _finish_spinner(self, note, result):
+        if note.get("judged"):
+            return
+
+        note["judged"] = True
+        note["hit_result"] = result
+        note["hit_time"] = self.current_time
+        note["fade_out_start"] = self.current_time
+        note["fade_out_duration"] = 1
+        note["end_time"] = self.current_time
+        self.judged_objects += 1
+        self.hit_counts[result] += 1
+        self._update_health_target(result)
+
+        if result == 0:
+            self.combo = 0
+            self._add_miss_indicator(
+                (
+                    self.game.WIDTH // 2,
+                    self.game.HEIGHT // 2
+                ),
+                show_time=self.current_time + self.miss_indicator_delay
+            )
+            return
+
+        self.combo += 1
+        self.max_combo = max(self.max_combo, self.combo)
+        bonus = note.get("spinner_bonus_count", 0) * 1000
+        self.score += result + bonus
+
     def _hit_result_for_delta(self, delta):
         if delta < -self.hit_window_50:
             early_delta = abs(delta)
@@ -436,6 +498,8 @@ class GameplayScene(BaseScene):
             return not note.get("judged")
 
         if note["type"] != "slider":
+            if note["type"] == "spinner":
+                return not note.get("judged")
             return False
 
         if note.get("head_hit"):
@@ -587,6 +651,19 @@ class GameplayScene(BaseScene):
                     hit_time + note.get("slider_total_duration", 0.0)
                 )
                 fade_out_duration = self.hit_fade_out_time
+        elif note["type"] == "spinner":
+            hit_time = note.get("spinner_start_time", note["time"])
+            alpha_in = self._ease_out_cubic(
+                (self.current_time - hit_time) / 240.0
+            )
+            fade_out_start = note.get(
+                "fade_out_start",
+                note.get("spinner_end_time", hit_time)
+            )
+            fade_out_duration = note.get(
+                "fade_out_duration",
+                self.hit_fade_out_time
+            )
         else:
             fade_out_start = note.get("fade_out_start")
             if fade_out_start is None and note.get("hit_result") is None:
@@ -1074,6 +1151,8 @@ class GameplayScene(BaseScene):
         for index in range(start_index, end_index):
             note = self.notes[index]
             next_note = self.notes[index + 1]
+            if note["type"] == "spinner" or next_note["type"] == "spinner":
+                continue
             if next_note.get("new_combo"):
                 continue
 
@@ -1384,7 +1463,95 @@ class GameplayScene(BaseScene):
         surface, position = background
         screen.blit(surface, position)
 
+    def _toggle_pause(self):
+        if self.failed:
+            return
+
+        now = pygame.time.get_ticks()
+        if not self.paused:
+            self.paused = True
+            self.pause_started_at = now
+            if self.music_started:
+                pygame.mixer.music.pause()
+            return
+
+        paused_duration = now - (self.pause_started_at or now)
+        self.paused = False
+        self.pause_started_at = None
+        if self.start_time is not None:
+            self.start_time += paused_duration
+        if self.pre_music_started_at is not None:
+            self.pre_music_started_at += paused_duration
+        self.ready_start_time += paused_duration
+        if self.music_started:
+            pygame.mixer.music.unpause()
+
+    def _skip_intro(self):
+        if (
+            self.intro_skip_used
+            or self.intro_skip_ms <= 0
+            or not self.music_started
+            or self.current_time >= self.intro_skip_ms
+        ):
+            return
+
+        new_start = start_music(
+            self.music_path,
+            self.intro_skip_ms
+        )
+        if new_start is None:
+            return
+
+        self.start_time = new_start
+        self.current_time = pygame.time.get_ticks() - self.start_time
+        self.next_note_index = 0
+        self.active_notes.clear()
+        self.intro_skip_used = True
+
+    def _fail(self):
+        if self.failed:
+            return
+        self.failed = True
+        self.paused = False
+        self.fail_time = pygame.time.get_ticks()
+        pygame.mixer.music.stop()
+        pygame.mouse.set_visible(True)
+
     def handle_event(self, event):
+        if event.type == pygame.KEYDOWN:
+            if self.failed:
+                if event.key == pygame.K_ESCAPE:
+                    self.game.scene_manager.pop_scene()
+                    return
+                if event.key == pygame.K_r:
+                    self.game.scene_manager.set_scene(
+                        GameplayScene(self.game, self.beatmap)
+                    )
+                    return
+
+            if event.key in (pygame.K_ESCAPE, pygame.K_p):
+                self._toggle_pause()
+                return
+
+            if self.paused:
+                if event.key in (pygame.K_BACKSPACE, pygame.K_RETURN):
+                    self.game.scene_manager.pop_scene()
+                    return
+                return
+
+            if event.key == pygame.K_SPACE:
+                self._skip_intro()
+                return
+
+        if (
+            event.type == pygame.MOUSEBUTTONDOWN
+            and event.button == 1
+            and self.skip_button_rect is not None
+            and self.skip_button_rect.collidepoint(event.pos)
+        ):
+            self._skip_intro()
+            return
+
         self.input_controller.handle_event(event)
 
     def update(self, dt):
@@ -1392,6 +1559,9 @@ class GameplayScene(BaseScene):
             dt,
             self.game.mouse_pos
         )
+
+        if self.failed or self.paused:
+            return
 
         if not self.music_started:
             ready_elapsed = (
@@ -1449,6 +1619,10 @@ class GameplayScene(BaseScene):
             self.target_health - self.health
         ) * health_speed
 
+        if self.health <= 0.001:
+            self._fail()
+            return
+
         self.next_note_index = activate_due_notes(
             self.notes,
             self.active_notes,
@@ -1463,6 +1637,15 @@ class GameplayScene(BaseScene):
             self.hit_window_50,
             self._add_hit_result
         )
+
+        for note in self.active_notes:
+            if note["type"] == "spinner":
+                self.spinner_manager.update(
+                    note,
+                    self.current_time,
+                    dt,
+                    self.game.mouse_pos
+                )
 
         self.active_notes = prune_inactive_notes(
             self.active_notes,
@@ -1530,6 +1713,8 @@ class GameplayScene(BaseScene):
         if not self.music_started and self.pre_music_started_at is None:
             self._render_ready(screen)
             self.cursor_renderer.draw(screen, self.game.mouse_pos)
+            if self.paused:
+                self._draw_pause_overlay(screen)
             return
 
         if self.music_started:
@@ -1570,10 +1755,16 @@ class GameplayScene(BaseScene):
 
         for note in self.active_notes:
 
+            if note["type"] == "spinner":
+                self.spinner_renderer.draw(overlay, note)
+                continue
+
             scaled_x, scaled_y = self._note_screen_pos(note)
             shake_x, shake_y = self._notelock_shake_offset(note)
             scaled_x += shake_x
             scaled_y += shake_y
+            fail_offset_y, fail_alpha_factor = self._fail_object_motion()
+            scaled_y += fail_offset_y
 
             time_left = (
                 note["time"]
@@ -1590,6 +1781,7 @@ class GameplayScene(BaseScene):
             )
 
             alpha = self._note_alpha(note)
+            alpha = int(alpha * fail_alpha_factor)
             slider_ball_alpha = 0
             slider_track_alpha = alpha
             if note["type"] == "slider":
@@ -1721,6 +1913,13 @@ class GameplayScene(BaseScene):
                 else:
                     render_slider_points = slider_points
                     slider_cache_key = note.get("render_index")
+
+                if fail_offset_y:
+                    render_slider_points = [
+                        (x, y + fail_offset_y)
+                        for x, y in render_slider_points
+                    ]
+                    slider_cache_key = None
 
                 self.slider_renderer.draw(
                     overlay,
@@ -2004,6 +2203,126 @@ class GameplayScene(BaseScene):
         )
 
         self.cursor_renderer.draw(screen, self.game.mouse_pos)
+        self._draw_skip_button(screen)
+        if self.paused:
+            self._draw_pause_overlay(screen)
+        elif self.failed:
+            self._draw_lose_overlay(screen)
+
+    def _fail_object_motion(self):
+        if not self.failed or self.fail_time is None:
+            return 0, 1.0
+
+        elapsed = pygame.time.get_ticks() - self.fail_time
+        progress = self._clamp01(elapsed / 1650.0)
+        eased = progress * progress * (3.0 - 2.0 * progress)
+        fall = int((self.game.HEIGHT * 0.28) * eased)
+        alpha = 1.0 - (progress * 0.72)
+        return fall, max(0.20, alpha)
+
+    def _draw_skip_button(self, screen):
+        self.skip_button_rect = None
+        if (
+            self.intro_skip_used
+            or self.intro_skip_ms <= 0
+            or not self.music_started
+            or self.current_time >= self.intro_skip_ms
+            or self.paused
+            or self.failed
+        ):
+            return
+
+        text = self.small_overlay_font.render("skip intro", True, (245, 248, 255))
+        pad_x = 14
+        pad_y = 8
+        rect = pygame.Rect(
+            0,
+            0,
+            text.get_width() + pad_x * 2,
+            text.get_height() + pad_y * 2
+        )
+        rect.midbottom = (
+            self.game.WIDTH // 2,
+            self.game.HEIGHT - 28
+        )
+        self.skip_button_rect = rect
+        surface = pygame.Surface(rect.size, pygame.SRCALPHA)
+        pygame.draw.rect(
+            surface,
+            (18, 18, 28, 130),
+            surface.get_rect(),
+            border_radius=rect.height // 2
+        )
+        pygame.draw.rect(
+            surface,
+            (255, 255, 255, 92),
+            surface.get_rect(),
+            1,
+            border_radius=rect.height // 2
+        )
+        surface.blit(text, (pad_x, pad_y))
+        screen.blit(surface, rect)
+
+    def _draw_center_overlay(self, screen, title, subtitle, accent):
+        shade = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        alpha = 178
+        overlay_factor = 1.0
+        if self.failed and self.fail_time is not None:
+            overlay_factor = self._clamp01(
+                (pygame.time.get_ticks() - self.fail_time) / 520.0
+            )
+            alpha = int(178 * overlay_factor)
+        shade.fill((0, 0, 0, alpha))
+        screen.blit(shade, (0, 0))
+
+        panel_w = int(min(screen.get_width() * 0.52, 640))
+        panel_h = int(min(screen.get_height() * 0.30, 230))
+        panel = pygame.Rect(0, 0, panel_w, panel_h)
+        panel.center = (screen.get_width() // 2, screen.get_height() // 2)
+        panel_surface = pygame.Surface(panel.size, pygame.SRCALPHA)
+        pygame.draw.rect(
+            panel_surface,
+            (16, 15, 30, int(232 * overlay_factor)),
+            panel_surface.get_rect(),
+            border_radius=14
+        )
+        pygame.draw.rect(
+            panel_surface,
+            (*accent[:3], int(255 * overlay_factor)),
+            panel_surface.get_rect(),
+            3,
+            border_radius=14
+        )
+
+        title_surface = self.title_overlay_font.render(title, True, (255, 255, 255))
+        subtitle_surface = self.small_overlay_font.render(subtitle, True, (230, 235, 250))
+        title_surface.set_alpha(int(255 * overlay_factor))
+        subtitle_surface.set_alpha(int(255 * overlay_factor))
+        panel_surface.blit(
+            title_surface,
+            title_surface.get_rect(center=(panel_w // 2, int(panel_h * 0.38)))
+        )
+        panel_surface.blit(
+            subtitle_surface,
+            subtitle_surface.get_rect(center=(panel_w // 2, int(panel_h * 0.66)))
+        )
+        screen.blit(panel_surface, panel)
+
+    def _draw_pause_overlay(self, screen):
+        self._draw_center_overlay(
+            screen,
+            "PAUSE",
+            "ESC/P: resume   Enter/Backspace: song select",
+            (120, 170, 255)
+        )
+
+    def _draw_lose_overlay(self, screen):
+        self._draw_center_overlay(
+            screen,
+            "FAILED",
+            "R: retry   ESC: back to song select",
+            (255, 92, 116)
+        )
 
     def _render_ready(self, screen):
         pygame.draw.rect(

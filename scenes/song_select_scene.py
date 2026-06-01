@@ -44,41 +44,94 @@ class SongCard:
             1.0 - math.exp(-dt * 18.0)
         )
 
-    def draw(self, screen, scene, selected=False):
+    def draw(self, screen, scene, selected=False, meta=None):
         if self.alpha <= 0.02:
             return
 
-        width = int(scene.card_width * self.scale)
+        is_difficulty = meta and meta.get("type") == "difficulty"
+        is_group = meta and meta.get("type") == "group"
+        width_factor = 0.88 if is_difficulty else 1.0
+        width = int(scene.card_width * self.scale * width_factor)
         height = int(scene.card_height * self.scale)
         rect = pygame.Rect(0, 0, width, height)
         rect.center = (int(self.x), int(self.y))
-        layer = pygame.Surface((width + 22, height + 18), pygame.SRCALPHA)
+        layer = pygame.Surface((width + 24, height + 20), pygame.SRCALPHA)
         body = pygame.Rect(10, 7, width, height)
-        slant = int(height * 0.18)
-        points = [
-            (body.left + slant, body.top),
-            (body.right, body.top),
-            (body.right - slant, body.bottom),
-            (body.left, body.bottom)
-        ]
+        radius = max(12, int(height * 0.26))
 
         base_alpha = int(self.alpha * (220 if selected else 150))
-        pygame.draw.polygon(layer, (0, 0, 0, int(self.alpha * 95)), [(x + 5, y + 5) for x, y in points])
+        pygame.draw.rect(
+            layer,
+            (0, 0, 0, int(self.alpha * 92)),
+            body.move(5, 6),
+            border_radius=radius
+        )
 
-        pygame.draw.polygon(layer, (35, 32, 70, base_alpha), points)
-        pygame.draw.polygon(layer, (82, 64, 182, int(self.alpha * (145 + self.hover * 45))), [
-            points[0],
-            points[1],
-            (body.right - int(slant * 0.5), body.top + int(height * 0.48)),
-            (body.left + int(slant * 0.45), body.top + int(height * 0.36))
-        ])
+        base_color = (35, 32, 70)
+        glow_color = (82, 64, 182)
+        if is_difficulty:
+            base_color = (22, 25, 48)
+            glow_color = (62, 92, 155)
+        pygame.draw.rect(
+            layer,
+            (*base_color, base_alpha),
+            body,
+            border_radius=radius
+        )
+        highlight = pygame.Surface(body.size, pygame.SRCALPHA)
+        pygame.draw.rect(
+            highlight,
+            (*glow_color, int(self.alpha * (118 + self.hover * 54))),
+            highlight.get_rect(),
+            border_radius=radius
+        )
+        mask = pygame.Surface(body.size, pygame.SRCALPHA)
+        pygame.draw.polygon(
+            mask,
+            (255, 255, 255, 255),
+            [
+                (0, 0),
+                (int(width * 0.72), 0),
+                (int(width * 0.56), int(height * 0.62)),
+                (0, int(height * 0.44))
+            ]
+        )
+        highlight.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+        layer.blit(highlight, body.topleft)
+
+        stripe_color = (255, 216, 92) if is_group else (105, 205, 255)
+        stripe_width = max(8, int(width * (0.024 if is_group else 0.017)))
+        stripe_rect = pygame.Rect(body.x, body.y, stripe_width, body.height)
+        pygame.draw.rect(
+            layer,
+            (*stripe_color, int(self.alpha * 205)),
+            stripe_rect,
+            border_radius=radius
+        )
+        pygame.draw.rect(
+            layer,
+            (*stripe_color, int(self.alpha * 205)),
+            pygame.Rect(body.x + stripe_width // 2, body.y, stripe_width, body.height)
+        )
 
         border = (255, 255, 255, int(self.alpha * (170 if selected else 60)))
-        pygame.draw.lines(layer, border, True, points, max(2, int(2 * self.scale)))
+        pygame.draw.rect(
+            layer,
+            border,
+            body,
+            max(2, int(2 * self.scale)),
+            border_radius=radius
+        )
 
         title = scene.card_title_font.render(self.info.title, True, (255, 255, 255))
         artist = scene.card_small_font.render(self.info.artist, True, (230, 230, 240))
-        version = scene.card_small_font.render(f"{self.info.version}  {self.info.stars:.2f}*", True, (255, 232, 130))
+        if meta and meta.get("type") == "group" and meta.get("count", 1) > 1:
+            marker = "EXPANDED" if meta.get("group") in scene.expanded_groups else "CLICK TO EXPAND"
+            version_text = f"BEATMAP GROUP  |  {meta['count']} DIFFICULTIES  |  {marker}"
+        else:
+            prefix = "   DIFFICULTY  |  " if is_difficulty else ""
+            version_text = f"{prefix}{self.info.version}  {self.info.stars:.2f}*"
+        version = scene.card_small_font.render(version_text, True, (255, 232, 130))
         stats = scene.card_tiny_font.render(f"BPM {self.info.bpm_text}  {self.info.length_text}", True, (220, 220, 230))
         for surf, alpha in (
             (title, int(self.alpha * 255)),
@@ -88,7 +141,7 @@ class SongCard:
         ):
             surf.set_alpha(alpha)
 
-        text_x = body.left + int(width * 0.08)
+        text_x = body.left + int(width * (0.12 if is_difficulty else 0.08))
         layer.blit(title, (text_x, body.top + int(height * 0.16)))
         layer.blit(artist, (text_x, body.top + int(height * 0.46)))
         layer.blit(version, (text_x, body.top + int(height * 0.66)))
@@ -101,14 +154,15 @@ class SongCarousel:
     def __init__(self):
         self.cards = {}
 
-    def card_for(self, info):
-        key = info.osu_file
+    def card_for(self, key, info):
         if key not in self.cards:
             self.cards[key] = SongCard(info)
+        else:
+            self.cards[key].info = info
         return self.cards[key]
 
     def trim(self, visible_infos):
-        visible = {info.osu_file for _, info in visible_infos}
+        visible = {key for key, _, _ in visible_infos}
         for key in list(self.cards):
             if key not in visible:
                 del self.cards[key]
@@ -119,10 +173,13 @@ class SongSelectScene(BaseScene):
 
     SORT_MODES = ("Title", "Artist", "BPM", "Stars", "Date", "Difficulty")
 
-    def __init__(self, game):
+    def __init__(self, game, initial_music_path=None):
         super().__init__(game)
+        self.initial_music_path = str(initial_music_path) if initial_music_path else None
         self.infos = BeatmapParser.from_loaded_beatmaps(self.game.beatmaps)
         self.filtered = list(self.infos)
+        self.items = []
+        self.expanded_groups = set()
         self.score_manager = LocalScoreManager()
         self.carousel = SongCarousel()
         self.selected_index = 0
@@ -136,9 +193,17 @@ class SongSelectScene(BaseScene):
         self.previous_background = None
         self.background_t = 1.0
         self.time = 0.0
+        self.preview_volume = 0.48
+        self.pending_play_info = None
+        self.pending_play_elapsed = 0.0
+        self.pending_play_duration = 0.22
+        self.current_preview_path = None
         self._layout()
         self._apply_filter()
-        self._confirm_selection(0, play_preview=True)
+        initial_index = self._index_for_music_path(self.initial_music_path)
+        if not self.initial_music_path:
+            initial_index = self._first_playable_index(initial_index)
+        self._confirm_selection(initial_index, play_preview=self.initial_music_path is None)
         pygame.mouse.set_visible(True)
         if hasattr(self.game, "disable_raw_mouse"):
             self.game.disable_raw_mouse()
@@ -171,6 +236,9 @@ class SongSelectScene(BaseScene):
         self.current_background_key = None
 
     def handle_event(self, event):
+        if self.pending_play_info is not None:
+            return
+
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 if self.search_active and self.search_text:
@@ -214,27 +282,48 @@ class SongSelectScene(BaseScene):
                 return
             clicked = self._card_index_at(event.pos)
             if clicked is not None:
-                if clicked == self.selected_index:
+                item = self.items[clicked]
+                if item["type"] == "group" and item["count"] > 1:
+                    self._confirm_selection(clicked, play_preview=False)
+                elif clicked == self.selected_index:
                     self._play_selected()
                 else:
                     self._confirm_selection(clicked, play_preview=True)
 
     def update(self, dt):
         self.time += min(dt, 1.0 / 20.0)
-        if not self.filtered:
+        if self.pending_play_info is not None:
+            self.pending_play_elapsed += dt
+            progress = clamp(
+                self.pending_play_elapsed / self.pending_play_duration,
+                0.0,
+                1.0
+            )
+            pygame.mixer.music.set_volume(self.preview_volume * (1.0 - progress) ** 2)
+            if progress >= 1.0:
+                info = self.pending_play_info
+                self.pending_play_info = None
+                pygame.mixer.music.stop()
+                pygame.mixer.music.set_volume(self.preview_volume)
+                self.game.scene_manager.push_scene(
+                    GameplayScene(self.game, info.difficulty_data)
+                )
+                return
+
+        if not self.items:
             return
 
-        self.selected_index = max(0, min(self.selected_index, len(self.filtered) - 1))
-        self.browse_index = max(0, min(self.browse_index, len(self.filtered) - 1))
-        selected = self.filtered[self.selected_index]
+        self.selected_index = max(0, min(self.selected_index, len(self.items) - 1))
+        self.browse_index = max(0, min(self.browse_index, len(self.items) - 1))
+        selected = self.items[self.selected_index]["info"]
         self._ensure_background(selected)
         self.background_t = min(1.0, self.background_t + dt * 3.0)
 
         visible = self._visible_infos()
         self.carousel.trim(visible)
         mouse_pos = self.game.mouse_pos
-        for index, info in visible:
-            card = self.carousel.card_for(info)
+        for key, index, info in visible:
+            card = self.carousel.card_for(key, info)
             card.update(dt, self._target_for_index(index), mouse_pos)
 
     def render(self, screen):
@@ -246,39 +335,94 @@ class SongSelectScene(BaseScene):
         self._draw_bottom_bar(screen)
 
     def destroy(self):
-        pygame.mixer.music.stop()
+        pass
 
     def _move_browse(self, amount):
-        if not self.filtered:
+        if not self.items:
             return
-        self.browse_index = int(clamp(self.browse_index + amount, 0, len(self.filtered) - 1))
+        self.browse_index = int(clamp(self.browse_index + amount, 0, len(self.items) - 1))
 
     def _confirm_selection(self, index, play_preview=False):
-        if not self.filtered:
+        if not self.items:
             return
-        self.selected_index = int(clamp(index, 0, len(self.filtered) - 1))
+        index = int(clamp(index, 0, len(self.items) - 1))
+        item = self.items[index]
+
+        if item["type"] == "group" and item["count"] > 1:
+            group = item["group"]
+            if group in self.expanded_groups:
+                self.expanded_groups.remove(group)
+            else:
+                self.expanded_groups.add(group)
+            self._rebuild_items()
+            self.browse_index = min(index, len(self.items) - 1)
+            return
+
+        self.selected_index = index
         self.browse_index = self.selected_index
-        self._ensure_background(self.filtered[self.selected_index])
+        self._ensure_background(self.items[self.selected_index]["info"])
         if play_preview:
-            self._start_preview_music(self.filtered[self.selected_index])
+            self._start_preview_music(self.items[self.selected_index]["info"])
 
     def _start_preview_music(self, info):
-        music_path = find_audio_file(info.folder_path)
+        music_path = find_audio_file(
+            info.folder_path,
+            info.difficulty_data.get("audio_filename")
+        )
         if not music_path:
+            return
+        if self.initial_music_path and Path(music_path) == Path(self.initial_music_path):
+            self.current_preview_path = str(Path(music_path))
+            self.initial_music_path = None
+            return
+        normalized = str(Path(music_path))
+        if self.current_preview_path == normalized and pygame.mixer.music.get_busy():
             return
         try:
             pygame.mixer.music.load(music_path)
-            pygame.mixer.music.set_volume(0.48)
+            pygame.mixer.music.set_volume(self.preview_volume)
             pygame.mixer.music.play()
+            self.current_preview_path = normalized
         except pygame.error:
             pass
 
+    def _index_for_music_path(self, music_path):
+        if not music_path or not self.items:
+            return 0
+        target = Path(music_path)
+        for index, item in enumerate(self.items):
+            info = item["info"]
+            candidate = find_audio_file(
+                info.folder_path,
+                info.difficulty_data.get("audio_filename")
+            )
+            if candidate and Path(candidate) == target:
+                if item["type"] == "group" and item["count"] > 1:
+                    self.expanded_groups.add(item["group"])
+                    self._rebuild_items()
+                    return min(index + 1, len(self.items) - 1)
+                return index
+        return 0
+
+    def _first_playable_index(self, index):
+        if not self.items:
+            return 0
+        index = int(clamp(index, 0, len(self.items) - 1))
+        item = self.items[index]
+        if item["type"] == "group" and item["count"] > 1:
+            self.expanded_groups.add(item["group"])
+            self._rebuild_items()
+            return min(index + 1, len(self.items) - 1)
+        return index
+
     def _play_selected(self):
-        if not self.filtered:
+        if not self.items:
             return
-        self.game.scene_manager.push_scene(
-            GameplayScene(self.game, self.filtered[self.selected_index].difficulty_data)
-        )
+        item = self.items[self.selected_index]
+        if item["type"] == "group" and item["count"] > 1:
+            return
+        self.pending_play_info = item["info"]
+        self.pending_play_elapsed = 0.0
 
     def _cycle_sort(self):
         self.sort_mode_index = (self.sort_mode_index + 1) % len(self.SORT_MODES)
@@ -292,7 +436,7 @@ class SongSelectScene(BaseScene):
         return False
 
     def _card_index_at(self, pos):
-        for index, _info in enumerate(self.filtered):
+        for index, _item in enumerate(self.items):
             target = self._target_for_index(index)
             if target[4].collidepoint(pos) and target[3] > 0.35:
                 return index
@@ -316,15 +460,54 @@ class SongSelectScene(BaseScene):
         }
         reverse = sort_mode in ("BPM", "Stars", "Date")
         self.filtered.sort(key=key_funcs[sort_mode], reverse=reverse)
-        self.selected_index = int(clamp(self.selected_index, 0, max(0, len(self.filtered) - 1)))
-        self.browse_index = int(clamp(self.browse_index, 0, max(0, len(self.filtered) - 1)))
+        self._rebuild_items()
+        self.selected_index = int(clamp(self.selected_index, 0, max(0, len(self.items) - 1)))
+        self.browse_index = int(clamp(self.browse_index, 0, max(0, len(self.items) - 1)))
+
+    def _rebuild_items(self):
+        groups = {}
+        order = []
+        for info in self.filtered:
+            if info.folder_path not in groups:
+                groups[info.folder_path] = []
+                order.append(info.folder_path)
+            groups[info.folder_path].append(info)
+
+        items = []
+        for group in order:
+            difficulties = sorted(groups[group], key=lambda info: info.stars)
+            representative = difficulties[-1]
+            items.append({
+                "type": "group",
+                "group": group,
+                "info": representative,
+                "count": len(difficulties)
+            })
+            if group in self.expanded_groups and len(difficulties) > 1:
+                for difficulty in difficulties:
+                    items.append({
+                        "type": "difficulty",
+                        "group": group,
+                        "info": difficulty,
+                        "count": 1
+                    })
+        self.items = items
 
     def _visible_infos(self):
-        if not self.filtered:
+        if not self.items:
             return []
         start = max(0, self.browse_index - 6)
-        end = min(len(self.filtered), self.browse_index + 7)
-        return list(enumerate(self.filtered[start:end], start=start))
+        end = min(len(self.items), self.browse_index + 7)
+        return [
+            (self._item_key(index), index, self.items[index]["info"])
+            for index in range(start, end)
+        ]
+
+    def _item_key(self, index):
+        item = self.items[index]
+        if item["type"] == "group":
+            return f"group:{item['group']}"
+        return f"difficulty:{item['info'].osu_file}"
 
     def _target_for_index(self, index):
         offset = index - self.browse_index
@@ -435,10 +618,10 @@ class SongSelectScene(BaseScene):
         )
 
     def _draw_info_panel(self, screen):
-        if not self.filtered:
+        if not self.items:
             self._draw_empty(screen)
             return
-        info = self.filtered[self.selected_index]
+        info = self.items[self.selected_index]["info"]
         x = self.margin
         y = 18
         width = int(self.game.WIDTH * 0.51)
@@ -486,19 +669,24 @@ class SongSelectScene(BaseScene):
         screen.blit(title, (x + 14, y + 9))
 
         records = []
-        if self.filtered:
-            records = self.score_manager.records_for(self.filtered[self.selected_index].osu_file)
+        if self.items:
+            records = self.score_manager.records_for(self.items[self.selected_index]["info"].osu_file)
         if not records:
             text = self.tiny_font.render("No records set!", True, (210, 210, 225))
             screen.blit(text, (x + 14, y + 38))
 
     def _draw_cards(self, screen):
-        if not self.filtered:
+        if not self.items:
             return
         visible = self._visible_infos()
-        visible.sort(key=lambda item: abs(item[0] - self.browse_index), reverse=True)
-        for index, info in visible:
-            self.carousel.card_for(info).draw(screen, self, selected=index == self.browse_index)
+        visible.sort(key=lambda item: abs(item[1] - self.browse_index), reverse=True)
+        for key, index, info in visible:
+            self.carousel.card_for(key, info).draw(
+                screen,
+                self,
+                selected=index == self.browse_index,
+                meta=self.items[index]
+            )
 
     def _draw_bottom_bar(self, screen):
         h = 58

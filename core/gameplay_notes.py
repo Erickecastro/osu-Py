@@ -55,6 +55,11 @@ def prepare_note_lifecycle(
                 + note["slider_total_duration"]
                 + hit_fade_out_time
             )
+        elif note["type"] == "spinner":
+            note["start_time"] = note["time"]
+            note["spinner_start_time"] = note["time"]
+            note["spinner_end_time"] = note.get("end_time", note["time"])
+            note["end_time"] = note["spinner_end_time"]
         else:
             note["end_time"] = note["time"] + hit_fade_out_time
 
