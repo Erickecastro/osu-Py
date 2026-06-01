@@ -290,6 +290,7 @@ class GameplayScene(BaseScene):
         self.hud_renderer = GameplayHUDRenderer(self.font)
         self.skin_images = self._load_skin_images()
         self.hit_sound = self._load_hit_sound()
+        self.fail_sound = self._load_fail_sound()
         self.sliderball_diameter = self._calculate_sliderball_diameter()
         self._precache_gameplay_surfaces()
         
@@ -305,7 +306,7 @@ class GameplayScene(BaseScene):
         self.paused = False
         self.failed = False
         self.fail_time = None
-        self.fail_fall_duration_ms = 2310
+        self.fail_fall_duration_ms = 3600
         self.lose_overlay_delay_ms = 720
         self.pause_started_at = None
         self.intro_skip_ms = self._calculate_intro_skip_ms()
@@ -457,6 +458,25 @@ class GameplayScene(BaseScene):
             return
         try:
             self.hit_sound.play()
+        except pygame.error:
+            pass
+
+    def _load_fail_sound(self):
+        path = os.path.join("assets", "failsound", "failsound.wav")
+        if not os.path.exists(path):
+            return None
+        try:
+            sound = pygame.mixer.Sound(path)
+            sound.set_volume(0.72)
+            return sound
+        except pygame.error:
+            return None
+
+    def _play_fail_sound(self):
+        if self.fail_sound is None:
+            return
+        try:
+            self.fail_sound.play()
         except pygame.error:
             pass
 
@@ -1599,6 +1619,7 @@ class GameplayScene(BaseScene):
         self.health = 0.0
         self.target_health = 0.0
         pygame.mixer.music.stop()
+        self._play_fail_sound()
         pygame.mouse.set_visible(True)
 
     def _sync_music_time_now(self):
@@ -2372,9 +2393,9 @@ class GameplayScene(BaseScene):
 
         elapsed = pygame.time.get_ticks() - self.fail_time
         progress = self._clamp01(elapsed / self.fail_fall_duration_ms)
-        eased = progress * progress * (3.0 - 2.0 * progress)
+        eased = progress ** 2.15
         fall = int((self.game.HEIGHT * 0.28) * eased)
-        alpha = 1.0 - (progress * 0.72)
+        alpha = 1.0 - ((progress ** 1.4) * 0.72)
         return fall, max(0.20, alpha)
 
     def _fail_transform_slider_points(self, note, points, fall):
@@ -2385,6 +2406,7 @@ class GameplayScene(BaseScene):
         progress = self._clamp01(elapsed / self.fail_fall_duration_ms)
         if progress <= 0:
             return [(x, y + fall) for x, y in points] if fall else points
+        eased = progress ** 2.15
 
         xs = [x for x, _ in points]
         ys = [y for _, y in points]
@@ -2392,7 +2414,7 @@ class GameplayScene(BaseScene):
         center_y = (min(ys) + max(ys)) * 0.5
         render_index = int(note.get("render_index", 0))
         direction = -1 if render_index % 2 else 1
-        angle = direction * (8.0 + ((render_index * 17) % 18)) * progress
+        angle = direction * (8.0 + ((render_index * 17) % 18)) * eased
         radians = math.radians(angle)
         cos_a = math.cos(radians)
         sin_a = math.sin(radians)
