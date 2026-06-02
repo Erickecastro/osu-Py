@@ -10,6 +10,7 @@ def effective_beat_length_at(timing_points, time_ms):
             break
         if tp.get("uninherited", 1) == 1:
             base_tp = tp
+            inherited_tp = None
         else:
             inherited_tp = tp
 

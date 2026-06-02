@@ -90,7 +90,12 @@ def parse_timing_points_section(lines):
             "uninherited": uninherited
         })
 
-    timing_points.sort(key=lambda tp: tp["time"])
+    timing_points.sort(
+        key=lambda tp: (
+            tp["time"],
+            0 if tp.get("uninherited", 1) == 1 else 1
+        )
+    )
     return timing_points
 
 

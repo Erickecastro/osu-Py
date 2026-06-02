@@ -187,7 +187,8 @@ class SliderRenderer:
         repeat_count=1,
         draw_reverse_markers=False,
         slider_start_time=None,
-        span_duration=None
+        span_duration=None,
+        screen_offset=(0, 0)
     ):
         if len(slider_points) < 2 or alpha <= 0:
             return
@@ -198,10 +199,17 @@ class SliderRenderer:
         if cache_key is not None:
             cached = self.scene.slider_surface_cache.get(cache_key)
 
+        offset_x, offset_y = screen_offset
         if cached is not None:
             slider_surface, surface_pos = cached
             slider_surface.set_alpha(a)
-            screen.blit(slider_surface, surface_pos)
+            screen.blit(
+                slider_surface,
+                (
+                    surface_pos[0] + offset_x,
+                    surface_pos[1] + offset_y
+                )
+            )
             can_draw_head = (
                 draw_head_marker
                 and not (
@@ -209,9 +217,15 @@ class SliderRenderer:
                     and self.scene.current_time >= slider_start_time
                 )
             )
+            marker_points = slider_points
+            if offset_x or offset_y:
+                marker_points = [
+                    (x + offset_x, y + offset_y)
+                    for x, y in slider_points
+                ]
             self._draw_markers(
                 screen,
-                slider_points,
+                marker_points,
                 a,
                 can_draw_head,
                 draw_tail_marker,

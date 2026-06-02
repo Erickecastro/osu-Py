@@ -138,7 +138,6 @@ class GameplayScene(BaseScene):
         self.playfield_height = 384
         self.osu_base_width = 640
         self.osu_base_height = 480
-        self.object_size_multiplier = 1.1433
 
         self.scale = min(
             self.game.WIDTH / self.osu_base_width,
@@ -162,18 +161,13 @@ class GameplayScene(BaseScene):
         ) / 2 + (8 * self.scale)
 
         self.slider_base_radius = int(
-            self.circle_radius
-            * self.scale
-            * 0.675143859456
-            * self.object_size_multiplier
+            round(self.circle_radius * self.scale)
         )
 
         if self.slider_base_radius < 8:
             self.slider_base_radius = 8
 
-        self.slider_path_radius = int(
-            self.slider_base_radius * 1.22
-        )
+        self.slider_path_radius = int(self.slider_base_radius)
         if self.slider_path_radius < 10:
             self.slider_path_radius = 10
 
@@ -1026,22 +1020,18 @@ class GameplayScene(BaseScene):
         return width
 
     def _calculate_sliderball_diameter(self):
-        sliderball_visible_diameter = max(
-            1,
-            (
-                self.slider_path_radius
-                - max(2, self.slider_path_radius * 0.07)
-            )
-            * 2
-            * 0.882
+        body_radius = max(
+            1.0,
+            self.slider_path_radius - max(3.0, self.slider_path_radius * 0.11)
         )
+        sliderball_visible_diameter = max(1.0, body_radius * 2.0 * 0.985)
         sliderball_image = self.skin_images.get("sliderball")
         if sliderball_image is None:
             return sliderball_visible_diameter
 
         opaque_width = self._alpha_width(
             sliderball_image,
-            threshold=16
+            threshold=32
         )
         if opaque_width <= 0:
             return sliderball_visible_diameter
@@ -2068,23 +2058,25 @@ class GameplayScene(BaseScene):
                     render_slider_points = slider_points
                     slider_cache_key = note.get("render_index")
 
-                if self.failed:
-                    render_slider_points = self._fail_transform_slider_points(
-                        note,
-                        render_slider_points,
-                        fail_offset_y
-                    )
-                    slider_cache_key = None
+                slider_draw_points = render_slider_points
+                slider_screen_offset = (0, 0)
+                if self.failed and fail_offset_y:
+                    slider_screen_offset = (0, fail_offset_y)
+                    render_slider_points = [
+                        (x, y + fail_offset_y)
+                        for x, y in render_slider_points
+                    ]
                 elif fail_offset_y:
                     render_slider_points = [
                         (x, y + fail_offset_y)
                         for x, y in render_slider_points
                     ]
+                    slider_draw_points = render_slider_points
                     slider_cache_key = None
 
                 self.slider_renderer.draw(
                     overlay,
-                    render_slider_points,
+                    slider_draw_points,
                     alpha=slider_track_alpha,
                     object_color=note.get("combo_color", (0, 150, 255)),
                     draw_head_marker=(
@@ -2096,7 +2088,8 @@ class GameplayScene(BaseScene):
                     repeat_count=note.get("repeat_count", 1),
                     draw_reverse_markers=True,
                     slider_start_time=note["time"],
-                    span_duration=note.get("span_duration", 0.0)
+                    span_duration=note.get("span_duration", 0.0),
+                    screen_offset=slider_screen_offset
                 )
 
                 head_result = note.get("head_hit_result")
@@ -2400,37 +2393,6 @@ class GameplayScene(BaseScene):
         fall = int((self.game.HEIGHT * 0.28) * eased)
         alpha = 1.0 - ((progress ** 1.4) * 0.72)
         return fall, max(0.20, alpha)
-
-    def _fail_transform_slider_points(self, note, points, fall):
-        if not points or self.fail_time is None:
-            return points
-
-        elapsed = pygame.time.get_ticks() - self.fail_time
-        progress = self._clamp01(elapsed / self.fail_fall_duration_ms)
-        if progress <= 0:
-            return [(x, y + fall) for x, y in points] if fall else points
-        eased = progress ** 2.15
-
-        xs = [x for x, _ in points]
-        ys = [y for _, y in points]
-        center_x = (min(xs) + max(xs)) * 0.5
-        center_y = (min(ys) + max(ys)) * 0.5
-        render_index = int(note.get("render_index", 0))
-        direction = -1 if render_index % 2 else 1
-        angle = direction * (8.0 + ((render_index * 17) % 18)) * eased
-        radians = math.radians(angle)
-        cos_a = math.cos(radians)
-        sin_a = math.sin(radians)
-
-        transformed = []
-        for x, y in points:
-            dx = x - center_x
-            dy = y - center_y
-            transformed.append((
-                center_x + dx * cos_a - dy * sin_a,
-                center_y + dx * sin_a + dy * cos_a + fall
-            ))
-        return transformed
 
     def _draw_skip_button(self, screen):
         self.skip_button_rect = None

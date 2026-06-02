@@ -15,6 +15,7 @@ from core.performance import (
 )
 from core.profiler import FrameProfiler
 from core.scene_manager import SceneManager
+from core.settings import GameSettings, clamp_sensitivity
 from scenes.main_menu_scene import MainMenuScene
 
 class Game:
@@ -53,9 +54,12 @@ class Game:
         self.clock = pygame.time.Clock()
         self.dt = 1.0 / self.FPS
         self.profiler = FrameProfiler()
+        self.settings = GameSettings.load()
         self.mouse_pos = pygame.mouse.get_pos()
         self.raw_mouse_enabled = False
-        self.raw_mouse_sensitivity = RAW_MOUSE_SENSITIVITY
+        self.raw_mouse_sensitivity = clamp_sensitivity(
+            self.settings.mouse_sensitivity or RAW_MOUSE_SENSITIVITY
+        )
 
         self.running = True
 
@@ -211,6 +215,11 @@ class Game:
                 self.mouse_pos[1] + (rel[1] * self.raw_mouse_sensitivity)
             )
         )
+
+    def set_mouse_sensitivity(self, value):
+        self.raw_mouse_sensitivity = clamp_sensitivity(value)
+        self.settings.mouse_sensitivity = self.raw_mouse_sensitivity
+        self.settings.save()
 
     # -------------------------
     # MAIN LOOP

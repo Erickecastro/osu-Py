@@ -685,6 +685,9 @@ class MainMenuScene(BaseScene):
         self.beat_phase = 0.0
         self.beat_level = 0.0
         self.menu_open = False
+        self.settings_open = False
+        self.settings_slider_rect = pygame.Rect(0, 0, 0, 0)
+        self.settings_dragging = False
         self.menu_t = 0.0
         self.light_overlay = False
         self.music_started = False
@@ -713,7 +716,7 @@ class MainMenuScene(BaseScene):
         self.snow.load()
         self.options = [
             MenuOption("Play", self._open_song_select),
-            MenuOption("Settings", self._toggle_overlay_mode),
+            MenuOption("Settings", self._open_settings),
             MenuOption("Previous Track", self._previous_menu_track),
             MenuOption("Next Track", self._next_menu_track),
             MenuOption("Exit", self._exit_game)
@@ -794,14 +797,41 @@ class MainMenuScene(BaseScene):
 
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE and self.settings_open:
+                self.settings_open = False
+                self.settings_dragging = False
+                return
             if event.key == pygame.K_ESCAPE and self.menu_open:
                 self.menu_open = False
                 return
+            if self.settings_open:
+                if event.key in (pygame.K_LEFT, pygame.K_a):
+                    self._adjust_mouse_sensitivity(-0.05)
+                    return
+                if event.key in (pygame.K_RIGHT, pygame.K_d):
+                    self._adjust_mouse_sensitivity(0.05)
+                    return
             if event.key in (pygame.K_RIGHT, pygame.K_d):
                 self._next_menu_track()
                 return
             if event.key in (pygame.K_LEFT, pygame.K_a):
                 self._previous_menu_track()
+                return
+
+        if self.settings_open:
+            if event.type == pygame.MOUSEWHEEL:
+                self._adjust_mouse_sensitivity(event.y * 0.05)
+                return
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self.settings_slider_rect.collidepoint(event.pos):
+                    self.settings_dragging = True
+                    self._set_mouse_sensitivity_from_pos(event.pos[0])
+                return
+            if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self.settings_dragging = False
+                return
+            if event.type == pygame.MOUSEMOTION and self.settings_dragging:
+                self._set_mouse_sensitivity_from_pos(event.pos[0])
                 return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -882,6 +912,8 @@ class MainMenuScene(BaseScene):
         self.circle.center = original_center
 
         self._draw_footer(screen)
+        if self.settings_open:
+            self._draw_settings_panel(screen)
 
     def destroy(self):
         if self.music_started and not self.keep_music_on_destroy:
@@ -898,9 +930,23 @@ class MainMenuScene(BaseScene):
             )
         )
 
-    def _toggle_overlay_mode(self):
-        self.light_overlay = not self.light_overlay
+    def _open_settings(self):
+        self.settings_open = True
+        self.menu_open = True
         self.circle.trigger_click()
+
+    def _adjust_mouse_sensitivity(self, amount):
+        self.game.set_mouse_sensitivity(
+            self.game.raw_mouse_sensitivity + amount
+        )
+
+    def _set_mouse_sensitivity_from_pos(self, x):
+        rect = self.settings_slider_rect
+        if rect.width <= 0:
+            return
+        t = clamp((x - rect.left) / rect.width, 0.0, 1.0)
+        value = 0.40 + (t * (2.00 - 0.40))
+        self.game.set_mouse_sensitivity(round(value, 2))
 
     def _exit_game(self):
         self.game.running = False
@@ -1274,6 +1320,74 @@ class MainMenuScene(BaseScene):
         )
         signature = self._footer_surface("OSU! made with python by a fan", 118)
         screen.blit(signature, (18, 18))
+
+    def _draw_settings_panel(self, screen):
+        width = int(clamp(screen.get_width() * 0.34, 360, 520))
+        height = int(clamp(screen.get_height() * 0.20, 150, 210))
+        panel = pygame.Rect(0, 0, width, height)
+        panel.center = (
+            int(screen.get_width() * 0.62),
+            int(screen.get_height() * 0.50)
+        )
+
+        surface = pygame.Surface(panel.size, pygame.SRCALPHA)
+        pygame.draw.rect(
+            surface,
+            (18, 16, 34, 224),
+            surface.get_rect(),
+            border_radius=14
+        )
+        pygame.draw.rect(
+            surface,
+            (142, 118, 255, 190),
+            surface.get_rect(),
+            2,
+            border_radius=14
+        )
+
+        value = self.game.raw_mouse_sensitivity
+        title = self.option_font.render("Settings", True, (255, 255, 255))
+        label = self.footer_font.render("Mouse sensitivity", True, (230, 232, 250))
+        value_text = self.footer_font.render(f"{value:.2f}x", True, (255, 244, 160))
+        hint = self.footer_font.render("Left/Right, wheel, or drag", True, (190, 190, 210))
+
+        surface.blit(title, (24, 18))
+        surface.blit(label, (24, 62))
+        surface.blit(value_text, (width - value_text.get_width() - 24, 62))
+
+        slider = pygame.Rect(24, 102, width - 48, 12)
+        pygame.draw.rect(
+            surface,
+            (58, 54, 82, 255),
+            slider,
+            border_radius=slider.height // 2
+        )
+        t = clamp((value - 0.40) / 1.60, 0.0, 1.0)
+        fill_rect = slider.copy()
+        fill_rect.width = int(slider.width * t)
+        pygame.draw.rect(
+            surface,
+            (152, 112, 255, 255),
+            fill_rect,
+            border_radius=slider.height // 2
+        )
+        knob_x = slider.left + int(slider.width * t)
+        pygame.draw.circle(
+            surface,
+            (255, 255, 255, 255),
+            (knob_x, slider.centery),
+            10
+        )
+        pygame.draw.circle(
+            surface,
+            (124, 94, 235, 255),
+            (knob_x, slider.centery),
+            5
+        )
+        surface.blit(hint, (24, height - hint.get_height() - 18))
+
+        self.settings_slider_rect = slider.move(panel.topleft)
+        screen.blit(surface, panel)
 
     def _footer_surface(self, text, alpha):
         key = (text, int(alpha), id(self.footer_font))
