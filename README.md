@@ -11,7 +11,7 @@ O projeto ainda esta em desenvolvimento, mas a gameplay principal ja esta funcio
 - Gameplay com circles, sliders, reverse markers, slider ball, fade in/out, miss pop, score, combo e accuracy.
 - Renderizacao de cursor, notas, sliders, spinner, HUD e menu usando a skin em `assets/skins/default/`.
 - Menus com `pygame_gui` para selecionar musica e dificuldade.
-- Suporte a fullscreen e troca de fullscreen com `F11`.
+- Suporte a fullscreen e troca de fullscreen para modo janela e vice-versa com `F11`.
 
 ## Requisitos
 
