@@ -58,7 +58,7 @@ Baixe as músicas do seu interese diretamente no site oficial do game, https://o
 ## Controles
 
 - `Z` ou `X`: acertar objetos.
-- `Clique esquerdo` ou `clioque direito` do mouse para acertar os objetos.
+- `Clique esquerdo` ou `clique direito` do mouse para acertar os objetos.
 - `Esc`: sair da gameplay ou voltar uma cena.
 - `F3`: alternar profiler de performance.
 - `F11`: alternar fullscreen.
