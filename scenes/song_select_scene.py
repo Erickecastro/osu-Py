@@ -31,8 +31,21 @@ class SongCard:
         self.scale = 0.85
         self.alpha = 0.0
         self.hover = 0.0
+        self.initialized = False
+
+    def place_at_target(self, target):
+        tx, ty, scale, _alpha, _rect = target
+        self.x = tx
+        self.y = ty
+        self.scale = scale
+        self.alpha = 0.0
+        self.hover = 0.0
+        self.initialized = True
 
     def update(self, dt, target, mouse_pos):
+        if not self.initialized:
+            self.place_at_target(target)
+
         tx, ty, scale, alpha, rect = target
         speed = 1.0 - math.exp(-dt * 14.0)
         self.x = lerp(self.x, tx, speed)
@@ -93,9 +106,12 @@ class SongCarousel:
     def __init__(self):
         self.cards = {}
 
-    def card_for(self, key, info):
+    def card_for(self, key, info, initial_target=None):
         if key not in self.cards:
-            self.cards[key] = SongCard(info)
+            card = SongCard(info)
+            if initial_target is not None:
+                card.place_at_target(initial_target)
+            self.cards[key] = card
         else:
             self.cards[key].info = info
         return self.cards[key]
@@ -230,7 +246,7 @@ class SongSelectScene(BaseScene):
         if not self.initial_music_path:
             initial_index = self._first_playable_index(initial_index)
         self._confirm_selection(initial_index, play_preview=self.initial_music_path is None)
-        pygame.mouse.set_visible(True)
+        pygame.mouse.set_visible(False)
         if hasattr(self.game, "disable_raw_mouse"):
             self.game.disable_raw_mouse()
 
@@ -377,8 +393,9 @@ class SongSelectScene(BaseScene):
         self.carousel.trim(visible)
         mouse_pos = self.game.mouse_pos
         for key, index, info in visible:
-            card = self.carousel.card_for(key, info)
-            card.update(dt, self._target_for_index(index), mouse_pos)
+            target = self._target_for_index(index)
+            card = self.carousel.card_for(key, info, target)
+            card.update(dt, target, mouse_pos)
 
     def render(self, screen):
         self._draw_background(screen)

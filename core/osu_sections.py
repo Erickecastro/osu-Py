@@ -81,13 +81,15 @@ def parse_timing_points_section(lines):
             tp_time = float(parts[0])
             ms_per_beat = float(parts[1])
             uninherited = int(parts[6]) if len(parts) > 6 else 1
+            effects = int(parts[7]) if len(parts) > 7 else 0
         except:
             continue
 
         timing_points.append({
             "time": tp_time,
             "ms_per_beat": ms_per_beat,
-            "uninherited": uninherited
+            "uninherited": uninherited,
+            "effects": effects
         })
 
     timing_points.sort(

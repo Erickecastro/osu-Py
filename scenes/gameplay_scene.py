@@ -36,6 +36,7 @@ from rendering.spinner import SpinnerRenderer
 
 
 class GameplayScene(BaseScene):
+    draws_own_cursor = True
     uses_ui = False
 
     MAX_SLIDER_SURFACE_SIZE = 4096
@@ -174,7 +175,7 @@ class GameplayScene(BaseScene):
         self.scaled_radius = int(self.slider_path_radius)
         self.note_visual_radius = self.scaled_radius * 0.90
 
-        self.followpoint_visual_radius = self.scaled_radius / 1.03
+        self.followpoint_visual_radius = self.scaled_radius * 0.82
 
         self.slider_head_radius = int(
             self.scaled_radius
@@ -1403,13 +1404,13 @@ class GameplayScene(BaseScene):
                 continue
 
             followpoint_radius = self.followpoint_visual_radius
-            segment_width = max(22, int(followpoint_radius * 0.86))
-            spacing = max(10, int(segment_width * 0.48))
+            segment_width = max(20, int(followpoint_radius * 0.82))
+            spacing = max(9, int(segment_width * 0.50))
             count = max(1, int(distance / spacing))
             frame = self._cropped_alpha_image(frames[-1])
             size = (
-                int(segment_width * 1.42),
-                max(9, int(followpoint_radius * 0.22))
+                int(segment_width * 1.38),
+                max(7, int(followpoint_radius * 0.155))
             )
             scaled = self._scaled_image(frame, size)
             if scaled is None:
@@ -1613,7 +1614,7 @@ class GameplayScene(BaseScene):
         self.target_health = 0.0
         pygame.mixer.music.stop()
         self._play_fail_sound()
-        pygame.mouse.set_visible(True)
+        pygame.mouse.set_visible(False)
 
     def _sync_music_time_now(self):
         if self.start_time is not None and self.music_started:
@@ -2553,4 +2554,4 @@ class GameplayScene(BaseScene):
 
         self.game.disable_raw_mouse()
 
-        pygame.mouse.set_visible(True)
+        pygame.mouse.set_visible(False)

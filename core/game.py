@@ -16,6 +16,7 @@ from core.performance import (
 from core.profiler import FrameProfiler
 from core.scene_manager import SceneManager
 from core.settings import GameSettings, clamp_sensitivity
+from rendering.cursor import CursorRenderer
 from scenes.main_menu_scene import MainMenuScene
 
 class Game:
@@ -60,6 +61,8 @@ class Game:
         self.raw_mouse_sensitivity = clamp_sensitivity(
             self.settings.mouse_sensitivity or RAW_MOUSE_SENSITIVITY
         )
+        self.cursor_renderer = CursorRenderer()
+        pygame.mouse.set_visible(False)
 
         self.running = True
 
@@ -335,6 +338,7 @@ class Game:
             self.ui_manager.update(dt)
 
         self.scene_manager.update(dt)
+        self.cursor_renderer.update(dt, self.mouse_pos)
 
     # -------------------------
     # RENDER
@@ -372,6 +376,9 @@ class Game:
             scene_name,
             self.clock.get_fps()
         )
+
+        if not getattr(current_scene, "draws_own_cursor", False):
+            self.cursor_renderer.draw(self.screen, self.mouse_pos)
 
         self.profiler.start("flip")
         pygame.display.flip()

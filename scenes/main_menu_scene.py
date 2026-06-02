@@ -3,9 +3,9 @@ import random
 from pathlib import Path
 
 import pygame
-import pygame.sndarray
 
 from core.assets import ACTIVE_SKIN_DIR, asset_path
+from rendering.menu_visualizer import CircularMenuVisualizer
 from scenes.base_scene import BaseScene
 from scenes.song_select_scene import SongSelectScene
 
@@ -217,114 +217,6 @@ class MenuOption:
         surface.blit(layer, (rect.x - 20, rect.y - 11))
 
 
-class CircularVisualizer:
-    def __init__(self, bar_count=108):
-        self.bar_count = bar_count
-        self.levels = [0.0] * bar_count
-        self.phases = [
-            (i * 0.61803398875) % 1.0
-            for i in range(bar_count)
-        ]
-        self.angle_ts = [
-            i / bar_count
-            for i in range(bar_count)
-        ]
-        self.unit_vectors = [
-            (
-                math.cos((i / bar_count) * math.tau),
-                math.sin((i / bar_count) * math.tau)
-            )
-            for i in range(bar_count)
-        ]
-        self._layer = None
-        self._layer_size = None
-
-    def update(self, dt, time_seconds, beat_level, hover, beat_phase, music_energy):
-        energy = clamp(music_energy, 0.0, 1.0)
-        for index in range(self.bar_count):
-            phase = self.phases[index]
-            angle_t = self.angle_ts[index]
-            rotation = (time_seconds * (0.012 + energy * 0.026)) % 1.0
-            sweep = 1.0 - abs(((angle_t - beat_phase - rotation + 0.5) % 1.0) - 0.5) * 2.0
-            sweep = pow(clamp(sweep, 0.0, 1.0), 3.4)
-            texture = (
-                max(0.0, math.sin((time_seconds * (1.8 + energy * 3.2)) + (index * 0.31))) * 0.22
-                + max(0.0, math.sin((time_seconds * (0.9 + energy * 2.4)) + (phase * math.tau))) * 0.18
-            )
-            threshold = 0.9 - (energy * 0.42) - (beat_level * 0.32) - (hover * 0.08)
-            active = max(0.0, (sweep + texture) - threshold)
-            active = pow(active, 1.35)
-            family_scale = 0.34 + ((index % 5) * 0.14) + ((index % 11) * 0.014)
-            beat_energy = pow(clamp(beat_level, 0.0, 1.0), 0.54)
-            target = active * family_scale * (0.26 + energy * 0.88 + beat_energy * 0.72)
-            target += hover * (0.025 + energy * 0.035)
-            target = clamp(target, 0.0, 1.0)
-            speed = 6.4 + energy * 3.4
-            if target < self.levels[index]:
-                speed = (0.85 + energy * 0.55) * 1.22
-
-            self.levels[index] = lerp(
-                self.levels[index],
-                target,
-                1.0 - math.exp(-dt * speed)
-            )
-
-    def draw(self, surface, center, radius, beat_level, music_energy, color=(255, 255, 255)):
-        energy = clamp(music_energy, 0.0, 1.0)
-        inner_radius = radius - max(5, radius * 0.012)
-        base_length = max(20, radius * (0.068 + energy * 0.056))
-        max_length = max(120, radius * (0.583 + energy * 1.064))
-        layer_radius = int(inner_radius + base_length + max_length + 12)
-        layer_size = layer_radius * 2
-        size = (layer_size, layer_size)
-        if self._layer is None or self._layer_size != size:
-            self._layer = pygame.Surface(size, pygame.SRCALPHA)
-            self._layer_size = size
-
-        layer = self._layer
-        layer.fill((0, 0, 0, 0))
-        local_center = (layer_radius, layer_radius)
-
-        for index, level in enumerate(self.levels):
-            ux, uy = self.unit_vectors[index]
-            length = base_length + (max_length * pow(level, 0.86))
-            start_radius = inner_radius
-            end_radius = start_radius + length
-
-            start = (
-                int(local_center[0] + (ux * start_radius)),
-                int(local_center[1] + (uy * start_radius))
-            )
-            end = (
-                int(local_center[0] + (ux * end_radius)),
-                int(local_center[1] + (uy * end_radius))
-            )
-            alpha = int((58 + (197 * level)) * clamp(level * 2.55, 0.0, 1.0))
-            width = max(5, int(radius * 0.02 + level * radius * 0.032))
-
-            if alpha <= 4:
-                continue
-
-            pygame.draw.line(
-                layer,
-                (color[0], color[1], color[2], alpha),
-                start,
-                end,
-                width
-            )
-            cap_radius = max(2, width // 2)
-            pygame.draw.circle(layer, (color[0], color[1], color[2], alpha), start, cap_radius)
-            pygame.draw.circle(layer, (color[0], color[1], color[2], alpha), end, cap_radius)
-
-        surface.blit(layer, (center[0] - layer_radius, center[1] - layer_radius))
-
-    def dampen(self, amount):
-        amount = clamp(amount, 0.0, 1.0)
-        factor = 1.0 - amount
-        for index, level in enumerate(self.levels):
-            self.levels[index] = level * factor
-
-
 class MenuSnow:
     IMAGE_NAMES = (
         "menu-snow.png",
@@ -383,7 +275,7 @@ class MenuSnow:
             return
 
         for particle in self.particles:
-            alpha = int(particle["alpha"] * clamp(particle["fade"], 0.0, 1.0))
+            alpha = int(255 * clamp(particle["fade"], 0.0, 1.0))
             if alpha <= 2:
                 continue
 
@@ -415,7 +307,6 @@ class MenuSnow:
             "drift_speed": self.random.uniform(0.42, 0.95),
             "phase": self.random.uniform(0.0, math.tau),
             "size": size,
-            "alpha": self.random.randint(46, 92),
             "rotation": rotation,
             "spin": 0.0,
             "image": image,
@@ -451,28 +342,30 @@ class PulseCircle:
         self.hover = 0.0
         self.click_flash = 0.0
         self.pulse_scale = 1.0
+        self.target_pulse_scale = 1.0
         self.font = None
         self._base_font = None
         self.small_font = None
         self._font_radius = 0
-        self._title_surface_cache = {}
         self._scratch_surfaces = {}
+        self._logo_surface = None
+        self._logo_cache = {}
+        self._logo_source_size = None
 
     def layout(self, width, height):
         self.center = (width // 2, height // 2)
-        self.base_radius = int(clamp(min(width, height) * 0.301, 180, 370))
+        self.base_radius = int(clamp(min(width, height) * 0.309, 184, 380))
 
         if self._font_radius != self.base_radius:
             self._font_radius = self.base_radius
-            self._title_surface_cache.clear()
-            title_size = max(54, int(self.base_radius * 0.53))
-            self.font = self._rounded_font(title_size)
-            self._base_font = self._rounded_font(title_size)
+            self._logo_cache.clear()
             self.small_font = pygame.font.SysFont(
                 "arial",
-                max(13, int(self.base_radius * 0.105)),
+                max(12, int(self.base_radius * 0.105)),
                 bold=True
             )
+            if self._logo_surface is None:
+                self._logo_surface = self._load_logo_surface()
 
     def _rounded_font(self, size):
         for name in (
@@ -508,16 +401,22 @@ class PulseCircle:
         )
         self.click_flash = max(0.0, self.click_flash - (dt * 3.8))
 
-        beat_push = ease_out_cubic(beat_level) * 0.16
+        beat_push = ease_out_cubic(beat_level) * 0.17
         hover_push = self.hover * 0.065
         flash_push = ease_out_cubic(self.click_flash) * 0.12
         menu_push = 0.025 if menu_open else 0.0
-        self.pulse_scale = 1.0 + beat_push + hover_push + flash_push + menu_push
+        self.target_pulse_scale = 1.0 + beat_push + hover_push + flash_push + menu_push
+        scale_speed = 15.0 if self.target_pulse_scale > self.pulse_scale else 7.5
+        self.pulse_scale = lerp(
+            self.pulse_scale,
+            self.target_pulse_scale,
+            1.0 - math.exp(-dt * scale_speed)
+        )
         target_radius = self.base_radius * self.pulse_scale
         self.radius = lerp(
             self.radius,
             target_radius,
-            1.0 - math.exp(-dt * 18.0)
+            1.0 - math.exp(-dt * 16.0)
         )
 
     def trigger_click(self):
@@ -526,115 +425,66 @@ class PulseCircle:
     def draw(self, surface, time_seconds, beat_level, menu_open):
         radius = int(self.radius)
         center_x, center_y = self.center
-        padding = int(radius * 0.42)
-        size = (radius * 2) + (padding * 2)
-        layer = self._scratch_surface("circle", (size, size))
-        local_center = (size // 2, size // 2)
-
-        for index in range(9, 0, -1):
-            shadow_radius = radius + int(index * radius * 0.032)
-            shadow_alpha = int((20 + (beat_level * 14)) * (index / 9.0))
-            pygame.draw.circle(
-                layer,
-                (0, 0, 0, shadow_alpha),
-                local_center,
-                shadow_radius
-            )
-
-        hover = ease_out_cubic(self.hover)
-        magenta = (
-            int(222 + (25 * hover)),
-            int(58 + (36 * hover)),
-            int(156 + (42 * hover))
-        )
-        pygame.draw.circle(layer, (*magenta, 255), local_center, radius)
-
-        effects = self._scratch_surface("effects", (size, size))
-        shine_radius = int(radius * (0.82 + beat_level * 0.06))
-        pygame.draw.circle(
-            effects,
-            (255, 255, 255, int(20 + (hover * 18))),
-            (local_center[0] - int(radius * 0.22), local_center[1] - int(radius * 0.22)),
-            shine_radius
-        )
-        circle_mask = self._scratch_surface("mask", (size, size))
-        pygame.draw.circle(circle_mask, (255, 255, 255, 255), local_center, radius)
-        effects.blit(circle_mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-        layer.blit(effects, (0, 0))
-
-        self._draw_inner_geometry(layer, local_center, radius, time_seconds)
-
-        border_width = max(8, int(radius * 0.075))
-        pygame.draw.circle(
-            layer,
-            (255, 255, 255, 248),
-            local_center,
-            radius,
-            border_width
-        )
-        pygame.draw.circle(
-            layer,
-            (255, 255, 255, int(58 + (self.click_flash * 100))),
-            local_center,
-            int(radius * (1.0 + self.click_flash * 0.22)),
-            max(3, border_width // 3)
-        )
-
-        text_scale = 1.0 + ((self.pulse_scale - 1.0) * 0.72)
-        title = self._title_surface(text_scale)
-        title_rect = title.get_rect(center=(local_center[0], local_center[1] - int(radius * 0.02)))
-        layer.blit(title, title_rect)
+        body = self._scaled_logo(radius)
+        body_rect = body.get_rect(center=(center_x, center_y))
+        surface.blit(body, body_rect)
 
         caption = "click to start" if not menu_open else "select an option"
         caption_surface = self.small_font.render(caption.upper(), True, (255, 255, 255))
         shared_alpha = int((120 if not menu_open else 155) + ((self.pulse_scale - 1.0) * 360))
         caption_surface.set_alpha(clamp(shared_alpha, 120, 205))
         caption_rect = caption_surface.get_rect(
-            center=(local_center[0], local_center[1] + int(radius * 0.42))
+            center=(center_x, center_y + int(radius * 0.44))
         )
-        layer.blit(caption_surface, caption_rect)
+        surface.blit(caption_surface, caption_rect)
 
-        surface.blit(
-            layer,
-            (center_x - local_center[0], center_y - local_center[1])
+    def _scaled_logo(self, radius):
+        radius_key = max(1, int(round(radius / 2) * 2))
+        key = radius_key
+        cached = self._logo_cache.get(key)
+        if cached is not None:
+            return cached
+
+        source = self._logo_surface or self._load_logo_surface()
+        self._logo_surface = source
+        diameter = max(1, int(radius_key * 2.12))
+        scaled = pygame.transform.smoothscale(source, (diameter, diameter))
+
+        if len(self._logo_cache) > 96:
+            self._logo_cache.clear()
+        self._logo_cache[key] = scaled
+        return scaled
+
+    def _load_logo_surface(self):
+        for logo_name in ("Osu!_Logo_2016.svg", "Osu!_Logo_2016.svg.png"):
+            logo_path = asset_path(logo_name)
+            if logo_path.exists():
+                try:
+                    return self._normalise_logo_source(
+                        pygame.image.load(str(logo_path)).convert_alpha()
+                    )
+                except pygame.error:
+                    pass
+
+        size = 768
+        fallback = pygame.Surface((size, size), pygame.SRCALPHA)
+        center = (size // 2, size // 2)
+        pygame.draw.circle(fallback, (226, 92, 168, 255), center, size // 2 - 12)
+        pygame.draw.circle(fallback, (255, 255, 255, 255), center, size // 2 - 12, 42)
+        return fallback
+
+    def _normalise_logo_source(self, surface):
+        max_size = 1152
+        width, height = surface.get_size()
+        largest = max(width, height)
+        if largest <= max_size:
+            return surface
+
+        scale = max_size / largest
+        return pygame.transform.smoothscale(
+            surface,
+            (max(1, int(width * scale)), max(1, int(height * scale)))
         )
-
-    def _draw_inner_geometry(self, layer, center, radius, time_seconds):
-        geometry = self._scratch_surface("geometry", layer.get_size())
-        cx, cy = center
-        alpha = 34
-        spin = time_seconds * 0.25
-
-        for i in range(7):
-            angle = spin + (i * math.tau / 7.0)
-            start_radius = radius * (0.28 + ((i % 3) * 0.1))
-            end_radius = start_radius + (radius * 0.22)
-            start = (
-                int(cx + math.cos(angle) * start_radius),
-                int(cy + math.sin(angle) * start_radius)
-            )
-            end = (
-                int(cx + math.cos(angle + 0.22) * end_radius),
-                int(cy + math.sin(angle + 0.22) * end_radius)
-            )
-            pygame.draw.line(geometry, (255, 255, 255, alpha), start, end, max(2, radius // 70))
-
-        for i in range(4):
-            angle = -spin * 1.4 + (i * math.tau / 4.0)
-            distance = radius * 0.56
-            px = cx + math.cos(angle) * distance
-            py = cy + math.sin(angle) * distance
-            triangle_radius = radius * 0.045
-            points = []
-            for corner in range(3):
-                corner_angle = angle + (corner * math.tau / 3.0)
-                points.append((
-                    int(px + math.cos(corner_angle) * triangle_radius),
-                    int(py + math.sin(corner_angle) * triangle_radius)
-                ))
-            pygame.draw.polygon(geometry, (255, 255, 255, 28), points)
-
-        layer.blit(geometry, (0, 0))
 
     def _scratch_surface(self, key, size):
         surface = self._scratch_surfaces.get(key)
@@ -643,26 +493,6 @@ class PulseCircle:
             self._scratch_surfaces[key] = surface
         surface.fill((0, 0, 0, 0))
         return surface
-
-    def _title_surface(self, text_scale):
-        key = int(text_scale * 100)
-        cached = self._title_surface_cache.get(key)
-        if cached is not None:
-            return cached
-
-        base = self._base_font.render(self.title, True, (255, 255, 255))
-        scaled = pygame.transform.smoothscale(
-            base,
-            (
-                max(1, int(base.get_width() * text_scale)),
-                max(1, int(base.get_height() * text_scale))
-            )
-        )
-        if len(self._title_surface_cache) > 48:
-            self._title_surface_cache.clear()
-        self._title_surface_cache[key] = scaled
-        return scaled
-
 
 class MainMenuScene(BaseScene):
     uses_ui = False
@@ -698,8 +528,6 @@ class MainMenuScene(BaseScene):
         self.music_energy = 0.45
         self.current_timing_points = []
         self.music_started_ticks = 0
-        self.audio_envelope = []
-        self.audio_envelope_step_ms = 120
         self.music_tracks = self._build_music_playlist()
         self.current_track_index = (
             random.randrange(len(self.music_tracks))
@@ -711,7 +539,7 @@ class MainMenuScene(BaseScene):
         self.footer_cache = {}
 
         self.circle = PulseCircle(self.title)
-        self.visualizer = CircularVisualizer()
+        self.visualizer = CircularMenuVisualizer(bar_count=256)
         self.snow = MenuSnow(self.assets_dir)
         self.snow.load()
         self.options = [
@@ -724,7 +552,9 @@ class MainMenuScene(BaseScene):
 
         self.background = self._load_background()
         self.scaled_background = None
+        self.dimmed_background = None
         self.background_size = None
+        self.dimmed_background_key = None
         self.fallback_background = None
         self.fallback_background_size = None
         self.fallback_orbit = None
@@ -742,7 +572,7 @@ class MainMenuScene(BaseScene):
     def _prepare_mouse(self):
         if hasattr(self.game, "disable_raw_mouse"):
             self.game.disable_raw_mouse()
-        pygame.mouse.set_visible(True)
+        pygame.mouse.set_visible(False)
 
     def _layout(self):
         width = self.game.WIDTH
@@ -750,17 +580,17 @@ class MainMenuScene(BaseScene):
         self.circle.layout(width, height)
         self.option_font = pygame.font.SysFont(
             "arial",
-            max(22, int(self.circle.base_radius * 0.13)),
+            max(22, int(self.circle.base_radius * 0.139)),
             bold=True
         )
         self.footer_font = pygame.font.SysFont("arial", max(14, height // 64))
         self.footer_cache.clear()
 
-        option_width = int(clamp(width * 0.312, 288, 496))
-        option_height = int(clamp(height * 0.067, 46, 67))
-        spacing = int(option_height * 1.16)
+        option_width = int(clamp(width * 0.324, 306, 558))
+        option_height = int(clamp(height * 0.0675, 49, 70))
+        spacing = int(option_height * 1.12)
         open_circle_x = self.circle.center[0] - int(self.circle.base_radius * 0.48)
-        left_x = open_circle_x + int(self.circle.base_radius * 0.6)
+        left_x = open_circle_x + int(self.circle.base_radius * 0.80)
         left_x = min(left_x, width - option_width - 24)
         start_y = self.circle.center[1] - int(spacing * (len(self.options) - 1) * 0.5)
 
@@ -769,7 +599,7 @@ class MainMenuScene(BaseScene):
         if start_y + (spacing * (len(self.options) - 1)) > height - 70:
             start_y = height - 70 - (spacing * (len(self.options) - 1))
 
-        width_factors = [0.54, 0.7, 0.9, 0.72, 0.5]
+        width_factors = [0.68, 0.84, 1.04, 0.86, 0.64]
         for index, option in enumerate(self.options):
             option.set_layout(
                 left_x,
@@ -788,7 +618,9 @@ class MainMenuScene(BaseScene):
     def on_resize(self):
         self._layout()
         self.scaled_background = None
+        self.dimmed_background = None
         self.background_size = None
+        self.dimmed_background_key = None
         self.fallback_background = None
         self.fallback_background_size = None
         self.fallback_orbit = None
@@ -851,7 +683,11 @@ class MainMenuScene(BaseScene):
         self.time_seconds += dt
         mouse_pos = self.game.mouse_pos
 
-        self.beat_level = self._update_beat(dt)
+        current_time_ms = self._current_music_position_ms()
+        self.visualizer.update(dt, current_time_ms)
+        self.beat_level = self.visualizer.beat_level
+        self.beat_phase = self.visualizer.beat_phase
+        self.music_energy = self.visualizer.energy
         self.menu_t = lerp(
             self.menu_t,
             1.0 if self.menu_open else 0.0,
@@ -865,15 +701,6 @@ class MainMenuScene(BaseScene):
             self.beat_level,
             self.menu_open
         )
-        self.visualizer.update(
-            dt,
-            self.time_seconds,
-            self.beat_level,
-            self.circle.hover,
-            self.beat_phase,
-            self.music_energy
-        )
-
         for option in self.options:
             option.update(dt, mouse_pos, self.menu_open)
 
@@ -884,7 +711,8 @@ class MainMenuScene(BaseScene):
             self._layout()
 
         self._draw_background(screen)
-        self._draw_overlay(screen)
+        if not self.background:
+            self._draw_overlay(screen)
         self.snow.draw(screen)
 
         menu_t = ease_in_out(self.menu_t)
@@ -921,6 +749,12 @@ class MainMenuScene(BaseScene):
             self.music_started = False
         self.keep_music_on_destroy = False
 
+    def _current_music_position_ms(self):
+        music_pos = pygame.mixer.music.get_pos()
+        if music_pos < 0:
+            return pygame.time.get_ticks() - self.music_started_ticks
+        return music_pos
+
     def _open_song_select(self):
         self.keep_music_on_destroy = True
         self.game.scene_manager.push_scene(
@@ -950,98 +784,6 @@ class MainMenuScene(BaseScene):
 
     def _exit_game(self):
         self.game.running = False
-
-    def _update_beat(self, dt):
-        bpm, phase, music_pos = self._current_music_timing(dt)
-        self.music_bpm = lerp(
-            self.music_bpm,
-            bpm,
-            1.0 - math.exp(-dt * 8.0)
-        )
-        target_energy = self._combined_music_energy(bpm, music_pos)
-        energy_speed = 12.0 if target_energy < self.music_energy else 5.0
-        self.music_energy = lerp(
-            self.music_energy,
-            target_energy,
-            1.0 - math.exp(-dt * energy_speed)
-        )
-        if target_energy < self.music_energy - 0.08:
-            self.visualizer.dampen(1.0 - math.exp(-dt * 6.0))
-        self.beat_phase = phase
-        beat_distance = min(self.beat_phase, 1.0 - self.beat_phase)
-        beat = clamp(1.0 - (beat_distance / 0.18), 0.0, 1.0)
-        kick = pow(beat, 2.65)
-        groove = (math.sin((phase * math.tau) - 0.55) + 1.0) * 0.025
-        shimmer = (math.sin(phase * math.tau * 2.0) + 1.0) * 0.018
-        return clamp(kick + groove + shimmer, 0.0, 1.0)
-
-    def _current_music_timing(self, dt):
-        if not self.current_timing_points:
-            bpm = self.music_bpm
-            phase = (self.beat_phase + (dt * bpm / 60.0)) % 1.0
-            music_pos = pygame.mixer.music.get_pos()
-            if music_pos < 0:
-                music_pos = pygame.time.get_ticks() - self.music_started_ticks
-            return bpm, phase, music_pos
-
-        music_pos = pygame.mixer.music.get_pos()
-        if music_pos < 0:
-            music_pos = pygame.time.get_ticks() - self.music_started_ticks
-
-        active = self._active_timing_point(music_pos)
-        if active is None:
-            bpm = self.music_bpm
-            phase = (self.beat_phase + (dt * bpm / 60.0)) % 1.0
-            return bpm, phase, music_pos
-
-        ms_per_beat = max(1.0, active["ms_per_beat"])
-        bpm = clamp(60000.0 / ms_per_beat, 40.0, 360.0)
-        phase = ((music_pos - active["time"]) / ms_per_beat) % 1.0
-        return bpm, phase, music_pos
-
-    def _active_timing_point(self, music_pos):
-        active = None
-        for timing_point in self.current_timing_points:
-            if timing_point.get("uninherited", 1) != 1:
-                continue
-            if timing_point.get("ms_per_beat", 0) <= 0:
-                continue
-            if timing_point.get("time", 0) <= music_pos:
-                active = timing_point
-            else:
-                break
-
-        if active is None:
-            for timing_point in self.current_timing_points:
-                if (
-                    timing_point.get("uninherited", 1) == 1
-                    and timing_point.get("ms_per_beat", 0) > 0
-                ):
-                    return timing_point
-
-        return active
-
-    def _combined_music_energy(self, bpm, music_pos):
-        bpm_energy = self._energy_from_bpm(bpm)
-        volume_energy = self._volume_energy_at(music_pos)
-
-        if volume_energy is None:
-            beat_swell = pow(clamp(self.beat_level, 0.0, 1.0), 0.7)
-            return clamp((bpm_energy * 0.65) + (beat_swell * 0.35), 0.12, 1.0)
-
-        return clamp((bpm_energy * 0.28) + (volume_energy * 0.72), 0.04, 1.0)
-
-    def _volume_energy_at(self, music_pos):
-        if not self.audio_envelope:
-            return None
-
-        index = int(max(0, music_pos) / self.audio_envelope_step_ms)
-        if index >= len(self.audio_envelope):
-            return 0.0
-
-        start = max(0, index - 1)
-        end = min(len(self.audio_envelope), index + 2)
-        return sum(self.audio_envelope[start:end]) / max(1, end - start)
 
     def _load_background(self):
         root_background = asset_path("menu-bg.jpg")
@@ -1085,10 +827,11 @@ class MainMenuScene(BaseScene):
         self.music_bpm = track["bpm"]
         self.music_energy = track["energy"]
         self.current_timing_points = track.get("timing_points", [])
-        if track.get("envelope") is None:
-            track["envelope"] = self._build_audio_envelope(self.music_path)
-        self.audio_envelope = track.get("envelope") or []
         self.beat_phase = 0.0
+        self.visualizer.load_audio_analysis(
+            self.music_path,
+            self.current_timing_points
+        )
 
         try:
             pygame.mixer.music.load(str(self.music_path))
@@ -1121,8 +864,7 @@ class MainMenuScene(BaseScene):
                 "title": title or "Menu music",
                 "bpm": 118.0,
                 "energy": 0.48,
-                "timing_points": [],
-                "envelope": None
+                "timing_points": []
             })
 
         for beatmap in getattr(self.game, "beatmaps", []):
@@ -1139,8 +881,7 @@ class MainMenuScene(BaseScene):
                 ),
                 "bpm": bpm,
                 "energy": self._energy_from_bpm(bpm),
-                "timing_points": difficulty.get("timing_points", []),
-                "envelope": None
+                "timing_points": difficulty.get("timing_points", [])
             })
 
         return tracks
@@ -1150,41 +891,6 @@ class MainMenuScene(BaseScene):
             return path
 
         return None
-
-    def _build_audio_envelope(self, path):
-        try:
-            sound = pygame.mixer.Sound(str(path))
-            samples = pygame.sndarray.array(sound)
-        except (pygame.error, ValueError, TypeError):
-            return []
-
-        try:
-            import numpy as np
-        except ImportError:
-            return []
-
-        if samples.size == 0:
-            return []
-
-        samples = samples.astype("float32")
-        if samples.ndim > 1:
-            samples = samples.mean(axis=1)
-
-        sample_rate = pygame.mixer.get_init()[0]
-        window = max(256, int(sample_rate * self.audio_envelope_step_ms / 1000))
-        usable = (len(samples) // window) * window
-        if usable <= 0:
-            return []
-
-        samples = samples[:usable].reshape((-1, window))
-        rms = np.sqrt(np.mean(samples * samples, axis=1))
-        peak = float(np.percentile(rms, 95)) if len(rms) else 0.0
-        if peak <= 0.0:
-            return []
-
-        envelope = np.clip(rms / peak, 0.0, 1.0)
-        envelope = np.power(envelope, 0.72)
-        return [float(value) for value in envelope]
 
     def _bpm_from_timing_points(self, timing_points):
         for timing_point in timing_points:
@@ -1217,10 +923,18 @@ class MainMenuScene(BaseScene):
     def _draw_background(self, screen):
         size = screen.get_size()
         if self.background:
-            if self.scaled_background is None or self.background_size != size:
+            dim_key = (size, self.light_overlay)
+            if self.dimmed_background is None or self.dimmed_background_key != dim_key:
                 self.scaled_background = self._cover_scale(self.background, size)
                 self.background_size = size
-            screen.blit(self.scaled_background, (0, 0))
+                self.dimmed_background = self.scaled_background.copy()
+                if self.light_overlay:
+                    self.dimmed_background.fill((245, 235, 250), special_flags=pygame.BLEND_RGB_ADD)
+                    self.dimmed_background.fill((188, 188, 188), special_flags=pygame.BLEND_RGB_MULT)
+                else:
+                    self.dimmed_background.fill((130, 130, 130), special_flags=pygame.BLEND_RGB_MULT)
+                self.dimmed_background_key = dim_key
+            screen.blit(self.dimmed_background, (0, 0))
             return
 
         self._draw_fallback_background(screen)
@@ -1242,7 +956,7 @@ class MainMenuScene(BaseScene):
                 (target_h - scaled_size[1]) // 2
             )
         )
-        return result
+        return result.convert()
 
     def _draw_fallback_background(self, screen):
         width, height = screen.get_size()
