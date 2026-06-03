@@ -64,8 +64,12 @@ class SceneManager:
 
         if current:
 
+            if hasattr(current, "on_resume"):
+
+                current.on_resume()
+
             # recria UI da cena anterior
-            if hasattr(current, "create_ui"):
+            elif hasattr(current, "create_ui"):
 
                 current.create_ui()
         self._start_transition()

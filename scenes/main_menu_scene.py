@@ -6,6 +6,7 @@ import pygame
 
 from core.audio import is_sound_effect_file
 from core.assets import ACTIVE_SKIN_DIR, asset_path
+from core.fonts import rounded_font
 from rendering.menu_visualizer import CircularMenuVisualizer
 from scenes.base_scene import BaseScene
 from scenes.song_select_scene import SongSelectScene
@@ -29,7 +30,19 @@ def lerp(current, target, amount):
     return current + ((target - current) * clamp(amount, 0.0, 1.0))
 
 
+def lerp_color(start, end, amount):
+    amount = clamp(amount, 0.0, 1.0)
+    return (
+        int(lerp(start[0], end[0], amount)),
+        int(lerp(start[1], end[1], amount)),
+        int(lerp(start[2], end[2], amount)),
+    )
+
+
 class MenuOption:
+    NORMAL_COLOR = (95, 70, 220)
+    HOVER_COLOR = (235, 105, 170)
+
     def __init__(self, label, action):
         self.label = label
         self.action = action
@@ -40,6 +53,7 @@ class MenuOption:
         self.delay = 0.0
         self._surface_cache = {}
         self._text_cache = {}
+        self._pattern_cache = {}
 
     def set_layout(self, left_x, y, width, height, delay, width_factor=1.0):
         self.width_factor = width_factor
@@ -85,130 +99,120 @@ class MenuOption:
 
         visible = ease_out_cubic(self.visible)
         hover = ease_out_cubic(self.hover)
-        slide = int((1.0 - visible) * -self.rect.width * 0.78)
-        rect = self.rect.move(slide, 0)
-        alpha = int(220 * visible)
+        slide = int((1.0 - visible) * -self.rect.width * 0.54)
+        expand_width = int(self.rect.width * (0.12 * hover))
+        expand_height = int(self.rect.height * (0.06 * hover))
+        rect = pygame.Rect(
+            self.rect.left + slide,
+            self.rect.top - (expand_height // 2),
+            self.rect.width + expand_width,
+            self.rect.height + expand_height
+        )
+        alpha = int((214 + 35 * hover) * visible)
         cache_key = (
             rect.width,
             rect.height,
             self.label,
             font.get_height(),
-            int(visible * 40),
-            int(hover * 24)
+            int(visible * 18),
+            int(hover * 14)
         )
         cached = self._surface_cache.get(cache_key)
         if cached is not None:
-            surface.blit(cached, (rect.x - 20, rect.y - 11))
+            surface.blit(
+                cached["surface"],
+                (rect.x - cached["pad_x"], rect.y - cached["pad_y"])
+            )
             return
 
         scale = 2
-        layer_size = (rect.width + 64, rect.height + 30)
-        shape_layer = pygame.Surface(
+        pad_x = max(14, int(rect.height * 0.46))
+        pad_y = max(8, int(rect.height * 0.34))
+        layer_size = (rect.width + (pad_x * 2), rect.height + (pad_y * 2))
+        shape_layer_hi = pygame.Surface(
             (layer_size[0] * scale, layer_size[1] * scale),
             pygame.SRCALPHA
         )
-        body = pygame.Rect(20, 11, rect.width, rect.height)
-        skew = int(body.height * 0.22)
-        cap_radius = body.height // 2
-        cap_center = (body.right - cap_radius, body.centery)
-        body_points = [
-            (body.left + skew, body.top),
-            (cap_center[0], body.top),
-            (cap_center[0], body.bottom),
-            (body.left, body.bottom)
-        ]
-        fill_alpha = int((180 + (42 * hover)) * visible)
-        edge_alpha = int((42 + (75 * hover)) * visible)
-
-        def scaled(points):
-            return [(int(x * scale), int(y * scale)) for x, y in points]
-
-        def draw_card(target, offset, color, outline_width=0):
-            ox, oy = offset
-            points = [(x + ox, y + oy) for x, y in body_points]
-            center = (cap_center[0] + ox, cap_center[1] + oy)
-            radius = cap_radius
-            if outline_width:
-                outline = pygame.Surface(target.get_size(), pygame.SRCALPHA)
-                fill = pygame.Surface(target.get_size(), pygame.SRCALPHA)
-                pygame.draw.polygon(outline, color, scaled(points))
-                pygame.draw.circle(
-                    outline,
-                    color,
-                    (int(center[0] * scale), int(center[1] * scale)),
-                    int(radius * scale)
-                )
-                inset = outline_width
-                inset_points = [
-                    (body.left + skew + (inset // scale), body.top + (inset // scale)),
-                    (cap_center[0] - (inset // scale), body.top + (inset // scale)),
-                    (cap_center[0] - (inset // scale), body.bottom - (inset // scale)),
-                    (body.left + (inset // scale), body.bottom - (inset // scale))
-                ]
-                pygame.draw.polygon(fill, (255, 255, 255, 255), scaled(inset_points))
-                pygame.draw.circle(
-                    fill,
-                    (255, 255, 255, 255),
-                    (int((center[0] - (inset // scale)) * scale), int(center[1] * scale)),
-                    max(1, int((radius - (inset // scale)) * scale))
-                )
-                outline.blit(fill, (0, 0), special_flags=pygame.BLEND_RGBA_SUB)
-                target.blit(outline, (0, 0))
-                return
-
-            pygame.draw.polygon(target, color, scaled(points))
-            pygame.draw.circle(
-                target,
-                color,
-                (int(center[0] * scale), int(center[1] * scale)),
-                int(radius * scale)
-            )
-
-        mask = pygame.Surface(shape_layer.get_size(), pygame.SRCALPHA)
-        draw_card(shape_layer, (5, 6), (0, 0, 0, int(50 * visible)))
-        draw_card(shape_layer, (0, 0), (74, 54, 178, fill_alpha))
-        draw_card(mask, (0, 0), (255, 255, 255, 255))
-
-        highlight = pygame.Surface(shape_layer.get_size(), pygame.SRCALPHA)
-        highlight_points = [
-            (body.left + skew, body.top),
-            (cap_center[0] + cap_radius * 0.64, body.top),
-            (cap_center[0] + cap_radius * 0.18, body.top + int(body.height * 0.42)),
-            (body.left + int(skew * 0.35), body.top + int(body.height * 0.38))
-        ]
-        pygame.draw.polygon(
-            highlight,
-            (126, 98, 245, int((60 + 52 * hover) * visible)),
-            scaled(highlight_points)
+        body = pygame.Rect(pad_x, pad_y, rect.width, rect.height)
+        body_hi = pygame.Rect(
+            body.x * scale,
+            body.y * scale,
+            body.width * scale,
+            body.height * scale
         )
-        highlight.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-        shape_layer.blit(highlight, (0, 0))
+        body_radius = body_hi.height // 2
+        base_color = lerp_color(self.NORMAL_COLOR, self.HOVER_COLOR, hover)
+        fill_alpha = int((154 + 48 * hover) * visible)
+        shadow_alpha = int((48 + 22 * hover) * visible)
+        glow_alpha = int((20 + 42 * hover) * visible)
 
-        draw_card(shape_layer, (0, 0), (255, 255, 255, edge_alpha), max(2, int(body.height * 0.055 * scale)))
+        shadow = body_hi.move(int(5 * scale), int(5 * scale))
+        pygame.draw.rect(
+            shape_layer_hi,
+            (0, 0, 0, shadow_alpha),
+            shadow,
+            border_radius=body_radius
+        )
         if hover > 0.01:
-            draw_card(
-                shape_layer,
-                (int(hover * 4), 0),
-                (255, 255, 255, int(30 * hover * visible)),
-                max(2, int(body.height * 0.075 * scale))
-            )
+            for extra, factor in ((10, 0.22), (5, 0.35)):
+                glow_rect = body_hi.inflate(int(extra * scale), int(extra * 0.72 * scale))
+                pygame.draw.rect(
+                    shape_layer_hi,
+                    (255, 160, 220, int(glow_alpha * factor)),
+                    glow_rect,
+                    border_radius=glow_rect.height // 2
+                )
 
-        layer = pygame.transform.smoothscale(shape_layer, layer_size).convert_alpha()
+        pygame.draw.rect(
+            shape_layer_hi,
+            (*base_color, fill_alpha),
+            body_hi,
+            border_radius=body_radius
+        )
 
-        available_width = max(24, body.right - (body.left + int(body.width * 0.42)) - int(body.height * 0.22))
+        pattern = self._pattern_surface(body.size, scale)
+        pattern_alpha = int((44 + 18 * hover) * visible)
+        if pattern.get_alpha() != pattern_alpha:
+            pattern.set_alpha(pattern_alpha)
+        shape_layer_hi.blit(pattern, body_hi.topleft)
+
+        shine_rect = body_hi.inflate(-max(2, int(body_hi.height * 0.08)), -max(2, int(body_hi.height * 0.20)))
+        shine_rect.height = max(1, shine_rect.height // 2)
+        pygame.draw.rect(
+            shape_layer_hi,
+            (255, 255, 255, int((18 + 28 * hover) * visible)),
+            shine_rect,
+            border_radius=max(1, shine_rect.height // 2)
+        )
+        pygame.draw.rect(
+            shape_layer_hi,
+            (255, 255, 255, int((30 + 35 * hover) * visible)),
+            body_hi.inflate(-2 * scale, -2 * scale),
+            width=max(1, scale),
+            border_radius=max(1, body_radius - scale)
+        )
+
+        layer = pygame.transform.smoothscale(shape_layer_hi, layer_size).convert_alpha()
+
+        text_left = body.left + max(int(body.height * 0.88), int(body.width * 0.13))
+        available_width = max(24, body.right - text_left - int(body.height * 0.55))
         text = self._text_surface(font, available_width)
         if text.get_alpha() != alpha:
             text.set_alpha(alpha)
         text_rect = text.get_rect(
-            midleft=(body.left + int(body.width * 0.42), body.centery)
+            midleft=(text_left, body.centery)
         )
         layer.blit(text, text_rect)
 
-        if len(self._surface_cache) > 96:
+        if len(self._surface_cache) > 56:
             self._surface_cache.clear()
-        self._surface_cache[cache_key] = layer
+        self._surface_cache[cache_key] = {
+            "surface": layer,
+            "pad_x": pad_x,
+            "pad_y": pad_y
+        }
 
-        surface.blit(layer, (rect.x - 20, rect.y - 11))
+        surface.blit(layer, (rect.x - pad_x, rect.y - pad_y))
 
     def _text_surface(self, font, available_width):
         key = (self.label, id(font), font.get_height(), int(available_width))
@@ -219,17 +223,54 @@ class MenuOption:
         text = font.render(self.label, True, (255, 255, 255))
         if text.get_width() > available_width:
             target_height = max(12, int(font.get_height() * (available_width / text.get_width())))
-            render_font = pygame.font.Font(None, target_height)
+            render_font = rounded_font(target_height, bold=True)
             text = render_font.render(self.label, True, (255, 255, 255))
             while text.get_width() > available_width and target_height > 12:
                 target_height -= 1
-                render_font = pygame.font.Font(None, target_height)
+                render_font = rounded_font(target_height, bold=True)
                 text = render_font.render(self.label, True, (255, 255, 255))
 
         if len(self._text_cache) > 24:
             self._text_cache.clear()
         self._text_cache[key] = text
         return text
+
+    def _pattern_surface(self, size, scale):
+        key = (int(size[0]), int(size[1]), int(scale))
+        cached = self._pattern_cache.get(key)
+        if cached is not None:
+            return cached
+
+        width, height = max(1, int(size[0]) * scale), max(1, int(size[1]) * scale)
+        pattern = pygame.Surface((width, height), pygame.SRCALPHA)
+        rng = random.Random((width * 73856093) ^ (height * 19349663))
+        count = max(5, int(width / max(26, height * 0.58)))
+        for _ in range(count):
+            size_px = rng.randint(max(7, height // 5), max(12, height // 2))
+            x = rng.randint(-size_px, width)
+            y = rng.randint(-size_px // 2, height)
+            shade = rng.choice((255, 230, 200, 170))
+            alpha = rng.randint(13, 27)
+            points = (
+                (x, y - size_px // 2),
+                (x + size_px // 2, y + size_px // 2),
+                (x - size_px // 2, y + size_px // 2)
+            )
+            pygame.draw.polygon(pattern, (shade, shade, shade, alpha), points)
+
+        mask = pygame.Surface((width, height), pygame.SRCALPHA)
+        pygame.draw.rect(
+            mask,
+            (255, 255, 255, 255),
+            mask.get_rect(),
+            border_radius=height // 2
+        )
+        pattern.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+
+        if len(self._pattern_cache) > 16:
+            self._pattern_cache.clear()
+        self._pattern_cache[key] = pattern
+        return pattern
 
 
 class MenuSnow:
@@ -381,29 +422,13 @@ class PulseCircle:
         if self._font_radius != self.base_radius:
             self._font_radius = self.base_radius
             self._logo_cache.clear()
-            self.small_font = pygame.font.SysFont(
-                "arial",
-                max(12, int(self.base_radius * 0.105)),
-                bold=True
-            )
+            self.small_font = rounded_font(max(12, int(self.base_radius * 0.105)), bold=True)
             self._caption_cache.clear()
             if self._logo_surface is None:
                 self._logo_surface = self._load_logo_surface()
 
     def _rounded_font(self, size):
-        for name in (
-            "arialrounded",
-            "arialroundedmtbold",
-            "segoeui",
-            "segoeuisemibold",
-            "verdana",
-            "arial"
-        ):
-            path = pygame.font.match_font(name, bold=True)
-            if path:
-                return pygame.font.Font(path, size)
-
-        return pygame.font.Font(None, size)
+        return rounded_font(size, bold=True)
 
     def contains(self, pos):
         dx = pos[0] - self.center[0]
@@ -455,50 +480,44 @@ class PulseCircle:
             self.idle_pulse_phase = (self.idle_pulse_phase + max(0.0, dt)) % 1.0
             if self.idle_pulse_phase < previous_idle_phase:
                 self.ghost_scale = 1.018
-                self.ghost_alpha = max(self.ghost_alpha, 0.34)
+                self.ghost_alpha = max(self.ghost_alpha, 0.42)
 
-            expand_end = 0.59
+            expand_end = 0.66
             if self.idle_pulse_phase < expand_end:
                 progress = self.idle_pulse_phase / expand_end
-                prebeat = progress ** 0.82
+                prebeat = ease_in_out(progress)
             else:
                 return_phase = (self.idle_pulse_phase - expand_end) / (1.0 - expand_end)
-                prebeat = 1.0 - (return_phase ** 0.74)
+                prebeat = 1.0 - ease_out_cubic(return_phase)
 
         if music_active:
             beat_push = prebeat * (0.085 + music_energy * 0.035)
         else:
-            beat_push = max(0.0, prebeat * 0.020)
+            beat_push = max(0.0, prebeat * 0.014)
         hover_push = self.hover * 0.075
         flash_push = ease_out_cubic(self.click_flash) * 0.14
         menu_push = 0.025 if menu_open else 0.0
         self.target_pulse_scale = 1.0 + beat_push + hover_push + flash_push + menu_push
         expand_speed = 6.5 + music_energy * 3.4
         if not music_active:
-            expand_speed = 4.7
+            expand_speed = 5.6
         scale_speed = expand_speed
         if self.target_pulse_scale < self.pulse_scale:
             scale_speed = expand_speed * (1.25 if music_active else 1.85)
-        if music_active:
-            self.pulse_scale = lerp(
-                self.pulse_scale,
-                self.target_pulse_scale,
-                1.0 - math.exp(-dt * scale_speed)
-            )
-        else:
-            self.pulse_scale = self.target_pulse_scale
+        self.pulse_scale = lerp(
+            self.pulse_scale,
+            self.target_pulse_scale,
+            1.0 - math.exp(-dt * scale_speed)
+        )
         target_radius = self.base_radius * self.pulse_scale
         radius_speed = 12.0
         if target_radius < self.radius:
             radius_speed *= (1.25 if music_active else 1.65)
-        if music_active:
-            self.radius = lerp(
-                self.radius,
-                target_radius,
-                1.0 - math.exp(-dt * radius_speed)
-            )
-        else:
-            self.radius = target_radius
+        self.radius = lerp(
+            self.radius,
+            target_radius,
+            1.0 - math.exp(-dt * radius_speed)
+        )
 
     def trigger_click(self):
         self.click_flash = 1.0
@@ -516,25 +535,10 @@ class PulseCircle:
             ghost_rect = ghost.get_rect(center=(center_x, center_y))
             surface.blit(ghost, ghost_rect)
             ghost.set_alpha(previous_alpha)
-            self._draw_caption(
-                surface,
-                "click to start" if not menu_open else "select an option",
-                ghost_radius,
-                int(118 * self.ghost_alpha)
-            )
 
         body = self._scaled_logo(radius)
         body_rect = body.get_rect(center=(center_x, center_y))
         surface.blit(body, body_rect)
-
-        caption = "click to start" if not menu_open else "select an option"
-        shared_alpha = int((120 if not menu_open else 155) + ((self.pulse_scale - 1.0) * 360))
-        self._draw_caption(
-            surface,
-            caption,
-            radius,
-            clamp(shared_alpha, 120, 205)
-        )
 
     def _draw_beat_waves(self, surface, center_x, center_y):
         if not self.beat_waves:
@@ -586,7 +590,7 @@ class PulseCircle:
         surface.blit(caption_surface, caption_rect)
 
     def _scaled_logo(self, radius):
-        radius_key = max(1, int(round(radius)))
+        radius_key = max(1, int(round(radius / 2.0) * 2))
         key = radius_key
         cached = self._logo_cache.get(key)
         if cached is not None:
@@ -597,7 +601,7 @@ class PulseCircle:
         diameter = max(1, int(radius_key * 2.12))
         scaled = pygame.transform.smoothscale(source, (diameter, diameter)).convert_alpha()
 
-        if len(self._logo_cache) > 96:
+        if len(self._logo_cache) > 80:
             self._logo_cache.clear()
         self._logo_cache[key] = scaled
         return scaled
@@ -727,19 +731,18 @@ class MainMenuScene(BaseScene):
         width = self.game.WIDTH
         height = self.game.HEIGHT
         self.circle.layout(width, height)
-        self.option_font = pygame.font.SysFont(
-            "arial",
-            max(22, int(self.circle.base_radius * 0.139)),
+        self.option_font = rounded_font(
+            max(22, int(self.circle.base_radius * 0.126)),
             bold=True
         )
-        self.footer_font = pygame.font.SysFont("arial", max(14, height // 64))
+        self.footer_font = rounded_font(max(14, height // 64), bold=False)
         self.footer_cache.clear()
 
-        option_width = int(clamp(width * 0.324, 306, 558))
-        option_height = int(clamp(height * 0.0675, 49, 70))
-        spacing = int(option_height * 1.12)
+        option_width = int(clamp(width * 0.292, 284, 520))
+        option_height = int(clamp(height * 0.058, 43, 61))
+        spacing = int(option_height * 1.18)
         open_circle_x = self.circle.center[0] - int(self.circle.base_radius * 0.48)
-        left_x = open_circle_x + int(self.circle.base_radius * 0.80)
+        left_x = open_circle_x + int(self.circle.base_radius * 0.88)
         left_x = min(left_x, width - option_width - 24)
         start_y = self.circle.center[1] - int(spacing * (len(self.options) - 1) * 0.5)
 
@@ -748,7 +751,7 @@ class MainMenuScene(BaseScene):
         if start_y + (spacing * (len(self.options) - 1)) > height - 70:
             start_y = height - 70 - (spacing * (len(self.options) - 1))
 
-        width_factors = [0.68, 0.84, 1.04, 0.86, 0.64]
+        width_factors = [0.70, 0.84, 1.06, 0.90, 0.66]
         for index, option in enumerate(self.options):
             option.set_layout(
                 left_x,
@@ -762,8 +765,13 @@ class MainMenuScene(BaseScene):
     def create_ui(self):
         self._prepare_mouse()
         self._layout()
-        self._sync_from_shared_music()
+        self._sync_from_shared_music(defer_analysis=True)
         self._start_menu_music()
+
+    def on_resume(self):
+        self._prepare_mouse()
+        self._sync_from_shared_music(defer_analysis=True)
+        self.visualizer_analysis_delay = max(self.visualizer_analysis_delay, 0.45)
 
     def on_resize(self):
         self._layout()
@@ -1009,7 +1017,7 @@ class MainMenuScene(BaseScene):
         self.game.current_menu_music_paused = self.music_paused
         self.last_shared_music_path = self.game.current_menu_music_path
 
-    def _sync_from_shared_music(self):
+    def _sync_from_shared_music(self, defer_analysis=False):
         shared_path = getattr(self.game, "current_menu_music_path", None)
         if not shared_path:
             return False
@@ -1044,7 +1052,10 @@ class MainMenuScene(BaseScene):
         if not self.music_paused:
             self.music_paused_at_ms = 0
         self.last_shared_music_path = shared_path
-        self._ensure_visualizer_analysis()
+        if defer_analysis:
+            self.visualizer_analysis_delay = max(self.visualizer_analysis_delay, 0.45)
+        else:
+            self._ensure_visualizer_analysis()
         return True
 
     def _load_background(self):
@@ -1069,7 +1080,7 @@ class MainMenuScene(BaseScene):
         return None
 
     def _start_menu_music(self):
-        self._sync_from_shared_music()
+        self._sync_from_shared_music(defer_analysis=True)
         if self.music_started and (pygame.mixer.music.get_busy() or self.music_paused):
             return
 

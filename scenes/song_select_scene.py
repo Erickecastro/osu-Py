@@ -6,6 +6,7 @@ import pygame
 from core.audio import find_audio_file
 from core.assets import asset_path
 from core.beatmap_info import BeatmapParser, LocalScoreManager
+from core.fonts import rounded_font
 from scenes.base_scene import BaseScene
 from scenes.gameplay_scene import GameplayScene
 
@@ -262,13 +263,13 @@ class SongSelectScene(BaseScene):
         self.card_spacing = int(self.card_height * 0.86)
         self.margin = int(max(18, w * 0.018))
 
-        self.title_font = pygame.font.SysFont("arial", max(30, h // 24), bold=True)
-        self.medium_font = pygame.font.SysFont("arial", max(20, h // 38), bold=True)
-        self.small_font = pygame.font.SysFont("arial", max(15, h // 55))
-        self.tiny_font = pygame.font.SysFont("arial", max(13, h // 70))
-        self.card_title_font = pygame.font.SysFont("arial", max(18, h // 43), bold=True)
-        self.card_small_font = pygame.font.SysFont("arial", max(14, h // 58))
-        self.card_tiny_font = pygame.font.SysFont("arial", max(12, h // 72))
+        self.title_font = rounded_font(max(30, h // 24), bold=True)
+        self.medium_font = rounded_font(max(20, h // 38), bold=True)
+        self.small_font = rounded_font(max(15, h // 55), bold=False)
+        self.tiny_font = rounded_font(max(13, h // 70), bold=False)
+        self.card_title_font = rounded_font(max(18, h // 43), bold=True)
+        self.card_small_font = rounded_font(max(14, h // 58), bold=False)
+        self.card_tiny_font = rounded_font(max(12, h // 72), bold=False)
 
     def _load_card_base_image(self):
         path = asset_path("menu-button-background.png", "songselect_cards")

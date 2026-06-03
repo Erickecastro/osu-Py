@@ -7,6 +7,7 @@ import pygame
 from scenes.base_scene import BaseScene
 from core.audio import find_audio_file, start_music
 from core.assets import asset_path
+from core.fonts import rounded_font
 from core.gameplay import calculate_accuracy, hit_result_for_delta
 from core.health import apply_health_drain, apply_health_result
 from core.hit_detection import find_best_hit_object
@@ -58,10 +59,7 @@ class GameplayScene(BaseScene):
         pygame.mouse.set_visible(False)
         self.game.enable_raw_mouse()
 
-        self.font = pygame.font.SysFont(
-            "arial",
-            32
-        )
+        self.font = rounded_font(32, bold=False)
 
         self.music_started = False
         self.music_path = None
@@ -270,18 +268,10 @@ class GameplayScene(BaseScene):
 
         self.slider_renderer = SliderRenderer(self)
 
-        self.circle_number_font = pygame.font.SysFont(
-            "arial",
-            32,
-            bold=True
-        )
+        self.circle_number_font = rounded_font(32, bold=True)
 
         self.cursor_renderer = CursorRenderer()
-        self.circle_number_font = pygame.font.SysFont(
-            "arial",
-            28,
-            bold=True
-        )
+        self.circle_number_font = rounded_font(28, bold=True)
         self.effects_renderer = GameplayEffectsRenderer(self)
         self.hud_renderer = GameplayHUDRenderer(self.font)
         self.skin_images = self._load_skin_images()
@@ -315,9 +305,9 @@ class GameplayScene(BaseScene):
         self.center_overlay_cache = {}
         self.center_overlay_shade = None
         self.center_overlay_shade_size = None
-        self.title_overlay_font = pygame.font.SysFont("arial", 54, bold=True)
-        self.medium_overlay_font = pygame.font.SysFont("arial", 28, bold=True)
-        self.small_overlay_font = pygame.font.SysFont("arial", 18)
+        self.title_overlay_font = rounded_font(54, bold=True)
+        self.medium_overlay_font = rounded_font(28, bold=True)
+        self.small_overlay_font = rounded_font(18, bold=False)
         self.spinner_manager = SpinnerManager(self)
         self.spinner_renderer = SpinnerRenderer(self)
 
