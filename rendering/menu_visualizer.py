@@ -18,6 +18,7 @@ class CircularMenuVisualizer:
     def __init__(self, bar_count=256):
         self.bar_count = bar_count
         self.levels = [0.0] * bar_count
+        self.silent_bands = [0.0] * bar_count
         self.band_targets = [0.0] * bar_count
         self.band_alpha = [0.0] * bar_count
         self.angles = [(index / bar_count) * math.tau for index in range(bar_count)]
@@ -31,9 +32,9 @@ class CircularMenuVisualizer:
             for index in range(bar_count)
         ]
         self.max_length_scale = 0.503
-        self.bar_width = 3.35
-        self.minimum_level_base = 0.15
-        self.minimum_alpha = 34
+        self.bar_width = 4.41
+        self.minimum_level_base = 0.06
+        self.minimum_alpha = 0
         self.attack_amount = 0.85
         self.release_amount = 0.12
         self.sweep_position = 0.0
@@ -41,10 +42,11 @@ class CircularMenuVisualizer:
         self.center = (0, 0)
         self.radius = 160.0
         self.energy = 0.12
+        self.audible_level = 0.0
         self.beat_level = 0.0
         self.beat_phase = 0.0
         self.kiai_level = 0.0
-        self.analysis_step_ms = 36
+        self.analysis_step_ms = 42
         self.analysis = []
         self.rms_envelope = []
         self.timing_points = []
@@ -60,6 +62,7 @@ class CircularMenuVisualizer:
         self.analysis = []
         self.rms_envelope = []
         self.energy = 0.12
+        self.audible_level = 0.0
         self.beat_level = 0.0
         self.beat_phase = 0.0
         self.kiai_level = 0.0
@@ -163,9 +166,10 @@ class CircularMenuVisualizer:
         parsed.sort(key=lambda item: item["time"])
         return parsed
 
-    def update(self, dt, current_time_ms):
+    def update(self, dt, current_time_ms, audio_active=True):
         self._redraw_elapsed += dt
         self._layer_shrink_elapsed += dt
+        audio_active = bool(audio_active)
         current_time_ms = max(0.0, float(current_time_ms or 0.0))
         timing = self._timing_at(current_time_ms)
         if timing:
@@ -183,16 +187,26 @@ class CircularMenuVisualizer:
             self.kiai_level = _lerp(self.kiai_level, 0.0, 1.0 - math.exp(-dt * 3.0))
 
         bands, rms = self._analysis_at(current_time_ms)
+        if not audio_active:
+            rms = 0.0
+            bands = self.silent_bands
         beat_distance = min(self.beat_phase, 1.0 - self.beat_phase)
         timing_beat = _clamp(1.0 - (beat_distance / 0.125), 0.0, 1.0) ** 2.15
 
         if bands is None:
-            rms = max(0.04, timing_beat * 0.32)
+            rms = max(0.0, timing_beat * 0.24)
             bands = [
                 max(0.0, math.sin((index / self.bar_count) * math.tau * 3.0 + self.beat_phase * math.tau))
                 * rms
                 for index in range(self.bar_count)
             ]
+
+        audible_target = _clamp((rms - 0.055) / 0.18, 0.0, 1.0)
+        self.audible_level = _lerp(
+            self.audible_level,
+            audible_target,
+            1.0 - math.exp(-dt * (12.0 if audible_target > self.audible_level else 5.0))
+        )
 
         low = sum(bands[:max(1, self.bar_count // 5)]) / max(1, self.bar_count // 5)
         mid_start = self.bar_count // 5
@@ -201,7 +215,7 @@ class CircularMenuVisualizer:
         high = sum(bands[mid_end:]) / max(1, self.bar_count - mid_end)
 
         beat_audio = _clamp((low * 0.72) + (rms * 0.42), 0.0, 1.0)
-        beat_pulse = _clamp(timing_beat * 0.72, 0.0, 1.0)
+        beat_pulse = _clamp(timing_beat * 0.72 * self.audible_level, 0.0, 1.0)
         fft_pulse = _clamp(beat_audio * 0.58, 0.0, 1.0)
         self.beat_level = _lerp(
             self.beat_level,
@@ -210,7 +224,7 @@ class CircularMenuVisualizer:
         )
         self.energy = _lerp(
             self.energy,
-            _clamp((low * 0.32) + (mid * 0.30) + (high * 0.14) + (rms * 0.42), 0.15, 1.0),
+            _clamp(((low * 0.32) + (mid * 0.30) + (high * 0.14) + (rms * 0.42)) * self.audible_level, 0.0, 1.0),
             1.0 - math.exp(-dt * (7.5 if rms > self.energy else 3.2))
         )
 
@@ -232,10 +246,11 @@ class CircularMenuVisualizer:
                 0.0,
                 1.0
             )
-            minimum = self.minimum_level_base + (rms * 0.026) + (self.kiai_level * 0.014)
+            minimum = (self.minimum_level_base + (rms * 0.026) + (self.kiai_level * 0.014)) * self.audible_level
             target = max(minimum * self.variation[index], band)
             target *= 0.82 + (beat_pulse * 0.20) + (fft_pulse * 0.12) + (self.kiai_level * 0.14)
             target *= 0.78 + ((self.variation[index] - 0.54) * 0.24)
+            target *= self.audible_level
             target = _clamp(target, 0.0, 1.0)
 
             amount = self.attack_amount if target > self.levels[index] else self.release_amount
@@ -299,7 +314,7 @@ class CircularMenuVisualizer:
         surface.blit(layer, (center[0] - layer_radius, center[1] - layer_radius))
 
     def _draw_bar(self, layer, local_center, index, level, inner_radius, logo_radius, max_length, beat):
-        if level <= 0.001:
+        if level <= 0.012 or self.audible_level <= 0.015:
             return
 
         ux, uy = self.units[index]
@@ -312,7 +327,7 @@ class CircularMenuVisualizer:
         end_radius = logo_radius + max(5.0, length)
         width = self.bar_width
         arc_spacing = (math.tau * logo_radius) / max(1, self.bar_count)
-        width = int(math.ceil(_clamp(width, 2.0, max(2.0, min(self.bar_width, arc_spacing * 0.58)))))
+        width = int(math.ceil(_clamp(width, 2.0, max(2.0, min(self.bar_width, arc_spacing * 0.66)))))
         brightness = _clamp(0.34 + level * 0.56 + sweep * (0.12 + beat * 0.08), 0.34, 1.0)
         alpha = int(_clamp(
             (38 + level * 190 + sweep * (28 + beat * 38)) * self.alpha_variation[index],

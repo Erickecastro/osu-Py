@@ -344,6 +344,10 @@ class PulseCircle:
         self.click_flash = 0.0
         self.pulse_scale = 1.0
         self.target_pulse_scale = 1.0
+        self.last_beat_phase = 0.0
+        self.ghost_scale = 1.0
+        self.ghost_alpha = 0.0
+        self.beat_waves = []
         self.font = None
         self._base_font = None
         self.small_font = None
@@ -351,6 +355,7 @@ class PulseCircle:
         self._scratch_surfaces = {}
         self._logo_surface = None
         self._logo_cache = {}
+        self._caption_cache = {}
         self._logo_source_size = None
 
     def layout(self, width, height):
@@ -365,6 +370,7 @@ class PulseCircle:
                 max(12, int(self.base_radius * 0.105)),
                 bold=True
             )
+            self._caption_cache.clear()
             if self._logo_surface is None:
                 self._logo_surface = self._load_logo_surface()
 
@@ -388,7 +394,7 @@ class PulseCircle:
         dy = pos[1] - self.center[1]
         return (dx * dx) + (dy * dy) <= (self.radius * self.radius)
 
-    def update(self, dt, mouse_pos, time_seconds, beat_level, menu_open):
+    def update(self, dt, mouse_pos, time_seconds, beat_level, beat_phase, music_energy, music_active, menu_open):
         dx = mouse_pos[0] - self.center[0]
         dy = mouse_pos[1] - self.center[1]
         hover_target = 1.0 if (dx * dx) + (dy * dy) <= (self.radius * self.radius) else 0.0
@@ -401,23 +407,58 @@ class PulseCircle:
             1.0 - math.exp(-dt * 16.0)
         )
         self.click_flash = max(0.0, self.click_flash - (dt * 3.8))
+        self.ghost_alpha = max(0.0, self.ghost_alpha - (dt * 4.7))
+        next_waves = []
+        for wave in self.beat_waves:
+            wave["age"] += dt
+            if wave["age"] < wave["duration"]:
+                next_waves.append(wave)
+        self.beat_waves = next_waves
 
-        beat_push = ease_out_cubic(beat_level) * 0.23
+        music_active = bool(music_active)
+        beat_phase = clamp(beat_phase, 0.0, 1.0)
+        music_energy = clamp(music_energy, 0.0, 1.0) if music_active else 0.20
+        crossed_beat = self.last_beat_phase > 0.72 and beat_phase < 0.24
+        if music_active and crossed_beat and self.pulse_scale > 1.035:
+            self.ghost_scale = self.pulse_scale
+            self.ghost_alpha = 0.46 + (music_energy * 0.30)
+            self.beat_waves.append({
+                "age": 0.0,
+                "duration": 0.33,
+                "energy": music_energy
+            })
+        self.last_beat_phase = beat_phase
+
+        if music_active:
+            if beat_phase < 0.08:
+                prebeat = 0.0
+            else:
+                prebeat = ease_in_out((beat_phase - 0.08) / 0.92)
+        else:
+            prebeat = ease_in_out((time_seconds % 1.0))
+
+        beat_push = prebeat * (0.085 + music_energy * 0.035)
         hover_push = self.hover * 0.075
         flash_push = ease_out_cubic(self.click_flash) * 0.14
         menu_push = 0.025 if menu_open else 0.0
         self.target_pulse_scale = 1.0 + beat_push + hover_push + flash_push + menu_push
-        scale_speed = 16.0 if self.target_pulse_scale > self.pulse_scale else 6.2
+        expand_speed = 6.5 + music_energy * 3.4
+        scale_speed = expand_speed
+        if self.target_pulse_scale < self.pulse_scale:
+            scale_speed = expand_speed * 1.25
         self.pulse_scale = lerp(
             self.pulse_scale,
             self.target_pulse_scale,
             1.0 - math.exp(-dt * scale_speed)
         )
         target_radius = self.base_radius * self.pulse_scale
+        radius_speed = 12.0
+        if target_radius < self.radius:
+            radius_speed *= 1.25
         self.radius = lerp(
             self.radius,
             target_radius,
-            1.0 - math.exp(-dt * 12.0)
+            1.0 - math.exp(-dt * radius_speed)
         )
 
     def trigger_click(self):
@@ -426,21 +467,85 @@ class PulseCircle:
     def draw(self, surface, time_seconds, beat_level, menu_open):
         radius = int(self.radius)
         center_x, center_y = self.center
+        self._draw_beat_waves(surface, center_x, center_y)
+
+        if self.ghost_alpha > 0.01:
+            ghost_radius = int(self.base_radius * self.ghost_scale)
+            ghost = self._scaled_logo(ghost_radius).copy()
+            ghost.set_alpha(int(128 * self.ghost_alpha))
+            ghost_rect = ghost.get_rect(center=(center_x, center_y))
+            surface.blit(ghost, ghost_rect)
+            self._draw_caption(
+                surface,
+                "click to start" if not menu_open else "select an option",
+                ghost_radius,
+                int(72 * self.ghost_alpha)
+            )
+
         body = self._scaled_logo(radius)
         body_rect = body.get_rect(center=(center_x, center_y))
         surface.blit(body, body_rect)
 
         caption = "click to start" if not menu_open else "select an option"
-        caption_surface = self.small_font.render(caption.upper(), True, (255, 255, 255))
         shared_alpha = int((120 if not menu_open else 155) + ((self.pulse_scale - 1.0) * 360))
-        caption_surface.set_alpha(clamp(shared_alpha, 120, 205))
+        self._draw_caption(
+            surface,
+            caption,
+            radius,
+            clamp(shared_alpha, 120, 205)
+        )
+
+    def _draw_beat_waves(self, surface, center_x, center_y):
+        if not self.beat_waves:
+            return
+
+        logo_radius = self.radius * 1.06
+        max_width = max(2, int(self.base_radius * 0.035))
+        layer_radius = int(logo_radius * 1.23 + max_width + 4)
+        layer_size = layer_radius * 2
+        cache_key = ("beat_wave", layer_size)
+        layer = self._scratch_surfaces.get(cache_key)
+        if layer is None:
+            layer = pygame.Surface((layer_size, layer_size), pygame.SRCALPHA)
+            self._scratch_surfaces[cache_key] = layer
+        layer.fill((0, 0, 0, 0))
+        local_center = (layer_radius, layer_radius)
+
+        for wave in self.beat_waves:
+            progress = clamp(wave["age"] / wave["duration"], 0.0, 1.0)
+            eased = ease_out_cubic(progress)
+            radius = int(logo_radius * (1.0 + (0.16 * eased)))
+            alpha = int((145 + wave["energy"] * 52) * ((1.0 - progress) ** 1.45))
+            if alpha <= 2:
+                continue
+            width = max(1, int(max_width * (1.0 - progress * 0.42)))
+            pygame.draw.circle(
+                layer,
+                (255, 255, 255, alpha),
+                local_center,
+                radius,
+                width
+            )
+
+        surface.blit(layer, (center_x - layer_radius, center_y - layer_radius))
+
+    def _draw_caption(self, surface, caption, radius, alpha):
+        center_x, center_y = self.center
+        caption_key = (caption, self.small_font.get_height())
+        caption_surface = self._caption_cache.get(caption_key)
+        if caption_surface is None:
+            caption_surface = self.small_font.render(caption.upper(), True, (255, 255, 255))
+            if len(self._caption_cache) > 8:
+                self._caption_cache.clear()
+            self._caption_cache[caption_key] = caption_surface
+        caption_surface.set_alpha(int(clamp(alpha, 0, 255)))
         caption_rect = caption_surface.get_rect(
             center=(center_x, center_y + int(radius * 0.44))
         )
         surface.blit(caption_surface, caption_rect)
 
     def _scaled_logo(self, radius):
-        radius_key = max(1, int(round(radius / 3) * 3))
+        radius_key = max(1, int(round(radius / 2) * 2))
         key = radius_key
         cached = self._logo_cache.get(key)
         if cached is not None:
@@ -692,7 +797,12 @@ class MainMenuScene(BaseScene):
         self._sync_from_shared_music()
         self._ensure_visualizer_analysis()
         current_time_ms = self._current_music_position_ms()
-        self.visualizer.update(dt, current_time_ms)
+        music_active = (
+            self.music_started
+            and not self.music_paused
+            and pygame.mixer.music.get_busy()
+        )
+        self.visualizer.update(dt, current_time_ms, music_active)
         self.beat_level = self.visualizer.beat_level
         self.beat_phase = self.visualizer.beat_phase
         self.music_energy = self.visualizer.energy
@@ -707,6 +817,9 @@ class MainMenuScene(BaseScene):
             mouse_pos,
             self.time_seconds,
             self.beat_level,
+            self.beat_phase,
+            self.music_energy,
+            music_active,
             self.menu_open
         )
         for option in self.options:
@@ -856,6 +969,8 @@ class MainMenuScene(BaseScene):
             return False
 
         if self.last_shared_music_path == shared_path and self.music_path:
+            self.music_paused = bool(getattr(self.game, "current_menu_music_paused", False))
+            self.music_started = pygame.mixer.music.get_busy() or self.music_paused
             return True
 
         track_index = self._track_index_for_path(shared_path)
