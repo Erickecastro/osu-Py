@@ -64,6 +64,11 @@ class Game:
         self.cursor_renderer = CursorRenderer()
         pygame.mouse.set_visible(False)
 
+        self.current_menu_music_path = None
+        self.current_menu_music_title = None
+        self.current_menu_music_timing_points = []
+        self.current_menu_music_paused = False
+
         self.running = True
 
         # -------------------------

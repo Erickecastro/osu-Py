@@ -31,8 +31,7 @@ class CircularMenuVisualizer:
             for index in range(bar_count)
         ]
         self.max_length_scale = 0.503
-        self.bar_width_min = 2
-        self.bar_width_max = 3
+        self.bar_width = 3.35
         self.minimum_level_base = 0.15
         self.minimum_alpha = 34
         self.attack_amount = 0.85
@@ -51,6 +50,10 @@ class CircularMenuVisualizer:
         self.timing_points = []
         self._layer = None
         self._layer_size = None
+        self._layer_radius = 0
+        self._layer_shrink_elapsed = 0.0
+        self._redraw_elapsed = 1.0
+        self.render_interval = 1.0 / 75.0
 
     def load_audio_analysis(self, audio_path, timing_points=None):
         self.timing_points = self.parse_timing_points(timing_points or [])
@@ -161,6 +164,8 @@ class CircularMenuVisualizer:
         return parsed
 
     def update(self, dt, current_time_ms):
+        self._redraw_elapsed += dt
+        self._layer_shrink_elapsed += dt
         current_time_ms = max(0.0, float(current_time_ms or 0.0))
         timing = self._timing_at(current_time_ms)
         if timing:
@@ -243,7 +248,7 @@ class CircularMenuVisualizer:
 
     def draw(self, surface, center, radius, beat_level=None, music_energy=None, color=(255, 255, 255)):
         self.center = center
-        self.radius = float(radius)
+        self.radius = float(max(1, int(round(float(radius) / 4.0) * 4)))
         energy = self.energy if music_energy is None else max(self.energy, float(music_energy) * 0.75)
         beat = self.beat_level if beat_level is None else max(self.beat_level, float(beat_level) * 0.75)
 
@@ -254,13 +259,30 @@ class CircularMenuVisualizer:
             * (0.28 + energy * 1.28 + beat * 0.70 + self.kiai_level * 0.28)
             * self.max_length_scale
         )
-        layer_radius = int(logo_radius + max_length + self.bar_width_max + 6)
+        target_layer_radius = int(math.ceil((logo_radius + max_length + self.bar_width + 6) / 32.0) * 32)
+        layer_radius = target_layer_radius
+        if self._layer_radius > 0:
+            if target_layer_radius > self._layer_radius:
+                self._layer_shrink_elapsed = 0.0
+            elif target_layer_radius < self._layer_radius and self._layer_shrink_elapsed < 0.45:
+                layer_radius = self._layer_radius
         output_size = (layer_radius * 2, layer_radius * 2)
+        if (
+            self._layer is not None
+            and self._layer_size == output_size
+            and self._redraw_elapsed < self.render_interval
+        ):
+            surface.blit(self._layer, (center[0] - self._layer_radius, center[1] - self._layer_radius))
+            return
+
         if self._layer is None or self._layer_size != output_size:
             self._layer = pygame.Surface(output_size, pygame.SRCALPHA).convert_alpha()
             self._layer_size = output_size
+            self._redraw_elapsed = self.render_interval
         layer = self._layer
         layer.fill((0, 0, 0, 0))
+        self._layer_radius = layer_radius
+        self._redraw_elapsed = 0.0
         local_center = (layer_radius, layer_radius)
 
         for index, level in enumerate(self.levels):
@@ -288,9 +310,9 @@ class CircularMenuVisualizer:
         length *= 1.0 + (sweep * (0.08 + beat * 0.07))
         start_radius = inner_radius
         end_radius = logo_radius + max(5.0, length)
-        width = self.bar_width_min if level < 0.56 else self.bar_width_max
+        width = self.bar_width
         arc_spacing = (math.tau * logo_radius) / max(1, self.bar_count)
-        width = int(_clamp(width, 2, max(2, min(self.bar_width_max, int(arc_spacing * 0.58)))))
+        width = int(math.ceil(_clamp(width, 2.0, max(2.0, min(self.bar_width, arc_spacing * 0.58)))))
         brightness = _clamp(0.34 + level * 0.56 + sweep * (0.12 + beat * 0.08), 0.34, 1.0)
         alpha = int(_clamp(
             (38 + level * 190 + sweep * (28 + beat * 38)) * self.alpha_variation[index],

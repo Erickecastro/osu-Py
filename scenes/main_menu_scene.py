@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pygame
 
+from core.audio import is_sound_effect_file
 from core.assets import ACTIVE_SKIN_DIR, asset_path
 from rendering.menu_visualizer import CircularMenuVisualizer
 from scenes.base_scene import BaseScene
@@ -401,12 +402,12 @@ class PulseCircle:
         )
         self.click_flash = max(0.0, self.click_flash - (dt * 3.8))
 
-        beat_push = ease_out_cubic(beat_level) * 0.17
-        hover_push = self.hover * 0.065
-        flash_push = ease_out_cubic(self.click_flash) * 0.12
+        beat_push = ease_out_cubic(beat_level) * 0.23
+        hover_push = self.hover * 0.075
+        flash_push = ease_out_cubic(self.click_flash) * 0.14
         menu_push = 0.025 if menu_open else 0.0
         self.target_pulse_scale = 1.0 + beat_push + hover_push + flash_push + menu_push
-        scale_speed = 15.0 if self.target_pulse_scale > self.pulse_scale else 7.5
+        scale_speed = 16.0 if self.target_pulse_scale > self.pulse_scale else 6.2
         self.pulse_scale = lerp(
             self.pulse_scale,
             self.target_pulse_scale,
@@ -416,7 +417,7 @@ class PulseCircle:
         self.radius = lerp(
             self.radius,
             target_radius,
-            1.0 - math.exp(-dt * 16.0)
+            1.0 - math.exp(-dt * 12.0)
         )
 
     def trigger_click(self):
@@ -439,7 +440,7 @@ class PulseCircle:
         surface.blit(caption_surface, caption_rect)
 
     def _scaled_logo(self, radius):
-        radius_key = max(1, int(round(radius / 2) * 2))
+        radius_key = max(1, int(round(radius / 3) * 3))
         key = radius_key
         cached = self._logo_cache.get(key)
         if cached is not None:
@@ -499,6 +500,7 @@ class MainMenuScene(BaseScene):
 
     IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
     AUDIO_EXTENSIONS = (".ogg", ".mp3", ".wav")
+    MENU_MUSIC_EXTENSIONS = (".ogg", ".mp3")
     BACKGROUND_NAMES = (
         "background",
         "menu_background",
@@ -521,6 +523,8 @@ class MainMenuScene(BaseScene):
         self.menu_t = 0.0
         self.light_overlay = False
         self.music_started = False
+        self.music_paused = False
+        self.music_paused_at_ms = 0
         self.keep_music_on_destroy = False
         self.music_path = None
         self.music_title = "simulated pulse"
@@ -528,12 +532,10 @@ class MainMenuScene(BaseScene):
         self.music_energy = 0.45
         self.current_timing_points = []
         self.music_started_ticks = 0
+        self.analyzed_music_path = None
+        self.last_shared_music_path = None
         self.music_tracks = self._build_music_playlist()
-        self.current_track_index = (
-            random.randrange(len(self.music_tracks))
-            if self.music_tracks
-            else 0
-        )
+        self.current_track_index = self._initial_track_index()
         self.option_font = None
         self.footer_font = None
         self.footer_cache = {}
@@ -613,6 +615,7 @@ class MainMenuScene(BaseScene):
     def create_ui(self):
         self._prepare_mouse()
         self._layout()
+        self._sync_from_shared_music()
         self._start_menu_music()
 
     def on_resize(self):
@@ -635,6 +638,9 @@ class MainMenuScene(BaseScene):
                 return
             if event.key == pygame.K_ESCAPE and self.menu_open:
                 self.menu_open = False
+                return
+            if event.key == pygame.K_SPACE:
+                self._toggle_menu_music_pause()
                 return
             if self.settings_open:
                 if event.key in (pygame.K_LEFT, pygame.K_a):
@@ -683,6 +689,8 @@ class MainMenuScene(BaseScene):
         self.time_seconds += dt
         mouse_pos = self.game.mouse_pos
 
+        self._sync_from_shared_music()
+        self._ensure_visualizer_analysis()
         current_time_ms = self._current_music_position_ms()
         self.visualizer.update(dt, current_time_ms)
         self.beat_level = self.visualizer.beat_level
@@ -705,6 +713,7 @@ class MainMenuScene(BaseScene):
             option.update(dt, mouse_pos, self.menu_open)
 
         self.snow.update(dt, self.game.WIDTH, self.game.HEIGHT)
+        self._advance_finished_menu_track()
 
     def render(self, screen):
         if screen.get_size() != (self.game.WIDTH, self.game.HEIGHT):
@@ -747,9 +756,13 @@ class MainMenuScene(BaseScene):
         if self.music_started and not self.keep_music_on_destroy:
             pygame.mixer.music.stop()
             self.music_started = False
+            self.music_paused = False
         self.keep_music_on_destroy = False
 
     def _current_music_position_ms(self):
+        if self.music_paused:
+            return self.music_paused_at_ms
+
         music_pos = pygame.mixer.music.get_pos()
         if music_pos < 0:
             return pygame.time.get_ticks() - self.music_started_ticks
@@ -757,6 +770,7 @@ class MainMenuScene(BaseScene):
 
     def _open_song_select(self):
         self.keep_music_on_destroy = True
+        self._publish_current_music_state()
         self.game.scene_manager.push_scene(
             SongSelectScene(
                 self.game,
@@ -785,6 +799,90 @@ class MainMenuScene(BaseScene):
     def _exit_game(self):
         self.game.running = False
 
+    def _toggle_menu_music_pause(self):
+        if not self.music_tracks:
+            return
+
+        if self.music_paused:
+            pygame.mixer.music.unpause()
+            self.music_paused = False
+            self.music_started = True
+        else:
+            if not self.music_started:
+                self._start_menu_music()
+            self.music_paused_at_ms = max(0, self._current_music_position_ms())
+            pygame.mixer.music.pause()
+            self.music_paused = True
+
+        self._publish_current_music_state()
+
+    def _initial_track_index(self):
+        shared_index = self._track_index_for_path(
+            getattr(self.game, "current_menu_music_path", None)
+        )
+        if shared_index is not None:
+            return shared_index
+        if self.music_tracks:
+            return random.randrange(len(self.music_tracks))
+        return 0
+
+    def _track_index_for_path(self, path):
+        if not path:
+            return None
+        try:
+            target = Path(path).resolve()
+        except (OSError, RuntimeError):
+            target = Path(path)
+
+        for index, track in enumerate(self.music_tracks):
+            try:
+                candidate = Path(track["path"]).resolve()
+            except (OSError, RuntimeError):
+                candidate = Path(track["path"])
+            if candidate == target:
+                return index
+        return None
+
+    def _publish_current_music_state(self):
+        self.game.current_menu_music_path = str(self.music_path) if self.music_path else None
+        self.game.current_menu_music_title = self.music_title
+        self.game.current_menu_music_timing_points = self.current_timing_points
+        self.game.current_menu_music_paused = self.music_paused
+        self.last_shared_music_path = self.game.current_menu_music_path
+
+    def _sync_from_shared_music(self):
+        shared_path = getattr(self.game, "current_menu_music_path", None)
+        if not shared_path:
+            return False
+
+        if self.last_shared_music_path == shared_path and self.music_path:
+            return True
+
+        track_index = self._track_index_for_path(shared_path)
+        if track_index is None:
+            self.music_path = Path(shared_path)
+            self.music_title = getattr(
+                self.game,
+                "current_menu_music_title",
+                self.music_path.stem
+            )
+            self.current_timing_points = getattr(
+                self.game,
+                "current_menu_music_timing_points",
+                []
+            )
+            self.footer_cache.clear()
+        else:
+            self._set_track_metadata(track_index)
+
+        self.music_paused = bool(getattr(self.game, "current_menu_music_paused", False))
+        self.music_started = pygame.mixer.music.get_busy() or self.music_paused
+        if not self.music_paused:
+            self.music_paused_at_ms = 0
+        self.last_shared_music_path = shared_path
+        self._ensure_visualizer_analysis()
+        return True
+
     def _load_background(self):
         root_background = asset_path("menu-bg.jpg")
         if root_background.exists():
@@ -807,7 +905,8 @@ class MainMenuScene(BaseScene):
         return None
 
     def _start_menu_music(self):
-        if self.music_started and pygame.mixer.music.get_busy():
+        self._sync_from_shared_music()
+        if self.music_started and (pygame.mixer.music.get_busy() or self.music_paused):
             return
 
         if not self.music_tracks:
@@ -819,6 +918,37 @@ class MainMenuScene(BaseScene):
         if not self.music_tracks:
             return
 
+        self._set_track_metadata(index)
+        self._ensure_visualizer_analysis(force=True)
+
+        try:
+            pygame.mixer.music.load(str(self.music_path))
+            pygame.mixer.music.set_volume(0.42)
+            pygame.mixer.music.play()
+            self.music_started = True
+            self.music_paused = False
+            self.music_paused_at_ms = 0
+            self.music_started_ticks = pygame.time.get_ticks()
+            self._publish_current_music_state()
+        except pygame.error:
+            self.music_started = False
+            self.music_paused = False
+
+    def _ensure_visualizer_analysis(self, force=False):
+        if not self.music_path:
+            return
+
+        music_path = str(self.music_path)
+        if not force and self.analyzed_music_path == music_path:
+            return
+
+        self.visualizer.load_audio_analysis(
+            self.music_path,
+            self.current_timing_points
+        )
+        self.analyzed_music_path = music_path
+
+    def _set_track_metadata(self, index):
         self.current_track_index = index % len(self.music_tracks)
         track = self.music_tracks[self.current_track_index]
         self.music_path = track["path"]
@@ -828,19 +958,22 @@ class MainMenuScene(BaseScene):
         self.music_energy = track["energy"]
         self.current_timing_points = track.get("timing_points", [])
         self.beat_phase = 0.0
-        self.visualizer.load_audio_analysis(
-            self.music_path,
-            self.current_timing_points
-        )
 
-        try:
-            pygame.mixer.music.load(str(self.music_path))
-            pygame.mixer.music.set_volume(0.42)
-            pygame.mixer.music.play(-1)
-            self.music_started = True
-            self.music_started_ticks = pygame.time.get_ticks()
-        except pygame.error:
-            self.music_started = False
+    def _advance_finished_menu_track(self):
+        if (
+            not self.music_tracks
+            or self.music_paused
+            or not self.music_started
+            or pygame.mixer.music.get_busy()
+        ):
+            return
+
+        if len(self.music_tracks) == 1:
+            self._play_track(0)
+            return
+
+        offset = random.randrange(1, len(self.music_tracks))
+        self._play_track(self.current_track_index + offset)
 
     def _next_menu_track(self):
         if self.music_tracks:
@@ -855,7 +988,9 @@ class MainMenuScene(BaseScene):
     def _build_music_playlist(self):
         tracks = []
 
-        for path in self._iter_asset_files(self.menu_music_dir, self.AUDIO_EXTENSIONS):
+        for path in self._iter_asset_files(self.menu_music_dir, self.MENU_MUSIC_EXTENSIONS):
+            if not self._is_menu_music_file(path):
+                continue
             title = self._clean_display_text(
                 path.stem.replace("_", " ").replace("-", " ").strip()
             )
@@ -868,11 +1003,14 @@ class MainMenuScene(BaseScene):
             })
 
         for beatmap in getattr(self.game, "beatmaps", []):
-            audio_path = self._first_audio_in_folder(Path(beatmap["path"]))
+            difficulty = beatmap["difficulties"][0]
+            audio_path = self._first_audio_in_folder(
+                Path(beatmap["path"]),
+                difficulty.get("audio_filename")
+            )
             if not audio_path:
                 continue
 
-            difficulty = beatmap["difficulties"][0]
             bpm = self._bpm_from_timing_points(difficulty.get("timing_points", []))
             tracks.append({
                 "path": audio_path,
@@ -886,11 +1024,21 @@ class MainMenuScene(BaseScene):
 
         return tracks
 
-    def _first_audio_in_folder(self, folder):
-        for path in self._iter_asset_files(folder, self.AUDIO_EXTENSIONS):
-            return path
+    def _first_audio_in_folder(self, folder, preferred_filename=None):
+        if preferred_filename:
+            preferred = folder / preferred_filename
+            if preferred.exists() and not is_sound_effect_file(preferred):
+                return preferred
+
+        for extensions in ((".mp3", ".ogg"), (".wav",)):
+            for path in self._iter_asset_files(folder, extensions):
+                if not is_sound_effect_file(path):
+                    return path
 
         return None
+
+    def _is_menu_music_file(self, path):
+        return not is_sound_effect_file(path)
 
     def _bpm_from_timing_points(self, timing_points):
         for timing_point in timing_points:
@@ -1016,7 +1164,9 @@ class MainMenuScene(BaseScene):
     def _draw_footer(self, screen):
         music_text = "menu music: "
         music_text += self.music_title
-        hint = "Left/Right change music  |  F11 fullscreen"
+        hint = "Left/Right change music  |  Space pause  |  F11 fullscreen"
+        if self.music_paused:
+            hint = "Music paused  |  Space resume  |  F11 fullscreen"
         if self.menu_open:
             hint += "  |  ESC back"
 

@@ -380,6 +380,8 @@ class SongSelectScene(BaseScene):
                 )
                 return
 
+        self._replay_preview_if_finished()
+
         if not self.items:
             return
 
@@ -448,15 +450,48 @@ class SongSelectScene(BaseScene):
         if self.initial_music_path and Path(music_path) == Path(self.initial_music_path):
             self.current_preview_path = str(Path(music_path))
             self.initial_music_path = None
+            self._publish_preview_music(info, self.current_preview_path)
             return
         normalized = str(Path(music_path))
         if self.current_preview_path == normalized and pygame.mixer.music.get_busy():
+            self._publish_preview_music(info, normalized)
             return
         try:
             pygame.mixer.music.load(music_path)
             pygame.mixer.music.set_volume(self.preview_volume)
             pygame.mixer.music.play()
             self.current_preview_path = normalized
+            self._publish_preview_music(info, normalized)
+        except pygame.error:
+            pass
+
+    def _publish_preview_music(self, info, path):
+        self.game.current_menu_music_path = str(path) if path else None
+        self.game.current_menu_music_title = self._display_title_for_info(info)
+        self.game.current_menu_music_timing_points = (
+            info.difficulty_data.get("timing_points", [])
+        )
+        self.game.current_menu_music_paused = False
+
+    def _display_title_for_info(self, info):
+        artist = info.artist.strip()
+        title = info.title.strip()
+        if artist and title:
+            return f"{artist} - {title}"
+        return title or artist or "Menu music"
+
+    def _replay_preview_if_finished(self):
+        if (
+            self.pending_play_info is not None
+            or not self.current_preview_path
+            or pygame.mixer.music.get_busy()
+        ):
+            return
+
+        try:
+            pygame.mixer.music.load(self.current_preview_path)
+            pygame.mixer.music.set_volume(self.preview_volume)
+            pygame.mixer.music.play()
         except pygame.error:
             pass
 

@@ -1603,6 +1603,7 @@ class GameplayScene(BaseScene):
         self.next_note_index = 0
         self.active_notes.clear()
         self.intro_skip_used = True
+        self._publish_current_track_state()
 
     def _fail(self):
         if self.failed:
@@ -1619,6 +1620,15 @@ class GameplayScene(BaseScene):
     def _sync_music_time_now(self):
         if self.start_time is not None and self.music_started:
             self.current_time = pygame.time.get_ticks() - self.start_time
+
+    def _publish_current_track_state(self):
+        self.game.current_menu_music_path = str(self.music_path) if self.music_path else None
+        artist = self.beatmap.get("artist", "")
+        title = self.beatmap.get("title", self.beatmap.get("name", ""))
+        display_title = " - ".join(part for part in (artist, title) if part)
+        self.game.current_menu_music_title = display_title or self.beatmap.get("name", "Menu music")
+        self.game.current_menu_music_timing_points = self.beatmap.get("timing_points", [])
+        self.game.current_menu_music_paused = False
 
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
@@ -1705,6 +1715,7 @@ class GameplayScene(BaseScene):
                 self.start_time = pygame.time.get_ticks()
 
             self.music_started = True
+            self._publish_current_track_state()
 
         if self.start_time is not None:
 
@@ -2550,7 +2561,13 @@ class GameplayScene(BaseScene):
 
     def destroy(self):
 
-        pygame.mixer.music.stop()
+        if self.music_started and not self.failed:
+            if self.paused:
+                pygame.mixer.music.unpause()
+                self.paused = False
+            self._publish_current_track_state()
+        else:
+            pygame.mixer.music.stop()
 
         self.game.disable_raw_mouse()
 

@@ -1,7 +1,7 @@
 import os
 
 
-TARGET_FPS = int(os.environ.get("PYOSU_TARGET_FPS", "240"))
+TARGET_FPS = int(os.environ.get("PYOSU_TARGET_FPS", "1000"))
 USE_BUSY_FRAME_PACER = os.environ.get("PYOSU_BUSY_FRAME_PACER", "0") == "1"
 MAX_FRAME_DT = 1 / 30
 RAW_MOUSE_SENSITIVITY = 1.0

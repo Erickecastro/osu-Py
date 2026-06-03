@@ -21,7 +21,6 @@ class GameplayInputController:
 
     def _handle_key_down(self, event):
         if event.key == pygame.K_ESCAPE:
-            pygame.mixer.music.stop()
             self.scene.game.scene_manager.pop_scene()
             return True
 
