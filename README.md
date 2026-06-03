@@ -11,7 +11,7 @@ O projeto ainda esta em desenvolvimento, mas a gameplay principal ja esta funcio
 - Gameplay com circles, sliders, reverse markers, slider ball, fade in/out, miss pop, score, combo e accuracy.
 - Renderizacao de cursor, notas, sliders, spinner, HUD e menu usando a skin em `assets/skins/default/`.
 - Menus com `pygame_gui` para selecionar musica e dificuldade.
-- Suporte a fullscreen e troca de fullscreen com `F11`.
+- Suporte a fullscreen e troca de fullscreen para modo janela e vice-versa com `F11`.
 
 ## Requisitos
 
@@ -58,7 +58,7 @@ Baixe as músicas do seu interese diretamente no site oficial do game, https://o
 ## Controles
 
 - `Z` ou `X`: acertar objetos.
-- `Clique esquerdo` ou `clioque direito` do mouse para acertar os objetos.
+- `Clique esquerdo` ou `clique direito` do mouse para acertar os objetos.
 - `Esc`: sair da gameplay ou voltar uma cena.
 - `F3`: alternar profiler de performance.
 - `F11`: alternar fullscreen.
