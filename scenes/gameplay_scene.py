@@ -310,6 +310,8 @@ class GameplayScene(BaseScene):
         self.skip_button_rect = None
         self.skip_button_surface = None
         self.skip_button_surface_size = None
+        self.skip_button_text_surface = None
+        self.spinner_bonus_text_surface = None
         self.center_overlay_cache = {}
         self.center_overlay_shade = None
         self.center_overlay_shade_size = None
@@ -2329,11 +2331,13 @@ class GameplayScene(BaseScene):
 
                 result = indicator.get("result", 0)
                 if result == "spinner_bonus":
-                    text = self.medium_overlay_font.render(
-                        "+1000",
-                        True,
-                        (255, 232, 92)
-                    )
+                    if self.spinner_bonus_text_surface is None:
+                        self.spinner_bonus_text_surface = self.medium_overlay_font.render(
+                            "+1000",
+                            True,
+                            (255, 232, 92)
+                        )
+                    text = self.spinner_bonus_text_surface
                     text.set_alpha(alpha)
                     bonus_y = y - int(elapsed * 0.08)
                     overlay.blit(
@@ -2418,7 +2422,13 @@ class GameplayScene(BaseScene):
         ):
             return
 
-        text = self.small_overlay_font.render("skip intro", True, (245, 248, 255))
+        if self.skip_button_text_surface is None:
+            self.skip_button_text_surface = self.small_overlay_font.render(
+                "skip intro",
+                True,
+                (245, 248, 255)
+            )
+        text = self.skip_button_text_surface
         pad_x = 14
         pad_y = 8
         rect = pygame.Rect(

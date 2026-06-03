@@ -202,7 +202,8 @@ class SliderRenderer:
         offset_x, offset_y = screen_offset
         if cached is not None:
             slider_surface, surface_pos = cached
-            slider_surface.set_alpha(a)
+            if slider_surface.get_alpha() != a:
+                slider_surface.set_alpha(a)
             screen.blit(
                 slider_surface,
                 (
@@ -260,7 +261,8 @@ class SliderRenderer:
                 surface_pos
             )
 
-        slider_surface.set_alpha(a)
+        if slider_surface.get_alpha() != a:
+            slider_surface.set_alpha(a)
         screen.blit(slider_surface, surface_pos)
         can_draw_head = (
             draw_head_marker

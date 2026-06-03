@@ -71,7 +71,8 @@ def blit_centered(target, surface, center, alpha=255):
     if alpha <= 0:
         return
 
-    surface.set_alpha(alpha)
+    if surface.get_alpha() != alpha:
+        surface.set_alpha(alpha)
     rect = surface.get_rect(
         center=(
             int(round(center[0])),

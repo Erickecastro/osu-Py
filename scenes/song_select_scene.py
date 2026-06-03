@@ -65,8 +65,8 @@ class SongCard:
         is_difficulty = meta and meta.get("type") == "difficulty"
         is_group = meta and meta.get("type") == "group"
         width_factor = 0.88 if is_difficulty else 1.0
-        width = int(scene.card_width * self.scale * width_factor)
-        height = int(scene.card_height * self.scale)
+        width = int(round((scene.card_width * self.scale * width_factor) / 2.0) * 2)
+        height = int(round((scene.card_height * self.scale) / 2.0) * 2)
         rect = pygame.Rect(0, 0, width, height)
         rect.center = (int(self.x), int(self.y))
 
@@ -95,7 +95,9 @@ class SongCard:
             card_alpha,
             tint
         )
-        layer.set_alpha(int(self.alpha * 255))
+        alpha = int(self.alpha * 255)
+        if layer.get_alpha() != alpha:
+            layer.set_alpha(alpha)
         screen.blit(layer, rect)
 
     def _legacy_draw_unused(self):
@@ -230,6 +232,7 @@ class SongSelectScene(BaseScene):
         self.background_overlay = None
         self.background_overlay_size = None
         self.background_t = 1.0
+        self.visible_items = []
         self.time = 0.0
         self.preview_volume = 0.48
         self.pending_play_info = None
@@ -297,6 +300,7 @@ class SongSelectScene(BaseScene):
 
     def on_resize(self):
         self._layout()
+        self.visible_items = []
         self.background_cache.clear()
         self.current_background = None
         self.previous_background = None
@@ -392,6 +396,7 @@ class SongSelectScene(BaseScene):
         self.background_t = min(1.0, self.background_t + dt * 3.0)
 
         visible = self._visible_infos()
+        self.visible_items = visible
         self.carousel.trim(visible)
         mouse_pos = self.game.mouse_pos
         for key, index, info in visible:
@@ -601,6 +606,7 @@ class SongSelectScene(BaseScene):
                         "count": 1
                     })
         self.items = items
+        self.visible_items = []
 
     def _visible_infos(self):
         if not self.items:
@@ -793,7 +799,7 @@ class SongSelectScene(BaseScene):
     def _draw_cards(self, screen):
         if not self.items:
             return
-        visible = self._visible_infos()
+        visible = self.visible_items if self.visible_items else self._visible_infos()
         visible.sort(key=lambda item: abs(item[1] - self.browse_index), reverse=True)
         for key, index, info in visible:
             self.carousel.card_for(key, info).draw(

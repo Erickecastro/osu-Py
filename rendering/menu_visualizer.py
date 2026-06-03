@@ -21,22 +21,40 @@ class CircularMenuVisualizer:
         self.silent_bands = [0.0] * bar_count
         self.band_targets = [0.0] * bar_count
         self.band_alpha = [0.0] * bar_count
+        self.level_hold = [0.0] * bar_count
         self.angles = [(index / bar_count) * math.tau for index in range(bar_count)]
         self.units = [(math.cos(angle), math.sin(angle)) for angle in self.angles]
-        self.variation = [
-            0.54 + ((((index * 37) % 100) / 100.0) * 0.84)
-            for index in range(bar_count)
-        ]
+        self.variation = []
+        for index in range(bar_count):
+            value = ((index * 37) % 100) / 100.0
+            self.variation.append(0.42 + (value ** 1.28) * 1.22)
         self.alpha_variation = [
             0.68 + ((((index * 53) % 100) / 100.0) * 0.42)
             for index in range(bar_count)
         ]
-        self.max_length_scale = 0.503
-        self.bar_width = 4.41
-        self.minimum_level_base = 0.06
+        self.activity_bias = []
+        self.alpha_bias = []
+        for index in range(bar_count):
+            value = ((index * 97 + 23) % 100) / 100.0
+            if value < 0.27:
+                self.activity_bias.append(0.10 + value * 0.34)
+                self.alpha_bias.append(0.30 + value * 0.48)
+            elif value < 0.56:
+                self.activity_bias.append(0.42 + (value - 0.27) * 1.08)
+                self.alpha_bias.append(0.52 + (value - 0.27) * 0.76)
+            elif value < 0.88:
+                self.activity_bias.append(0.74 + (value - 0.56) * 0.92)
+                self.alpha_bias.append(0.70 + (value - 0.56) * 0.64)
+            else:
+                self.activity_bias.append(1.06 + (value - 0.88) * 1.25)
+                self.alpha_bias.append(0.90 + (value - 0.88) * 0.84)
+        self.region_targets = [0.0] * bar_count
+        self.max_length_scale = 0.904
+        self.bar_width = 12.0
+        self.minimum_level_base = 0.08
         self.minimum_alpha = 0
         self.attack_amount = 0.85
-        self.release_amount = 0.12
+        self.release_amount = 0.075
         self.sweep_position = 0.0
 
         self.center = (0, 0)
@@ -55,7 +73,7 @@ class CircularMenuVisualizer:
         self._layer_radius = 0
         self._layer_shrink_elapsed = 0.0
         self._redraw_elapsed = 1.0
-        self.render_interval = 1.0 / 75.0
+        self.render_interval = 1.0 / 60.0
 
     def load_audio_analysis(self, audio_path, timing_points=None):
         self.timing_points = self.parse_timing_points(timing_points or [])
@@ -67,6 +85,9 @@ class CircularMenuVisualizer:
         self.beat_phase = 0.0
         self.kiai_level = 0.0
         self.levels = [0.0] * self.bar_count
+        self.band_alpha = [0.0] * self.bar_count
+        self.level_hold = [0.0] * self.bar_count
+        self.region_targets = [0.0] * self.bar_count
 
         if not audio_path:
             return
@@ -175,7 +196,7 @@ class CircularMenuVisualizer:
         if timing:
             ms_per_beat = max(1.0, timing["ms_per_beat"])
             self.beat_phase = ((current_time_ms - timing["time"]) / ms_per_beat) % 1.0
-            self.sweep_position = ((current_time_ms - timing["time"]) / (ms_per_beat * 4.0)) % 1.0
+            self.sweep_position = ((current_time_ms - timing["time"]) / (ms_per_beat * 6.0)) % 1.0
             self.kiai_level = _lerp(
                 self.kiai_level,
                 1.0 if timing.get("kiai") else 0.0,
@@ -183,7 +204,7 @@ class CircularMenuVisualizer:
             )
         else:
             self.beat_phase = (self.beat_phase + (dt * 118.0 / 60.0)) % 1.0
-            self.sweep_position = (self.sweep_position + (dt * 118.0 / 240.0)) % 1.0
+            self.sweep_position = (self.sweep_position + (dt * 118.0 / 360.0)) % 1.0
             self.kiai_level = _lerp(self.kiai_level, 0.0, 1.0 - math.exp(-dt * 3.0))
 
         bands, rms = self._analysis_at(current_time_ms)
@@ -201,7 +222,7 @@ class CircularMenuVisualizer:
                 for index in range(self.bar_count)
             ]
 
-        audible_target = _clamp((rms - 0.055) / 0.18, 0.0, 1.0)
+        audible_target = _clamp((rms - 0.026) / 0.15, 0.0, 1.0)
         self.audible_level = _lerp(
             self.audible_level,
             audible_target,
@@ -229,6 +250,7 @@ class CircularMenuVisualizer:
         )
 
         wave_offset = self.beat_phase
+        raw_targets = self.region_targets
         for index, value in enumerate(bands):
             position = index / self.bar_count
             wave = (
@@ -242,16 +264,53 @@ class CircularMenuVisualizer:
                 + (mid * 0.16)
                 + (high * 0.08 * self.alpha_variation[index])
                 + (low * 0.14 * (wave ** 1.6))
-                + (sweep * (0.018 + beat_pulse * 0.060 + rms * 0.026)),
+                + (sweep * (0.034 + beat_pulse * 0.082 + rms * 0.038)),
                 0.0,
                 1.0
             )
-            minimum = (self.minimum_level_base + (rms * 0.026) + (self.kiai_level * 0.014)) * self.audible_level
+            minimum = (self.minimum_level_base + (rms * 0.034) + (self.kiai_level * 0.014)) * self.audible_level
             target = max(minimum * self.variation[index], band)
             target *= 0.82 + (beat_pulse * 0.20) + (fft_pulse * 0.12) + (self.kiai_level * 0.14)
-            target *= 0.78 + ((self.variation[index] - 0.54) * 0.24)
+            target *= 1.0 + (sweep * (0.18 + beat_pulse * 0.10))
+            target *= 0.72 + ((self.variation[index] - 0.54) * 0.20)
+            target *= self.activity_bias[index]
             target *= self.audible_level
+            raw_targets[index] = _clamp(target, 0.0, 1.0)
+
+        for index, target in enumerate(raw_targets):
+            left_2 = raw_targets[(index - 2) % self.bar_count]
+            left_1 = raw_targets[(index - 1) % self.bar_count]
+            right_1 = raw_targets[(index + 1) % self.bar_count]
+            right_2 = raw_targets[(index + 2) % self.bar_count]
+            target = (
+                (target * 0.52)
+                + ((left_1 + right_1) * 0.18)
+                + ((left_2 + right_2) * 0.06)
+            )
             target = _clamp(target, 0.0, 1.0)
+            instant_target = target
+            peak_target = max(0.0, instant_target - self.levels[index])
+            peak_target = _clamp(
+                (
+                    (peak_target * 4.1)
+                    + (beat_pulse * 0.15 * instant_target)
+                    + (fft_pulse * 0.12 * instant_target)
+                    + (self.kiai_level * 0.08 * instant_target)
+                )
+                * self.alpha_bias[index],
+                0.0,
+                1.0
+            )
+            peak_amount = 0.70 if peak_target > self.band_alpha[index] else 0.22
+            peak_amount = 1.0 - ((1.0 - peak_amount) ** max(0.0, dt * 60.0))
+            self.band_alpha[index] = _lerp(self.band_alpha[index], peak_target, peak_amount)
+
+            if target >= self.levels[index]:
+                self.level_hold[index] = 0.055
+            else:
+                self.level_hold[index] = max(0.0, self.level_hold[index] - dt)
+                if self.level_hold[index] > 0.0:
+                    target = max(target, self.levels[index] * 0.985)
 
             amount = self.attack_amount if target > self.levels[index] else self.release_amount
             amount = 1.0 - ((1.0 - amount) ** max(0.0, dt * 60.0))
@@ -314,41 +373,106 @@ class CircularMenuVisualizer:
         surface.blit(layer, (center[0] - layer_radius, center[1] - layer_radius))
 
     def _draw_bar(self, layer, local_center, index, level, inner_radius, logo_radius, max_length, beat):
-        if level <= 0.012 or self.audible_level <= 0.015:
+        if level <= 0.007 or self.audible_level <= 0.012:
             return
 
         ux, uy = self.units[index]
         position = index / self.bar_count
         sweep_distance = abs(((position - self.sweep_position + 0.5) % 1.0) - 0.5) * 2.0
-        sweep = max(0.0, 1.0 - (sweep_distance / 0.30)) ** 2.2
-        length = max(3.0, max_length * (level ** 1.08) * self.variation[index])
-        length *= 1.0 + (sweep * (0.08 + beat * 0.07))
+        sweep = max(0.0, 1.0 - (sweep_distance / 0.24)) ** 2.0
+        length = max(4.0, max_length * (level ** 1.12) * self.variation[index])
+        length *= 1.0 + (sweep * (0.14 + beat * 0.08))
         start_radius = inner_radius
         end_radius = logo_radius + max(5.0, length)
-        width = self.bar_width
-        arc_spacing = (math.tau * logo_radius) / max(1, self.bar_count)
-        width = int(math.ceil(_clamp(width, 2.0, max(2.0, min(self.bar_width, arc_spacing * 0.66)))))
-        brightness = _clamp(0.34 + level * 0.56 + sweep * (0.12 + beat * 0.08), 0.34, 1.0)
-        alpha = int(_clamp(
-            (38 + level * 190 + sweep * (28 + beat * 38)) * self.alpha_variation[index],
-            self.minimum_alpha,
-            232
+        base_arc_spacing = (math.tau * start_radius) / max(1, self.bar_count)
+        base_gap = max(1.0, base_arc_spacing * 0.17)
+        width = int(math.floor(_clamp(
+            self.bar_width,
+            2.0,
+            max(2.0, base_arc_spacing - base_gap)
+        )))
+        bar_light = _clamp(
+            0.22
+            + (level * 0.26)
+            + (sweep * (0.34 + beat * 0.12))
+            + (self.kiai_level * 0.08),
+            0.0,
+            1.0
+        )
+        base_gray = int(_clamp(156 + (bar_light * 74), 130, 236))
+        base_alpha = int(_clamp(
+            (44 + (self.audible_level * 10) + (beat * 4) + (sweep * 12))
+            * (0.58 + (self.alpha_bias[index] * 0.36)),
+            16,
+            82
         ))
         line_color = (
-            int(_clamp(255 * brightness, 0, 255)),
-            int(_clamp(255 * brightness, 0, 255)),
-            int(_clamp(255 * brightness, 0, 255)),
-            alpha
+            base_gray,
+            base_gray,
+            base_gray,
+            base_alpha
         )
-        start = (
-            int(local_center[0] + ux * start_radius),
-            int(local_center[1] + uy * start_radius)
+        self._draw_radial_rect(
+            layer,
+            line_color,
+            local_center,
+            ux,
+            uy,
+            start_radius,
+            end_radius,
+            width
         )
-        end = (
-            int(local_center[0] + ux * end_radius),
-            int(local_center[1] + uy * end_radius)
+
+        peak = self.band_alpha[index]
+        if peak <= 0.105:
+            return
+
+        moving_slot = ((index * 47) + int(self.sweep_position * 100.0)) % 100
+        highlight_chance = 15.0 + (peak * 13.0) + (beat * 4.0) + (sweep * 3.0) + (self.kiai_level * 4.0)
+        if moving_slot > highlight_chance:
+            return
+
+        highlight_ratio = _clamp(0.10 + (peak * 0.075) + (beat * 0.018), 0.10, 0.20)
+        highlight_length = max(3.0, length * highlight_ratio)
+        highlight_start_radius = max(start_radius + 2.0, end_radius - highlight_length)
+        highlight_alpha = int(_clamp(
+            (peak * 166 + beat * 10 + sweep * 8) * self.alpha_variation[index],
+            0,
+            176
+        ))
+        if highlight_alpha <= 4:
+            return
+
+        highlight_width = max(1, width - 2)
+        self._draw_radial_rect(
+            layer,
+            (255, 255, 255, highlight_alpha),
+            local_center,
+            ux,
+            uy,
+            highlight_start_radius,
+            end_radius,
+            highlight_width
         )
-        pygame.draw.line(layer, line_color, start, end, width)
+
+    def _draw_radial_rect(self, layer, color, local_center, ux, uy, start_radius, end_radius, width):
+        half = max(0.5, width * 0.5)
+        px = -uy * half
+        py = ux * half
+        sx = local_center[0] + ux * start_radius
+        sy = local_center[1] + uy * start_radius
+        ex = local_center[0] + ux * end_radius
+        ey = local_center[1] + uy * end_radius
+        pygame.draw.polygon(
+            layer,
+            color,
+            (
+                (int(round(sx + px)), int(round(sy + py))),
+                (int(round(ex + px)), int(round(ey + py))),
+                (int(round(ex - px)), int(round(ey - py))),
+                (int(round(sx - px)), int(round(sy - py)))
+            )
+        )
 
     def _analysis_at(self, current_time_ms):
         if self.analysis is None or len(self.analysis) == 0:

@@ -39,6 +39,7 @@ class MenuOption:
         self.visible = 0.0
         self.delay = 0.0
         self._surface_cache = {}
+        self._text_cache = {}
 
     def set_layout(self, left_x, y, width, height, delay, width_factor=1.0):
         self.width_factor = width_factor
@@ -192,20 +193,12 @@ class MenuOption:
                 max(2, int(body.height * 0.075 * scale))
             )
 
-        layer = pygame.transform.smoothscale(shape_layer, layer_size)
+        layer = pygame.transform.smoothscale(shape_layer, layer_size).convert_alpha()
 
         available_width = max(24, body.right - (body.left + int(body.width * 0.42)) - int(body.height * 0.22))
-        render_font = font
-        text = render_font.render(self.label, True, (255, 255, 255))
-        if text.get_width() > available_width:
-            target_height = max(12, int(font.get_height() * (available_width / text.get_width())))
-            render_font = pygame.font.Font(font.get_name() if False else None, target_height)
-            text = render_font.render(self.label, True, (255, 255, 255))
-            while text.get_width() > available_width and target_height > 12:
-                target_height -= 1
-                render_font = pygame.font.Font(None, target_height)
-                text = render_font.render(self.label, True, (255, 255, 255))
-        text.set_alpha(alpha)
+        text = self._text_surface(font, available_width)
+        if text.get_alpha() != alpha:
+            text.set_alpha(alpha)
         text_rect = text.get_rect(
             midleft=(body.left + int(body.width * 0.42), body.centery)
         )
@@ -216,6 +209,27 @@ class MenuOption:
         self._surface_cache[cache_key] = layer
 
         surface.blit(layer, (rect.x - 20, rect.y - 11))
+
+    def _text_surface(self, font, available_width):
+        key = (self.label, id(font), font.get_height(), int(available_width))
+        cached = self._text_cache.get(key)
+        if cached is not None:
+            return cached
+
+        text = font.render(self.label, True, (255, 255, 255))
+        if text.get_width() > available_width:
+            target_height = max(12, int(font.get_height() * (available_width / text.get_width())))
+            render_font = pygame.font.Font(None, target_height)
+            text = render_font.render(self.label, True, (255, 255, 255))
+            while text.get_width() > available_width and target_height > 12:
+                target_height -= 1
+                render_font = pygame.font.Font(None, target_height)
+                text = render_font.render(self.label, True, (255, 255, 255))
+
+        if len(self._text_cache) > 24:
+            self._text_cache.clear()
+        self._text_cache[key] = text
+        return text
 
 
 class MenuSnow:
@@ -281,7 +295,8 @@ class MenuSnow:
                 continue
 
             image = particle["image"]
-            image.set_alpha(alpha)
+            if image.get_alpha() != alpha:
+                image.set_alpha(alpha)
             rect = image.get_rect(center=(int(particle["x"]), int(particle["y"])))
             surface.blit(image, rect)
 
@@ -295,10 +310,10 @@ class MenuSnow:
         image = pygame.transform.smoothscale(
             self.image,
             (max(4, int(size)), max(4, int(size)))
-        )
+        ).convert_alpha()
         rotation = self.random.uniform(0.0, 360.0)
         if abs(rotation) > 0.5:
-            image = pygame.transform.rotozoom(image, rotation, 1.0)
+            image = pygame.transform.rotozoom(image, rotation, 1.0).convert_alpha()
 
         return {
             "x": self.random.uniform(-20, width + 20),
@@ -347,6 +362,7 @@ class PulseCircle:
         self.last_beat_phase = 0.0
         self.ghost_scale = 1.0
         self.ghost_alpha = 0.0
+        self.idle_pulse_phase = 0.0
         self.beat_waves = []
         self.font = None
         self._base_font = None
@@ -407,7 +423,7 @@ class PulseCircle:
             1.0 - math.exp(-dt * 16.0)
         )
         self.click_flash = max(0.0, self.click_flash - (dt * 3.8))
-        self.ghost_alpha = max(0.0, self.ghost_alpha - (dt * 4.7))
+        self.ghost_alpha = max(0.0, self.ghost_alpha - (dt * 4.0))
         next_waves = []
         for wave in self.beat_waves:
             wave["age"] += dt
@@ -417,11 +433,11 @@ class PulseCircle:
 
         music_active = bool(music_active)
         beat_phase = clamp(beat_phase, 0.0, 1.0)
-        music_energy = clamp(music_energy, 0.0, 1.0) if music_active else 0.20
+        music_energy = clamp(music_energy, 0.0, 1.0) if music_active else 0.02
         crossed_beat = self.last_beat_phase > 0.72 and beat_phase < 0.24
         if music_active and crossed_beat and self.pulse_scale > 1.035:
             self.ghost_scale = self.pulse_scale
-            self.ghost_alpha = 0.46 + (music_energy * 0.30)
+            self.ghost_alpha = clamp(0.74 + (music_energy * 0.32), 0.0, 0.98)
             self.beat_waves.append({
                 "age": 0.0,
                 "duration": 0.33,
@@ -435,31 +451,54 @@ class PulseCircle:
             else:
                 prebeat = ease_in_out((beat_phase - 0.08) / 0.92)
         else:
-            prebeat = ease_in_out((time_seconds % 1.0))
+            previous_idle_phase = self.idle_pulse_phase
+            self.idle_pulse_phase = (self.idle_pulse_phase + max(0.0, dt)) % 1.0
+            if self.idle_pulse_phase < previous_idle_phase:
+                self.ghost_scale = 1.018
+                self.ghost_alpha = max(self.ghost_alpha, 0.34)
 
-        beat_push = prebeat * (0.085 + music_energy * 0.035)
+            expand_end = 0.59
+            if self.idle_pulse_phase < expand_end:
+                progress = self.idle_pulse_phase / expand_end
+                prebeat = progress ** 0.82
+            else:
+                return_phase = (self.idle_pulse_phase - expand_end) / (1.0 - expand_end)
+                prebeat = 1.0 - (return_phase ** 0.74)
+
+        if music_active:
+            beat_push = prebeat * (0.085 + music_energy * 0.035)
+        else:
+            beat_push = max(0.0, prebeat * 0.020)
         hover_push = self.hover * 0.075
         flash_push = ease_out_cubic(self.click_flash) * 0.14
         menu_push = 0.025 if menu_open else 0.0
         self.target_pulse_scale = 1.0 + beat_push + hover_push + flash_push + menu_push
         expand_speed = 6.5 + music_energy * 3.4
+        if not music_active:
+            expand_speed = 4.7
         scale_speed = expand_speed
         if self.target_pulse_scale < self.pulse_scale:
-            scale_speed = expand_speed * 1.25
-        self.pulse_scale = lerp(
-            self.pulse_scale,
-            self.target_pulse_scale,
-            1.0 - math.exp(-dt * scale_speed)
-        )
+            scale_speed = expand_speed * (1.25 if music_active else 1.85)
+        if music_active:
+            self.pulse_scale = lerp(
+                self.pulse_scale,
+                self.target_pulse_scale,
+                1.0 - math.exp(-dt * scale_speed)
+            )
+        else:
+            self.pulse_scale = self.target_pulse_scale
         target_radius = self.base_radius * self.pulse_scale
         radius_speed = 12.0
         if target_radius < self.radius:
-            radius_speed *= 1.25
-        self.radius = lerp(
-            self.radius,
-            target_radius,
-            1.0 - math.exp(-dt * radius_speed)
-        )
+            radius_speed *= (1.25 if music_active else 1.65)
+        if music_active:
+            self.radius = lerp(
+                self.radius,
+                target_radius,
+                1.0 - math.exp(-dt * radius_speed)
+            )
+        else:
+            self.radius = target_radius
 
     def trigger_click(self):
         self.click_flash = 1.0
@@ -471,15 +510,17 @@ class PulseCircle:
 
         if self.ghost_alpha > 0.01:
             ghost_radius = int(self.base_radius * self.ghost_scale)
-            ghost = self._scaled_logo(ghost_radius).copy()
-            ghost.set_alpha(int(128 * self.ghost_alpha))
+            ghost = self._scaled_logo(ghost_radius)
+            previous_alpha = ghost.get_alpha()
+            ghost.set_alpha(int(205 * self.ghost_alpha))
             ghost_rect = ghost.get_rect(center=(center_x, center_y))
             surface.blit(ghost, ghost_rect)
+            ghost.set_alpha(previous_alpha)
             self._draw_caption(
                 surface,
                 "click to start" if not menu_open else "select an option",
                 ghost_radius,
-                int(72 * self.ghost_alpha)
+                int(118 * self.ghost_alpha)
             )
 
         body = self._scaled_logo(radius)
@@ -545,7 +586,7 @@ class PulseCircle:
         surface.blit(caption_surface, caption_rect)
 
     def _scaled_logo(self, radius):
-        radius_key = max(1, int(round(radius / 2) * 2))
+        radius_key = max(1, int(round(radius)))
         key = radius_key
         cached = self._logo_cache.get(key)
         if cached is not None:
@@ -554,7 +595,7 @@ class PulseCircle:
         source = self._logo_surface or self._load_logo_surface()
         self._logo_surface = source
         diameter = max(1, int(radius_key * 2.12))
-        scaled = pygame.transform.smoothscale(source, (diameter, diameter))
+        scaled = pygame.transform.smoothscale(source, (diameter, diameter)).convert_alpha()
 
         if len(self._logo_cache) > 96:
             self._logo_cache.clear()
@@ -638,6 +679,7 @@ class MainMenuScene(BaseScene):
         self.current_timing_points = []
         self.music_started_ticks = 0
         self.analyzed_music_path = None
+        self.visualizer_analysis_delay = 0.0
         self.last_shared_music_path = None
         self.music_tracks = self._build_music_playlist()
         self.current_track_index = self._initial_track_index()
@@ -646,7 +688,7 @@ class MainMenuScene(BaseScene):
         self.footer_cache = {}
 
         self.circle = PulseCircle(self.title)
-        self.visualizer = CircularMenuVisualizer(bar_count=256)
+        self.visualizer = CircularMenuVisualizer(bar_count=175)
         self.snow = MenuSnow(self.assets_dir)
         self.snow.load()
         self.options = [
@@ -795,6 +837,8 @@ class MainMenuScene(BaseScene):
         mouse_pos = self.game.mouse_pos
 
         self._sync_from_shared_music()
+        if self.visualizer_analysis_delay > 0.0:
+            self.visualizer_analysis_delay = max(0.0, self.visualizer_analysis_delay - dt)
         self._ensure_visualizer_analysis()
         current_time_ms = self._current_music_position_ms()
         music_active = (
@@ -811,6 +855,8 @@ class MainMenuScene(BaseScene):
             1.0 if self.menu_open else 0.0,
             1.0 - math.exp(-dt * 10.0)
         )
+        if self.settings_dragging:
+            self._set_mouse_sensitivity_from_pos(mouse_pos[0])
 
         self.circle.update(
             dt,
@@ -987,6 +1033,9 @@ class MainMenuScene(BaseScene):
                 []
             )
             self.footer_cache.clear()
+            self.analyzed_music_path = None
+            self.visualizer_analysis_delay = 0.16
+            self.visualizer.load_audio_analysis(None, self.current_timing_points)
         else:
             self._set_track_metadata(track_index)
 
@@ -1034,7 +1083,6 @@ class MainMenuScene(BaseScene):
             return
 
         self._set_track_metadata(index)
-        self._ensure_visualizer_analysis(force=True)
 
         try:
             pygame.mixer.music.load(str(self.music_path))
@@ -1056,6 +1104,8 @@ class MainMenuScene(BaseScene):
         music_path = str(self.music_path)
         if not force and self.analyzed_music_path == music_path:
             return
+        if not force and self.visualizer_analysis_delay > 0.0:
+            return
 
         self.visualizer.load_audio_analysis(
             self.music_path,
@@ -1073,6 +1123,9 @@ class MainMenuScene(BaseScene):
         self.music_energy = track["energy"]
         self.current_timing_points = track.get("timing_points", [])
         self.beat_phase = 0.0
+        self.analyzed_music_path = None
+        self.visualizer_analysis_delay = 0.16
+        self.visualizer.load_audio_analysis(None, self.current_timing_points)
 
     def _advance_finished_menu_track(self):
         if (
@@ -1287,8 +1340,6 @@ class MainMenuScene(BaseScene):
 
         text = self._footer_surface(music_text, 110)
         hint_surface = self._footer_surface(hint, 100)
-        text.set_alpha(110)
-        hint_surface.set_alpha(100)
         screen.blit(text, (18, self.game.HEIGHT - text.get_height() - 16))
         screen.blit(
             hint_surface,

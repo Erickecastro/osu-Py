@@ -28,6 +28,8 @@ class CursorRenderer:
             "cursor.png",
             cursor_scale
         )
+        if self.cursor_image is not None:
+            self.cursor_image.set_alpha(250)
         self.trail_image = self._load_asset(
             "cursortrail.png",
             trail_scale
@@ -88,7 +90,7 @@ class CursorRenderer:
             screen,
             self.cursor_image,
             self.pos,
-            alpha=250
+            alpha=None
         )
 
     def _load_asset(self, filename, scale=1.0):
@@ -125,9 +127,10 @@ class CursorRenderer:
         if image is None:
             return
 
-        alpha = max(0, min(255, int(alpha)))
-        if alpha <= 0:
-            return
+        if alpha is not None:
+            alpha = max(0, min(255, int(alpha)))
+            if alpha <= 0:
+                return
 
         if scale != 1.0:
             size = (
@@ -145,7 +148,8 @@ class CursorRenderer:
         else:
             render_image = image
 
-        render_image.set_alpha(alpha)
+        if alpha is not None and render_image.get_alpha() != alpha:
+            render_image.set_alpha(alpha)
         rect = render_image.get_rect(
             center=(
                 int(round(center[0])),

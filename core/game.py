@@ -63,6 +63,8 @@ class Game:
         )
         self.cursor_renderer = CursorRenderer()
         pygame.mouse.set_visible(False)
+        pygame.event.set_blocked(pygame.MOUSEMOTION)
+        self.mouse_motion_blocked = True
 
         self.current_menu_music_path = None
         self.current_menu_music_title = None
@@ -184,11 +186,13 @@ class Game:
 
         if self.raw_mouse_enabled:
             pygame.event.set_blocked(pygame.MOUSEMOTION)
+            self.mouse_motion_blocked = True
 
         pygame.mouse.get_rel()
 
     def disable_raw_mouse(self):
-        pygame.event.set_allowed(pygame.MOUSEMOTION)
+        pygame.event.set_blocked(pygame.MOUSEMOTION)
+        self.mouse_motion_blocked = True
 
         if hasattr(pygame.mouse, "set_relative_mode"):
             try:
@@ -236,35 +240,46 @@ class Game:
 
         while self.running:
 
-            self.profiler.begin_frame()
+            profiler_enabled = self.profiler.enabled
+            if profiler_enabled:
+                self.profiler.begin_frame()
 
-            self.profiler.start("events")
+            if profiler_enabled:
+                self.profiler.start("events")
             self.events()
-            self.profiler.end("events")
+            if profiler_enabled:
+                self.profiler.end("events")
 
-            self.profiler.start("update")
+            if profiler_enabled:
+                self.profiler.start("update")
             self.update(self.dt)
-            self.profiler.end("update")
+            if profiler_enabled:
+                self.profiler.end("update")
 
-            self.profiler.start("render")
+            if profiler_enabled:
+                self.profiler.start("render")
             self.render()
-            self.profiler.end("render")
+            if profiler_enabled:
+                self.profiler.end("render")
 
-            self.profiler.start("pacer")
+            if profiler_enabled:
+                self.profiler.start("pacer")
             if USE_BUSY_FRAME_PACER:
                 elapsed_ms = self.clock.tick_busy_loop(self.FPS)
             else:
                 elapsed_ms = self.clock.tick(self.FPS)
-            self.profiler.end("pacer")
+            if profiler_enabled:
+                self.profiler.end("pacer")
 
             self.dt = min(MAX_FRAME_DT, elapsed_ms / 1000)
-            current_scene = self.scene_manager.current_scene
-            scene_name = (
-                current_scene.__class__.__name__
-                if current_scene is not None
-                else "None"
-            )
-            self.profiler.end_frame(scene_name, self.clock.get_fps())
+            if profiler_enabled:
+                current_scene = self.scene_manager.current_scene
+                scene_name = (
+                    current_scene.__class__.__name__
+                    if current_scene is not None
+                    else "None"
+                )
+                self.profiler.end_frame(scene_name, self.clock.get_fps())
 
         pygame.quit()
 
@@ -274,6 +289,13 @@ class Game:
     def events(self):
         current_scene = self.scene_manager.current_scene
         uses_ui = getattr(current_scene, "uses_ui", True)
+        wants_motion_events = uses_ui and not self.raw_mouse_enabled
+        if wants_motion_events and self.mouse_motion_blocked:
+            pygame.event.set_allowed(pygame.MOUSEMOTION)
+            self.mouse_motion_blocked = False
+        elif not wants_motion_events and not self.mouse_motion_blocked:
+            pygame.event.set_blocked(pygame.MOUSEMOTION)
+            self.mouse_motion_blocked = True
 
         if self.raw_mouse_enabled:
             self._apply_raw_mouse_delta(
@@ -343,7 +365,8 @@ class Game:
             self.ui_manager.update(dt)
 
         self.scene_manager.update(dt)
-        self.cursor_renderer.update(dt, self.mouse_pos)
+        if not getattr(current_scene, "draws_own_cursor", False):
+            self.cursor_renderer.update(dt, self.mouse_pos)
 
     # -------------------------
     # RENDER
@@ -357,34 +380,42 @@ class Game:
         else:
             self.mouse_pos = pygame.mouse.get_pos()
 
-        self.profiler.start("scene_render")
+        profiler_enabled = self.profiler.enabled
+        if profiler_enabled:
+            self.profiler.start("scene_render")
         self.scene_manager.render(
             self.screen
         )
-        self.profiler.end("scene_render")
+        if profiler_enabled:
+            self.profiler.end("scene_render")
 
         if getattr(current_scene, "uses_ui", True):
-            self.profiler.start("ui_draw")
+            if profiler_enabled:
+                self.profiler.start("ui_draw")
             self.ui_manager.draw_ui(
                 self.screen
             )
-            self.profiler.end("ui_draw")
+            if profiler_enabled:
+                self.profiler.end("ui_draw")
 
-        current_scene = self.scene_manager.current_scene
-        scene_name = (
-            current_scene.__class__.__name__
-            if current_scene is not None
-            else "None"
-        )
-        self.profiler.draw_overlay(
-            self.screen,
-            scene_name,
-            self.clock.get_fps()
-        )
+        if profiler_enabled:
+            current_scene = self.scene_manager.current_scene
+            scene_name = (
+                current_scene.__class__.__name__
+                if current_scene is not None
+                else "None"
+            )
+            self.profiler.draw_overlay(
+                self.screen,
+                scene_name,
+                self.clock.get_fps()
+            )
 
         if not getattr(current_scene, "draws_own_cursor", False):
             self.cursor_renderer.draw(self.screen, self.mouse_pos)
 
-        self.profiler.start("flip")
+        if profiler_enabled:
+            self.profiler.start("flip")
         pygame.display.flip()
-        self.profiler.end("flip")
+        if profiler_enabled:
+            self.profiler.end("flip")
