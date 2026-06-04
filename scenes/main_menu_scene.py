@@ -64,6 +64,9 @@ class MenuOption:
         self.delay = delay
 
     def update(self, dt, mouse_pos, menu_open):
+        if not menu_open and self.visible <= 0.001 and self.hover <= 0.001:
+            return
+
         target_visible = 1.0 if menu_open else 0.0
         if menu_open and self.delay > 0:
             self.delay = max(0.0, self.delay - dt)
@@ -99,23 +102,24 @@ class MenuOption:
 
         visible = ease_out_cubic(self.visible)
         hover = ease_out_cubic(self.hover)
+        hover_style = round(hover * 24.0) / 24.0
         slide = int((1.0 - visible) * -self.rect.width * 0.54)
-        expand_width = int(self.rect.width * (0.12 * hover))
-        expand_height = int(self.rect.height * (0.06 * hover))
+        expand_width = int(self.rect.width * (0.12 * hover_style))
+        expand_height = int(self.rect.height * (0.06 * hover_style))
         rect = pygame.Rect(
             self.rect.left + slide,
             self.rect.top - (expand_height // 2),
             self.rect.width + expand_width,
             self.rect.height + expand_height
         )
-        alpha = int((214 + 35 * hover) * visible)
+        text_alpha = 255
         cache_key = (
+            "solid-v3",
             rect.width,
             rect.height,
             self.label,
             font.get_height(),
-            int(visible * 18),
-            int(hover * 14)
+            int(hover_style * 24)
         )
         cached = self._surface_cache.get(cache_key)
         if cached is not None:
@@ -125,83 +129,67 @@ class MenuOption:
             )
             return
 
-        scale = 2
         pad_x = max(14, int(rect.height * 0.46))
         pad_y = max(8, int(rect.height * 0.34))
         layer_size = (rect.width + (pad_x * 2), rect.height + (pad_y * 2))
-        shape_layer_hi = pygame.Surface(
-            (layer_size[0] * scale, layer_size[1] * scale),
-            pygame.SRCALPHA
-        )
+        layer = pygame.Surface(layer_size, pygame.SRCALPHA).convert_alpha()
+        layer.fill((0, 0, 0, 0))
         body = pygame.Rect(pad_x, pad_y, rect.width, rect.height)
-        body_hi = pygame.Rect(
-            body.x * scale,
-            body.y * scale,
-            body.width * scale,
-            body.height * scale
-        )
-        body_radius = body_hi.height // 2
-        base_color = lerp_color(self.NORMAL_COLOR, self.HOVER_COLOR, hover)
-        fill_alpha = int((154 + 48 * hover) * visible)
-        shadow_alpha = int((48 + 22 * hover) * visible)
-        glow_alpha = int((20 + 42 * hover) * visible)
+        body_radius = body.height // 2
+        base_color = lerp_color(self.NORMAL_COLOR, self.HOVER_COLOR, hover_style)
+        shadow_alpha = int(48 + 22 * hover_style)
+        glow_alpha = int(20 + 42 * hover_style)
 
-        shadow = body_hi.move(int(5 * scale), int(5 * scale))
+        shadow = body.move(4, 4)
         pygame.draw.rect(
-            shape_layer_hi,
+            layer,
             (0, 0, 0, shadow_alpha),
             shadow,
             border_radius=body_radius
         )
         if hover > 0.01:
             for extra, factor in ((10, 0.22), (5, 0.35)):
-                glow_rect = body_hi.inflate(int(extra * scale), int(extra * 0.72 * scale))
+                glow_rect = body.inflate(extra, int(extra * 0.72))
                 pygame.draw.rect(
-                    shape_layer_hi,
+                    layer,
                     (255, 160, 220, int(glow_alpha * factor)),
                     glow_rect,
                     border_radius=glow_rect.height // 2
                 )
 
         pygame.draw.rect(
-            shape_layer_hi,
-            (*base_color, fill_alpha),
-            body_hi,
+            layer,
+            (*base_color, 255),
+            body,
             border_radius=body_radius
         )
 
-        pattern = self._pattern_surface(body.size, scale)
-        pattern_alpha = int((44 + 18 * hover) * visible)
-        if pattern.get_alpha() != pattern_alpha:
-            pattern.set_alpha(pattern_alpha)
-        shape_layer_hi.blit(pattern, body_hi.topleft)
-
-        shine_rect = body_hi.inflate(-max(2, int(body_hi.height * 0.08)), -max(2, int(body_hi.height * 0.20)))
-        shine_rect.height = max(1, shine_rect.height // 2)
-        pygame.draw.rect(
-            shape_layer_hi,
-            (255, 255, 255, int((18 + 28 * hover) * visible)),
-            shine_rect,
-            border_radius=max(1, shine_rect.height // 2)
+        detail_layer = pygame.Surface(layer_size, pygame.SRCALPHA).convert_alpha()
+        detail_layer.fill((0, 0, 0, 0))
+        inner_glow = body.inflate(
+            -max(2, int(body.height * 0.10)),
+            -max(2, int(body.height * 0.18))
         )
         pygame.draw.rect(
-            shape_layer_hi,
-            (255, 255, 255, int((30 + 35 * hover) * visible)),
-            body_hi.inflate(-2 * scale, -2 * scale),
-            width=max(1, scale),
-            border_radius=max(1, body_radius - scale)
+            detail_layer,
+            (255, 255, 255, int(8 + 18 * hover_style)),
+            inner_glow,
+            border_radius=max(1, inner_glow.height // 2)
         )
+        pygame.draw.rect(
+            detail_layer,
+            (255, 255, 255, int(28 + 34 * hover_style)),
+            body.inflate(-2, -2),
+            width=1,
+            border_radius=max(1, body_radius - 1)
+        )
+        layer.blit(detail_layer, (0, 0))
 
-        layer = pygame.transform.smoothscale(shape_layer_hi, layer_size).convert_alpha()
-
-        text_left = body.left + max(int(body.height * 0.88), int(body.width * 0.13))
-        available_width = max(24, body.right - text_left - int(body.height * 0.55))
+        available_width = max(24, body.width - int(body.height * 1.28))
         text = self._text_surface(font, available_width)
-        if text.get_alpha() != alpha:
-            text.set_alpha(alpha)
-        text_rect = text.get_rect(
-            midleft=(text_left, body.centery)
-        )
+        if text.get_alpha() != text_alpha:
+            text.set_alpha(text_alpha)
+        text_rect = text.get_rect(center=body.center)
         layer.blit(text, text_rect)
 
         if len(self._surface_cache) > 56:
@@ -336,8 +324,9 @@ class MenuSnow:
                 continue
 
             image = particle["image"]
-            if image.get_alpha() != alpha:
+            if particle.get("last_alpha") != alpha:
                 image.set_alpha(alpha)
+                particle["last_alpha"] = alpha
             rect = image.get_rect(center=(int(particle["x"]), int(particle["y"])))
             surface.blit(image, rect)
 
@@ -367,6 +356,7 @@ class MenuSnow:
             "rotation": rotation,
             "spin": 0.0,
             "image": image,
+            "last_alpha": None,
             "age": 0.0,
             "fade": 1.0,
             "fade_time": self.random.uniform(1.2, 2.4),
@@ -590,7 +580,7 @@ class PulseCircle:
         surface.blit(caption_surface, caption_rect)
 
     def _scaled_logo(self, radius):
-        radius_key = max(1, int(round(radius / 2.0) * 2))
+        radius_key = max(1, int(round(radius / 4.0) * 4))
         key = radius_key
         cached = self._logo_cache.get(key)
         if cached is not None:
@@ -601,7 +591,7 @@ class PulseCircle:
         diameter = max(1, int(radius_key * 2.12))
         scaled = pygame.transform.smoothscale(source, (diameter, diameter)).convert_alpha()
 
-        if len(self._logo_cache) > 80:
+        if len(self._logo_cache) > 96:
             self._logo_cache.clear()
         self._logo_cache[key] = scaled
         return scaled
@@ -690,6 +680,7 @@ class MainMenuScene(BaseScene):
         self.option_font = None
         self.footer_font = None
         self.footer_cache = {}
+        self.settings_panel_cache = {}
 
         self.circle = PulseCircle(self.title)
         self.visualizer = CircularMenuVisualizer(bar_count=175)
@@ -732,17 +723,22 @@ class MainMenuScene(BaseScene):
         height = self.game.HEIGHT
         self.circle.layout(width, height)
         self.option_font = rounded_font(
-            max(22, int(self.circle.base_radius * 0.126)),
+            max(28, int(self.circle.base_radius * 0.164)),
             bold=True
         )
         self.footer_font = rounded_font(max(14, height // 64), bold=False)
         self.footer_cache.clear()
 
-        option_width = int(clamp(width * 0.292, 284, 520))
-        option_height = int(clamp(height * 0.058, 43, 61))
-        spacing = int(option_height * 1.18)
+        option_width = int(clamp(width * 0.380, 370, 676))
+        option_height = int(clamp(height * 0.075, 56, 79))
+        spacing = int(option_height * 1.24)
         open_circle_x = self.circle.center[0] - int(self.circle.base_radius * 0.48)
-        left_x = open_circle_x + int(self.circle.base_radius * 0.88)
+        open_circle_right = open_circle_x + int(self.circle.base_radius * 1.06)
+        logo_overlap = int(max(
+            int(option_height * 1.08),
+            int(self.circle.base_radius * 0.18)
+        ) * 1.24)
+        left_x = open_circle_right - logo_overlap
         left_x = min(left_x, width - option_width - 24)
         start_y = self.circle.center[1] - int(spacing * (len(self.options) - 1) * 0.5)
 
@@ -784,6 +780,7 @@ class MainMenuScene(BaseScene):
         self.fallback_orbit = None
         self.fallback_orbit_size = None
         self.overlay_cache.clear()
+        self.settings_panel_cache.clear()
 
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
@@ -1371,6 +1368,20 @@ class MainMenuScene(BaseScene):
             int(screen.get_height() * 0.50)
         )
 
+        value = self.game.raw_mouse_sensitivity
+        cache_key = (
+            panel.size,
+            round(value, 2),
+            id(self.option_font),
+            id(self.footer_font)
+        )
+        cached = self.settings_panel_cache.get(cache_key)
+        if cached is not None:
+            surface, slider = cached
+            self.settings_slider_rect = slider.move(panel.topleft)
+            screen.blit(surface, panel)
+            return
+
         surface = pygame.Surface(panel.size, pygame.SRCALPHA)
         pygame.draw.rect(
             surface,
@@ -1386,7 +1397,6 @@ class MainMenuScene(BaseScene):
             border_radius=14
         )
 
-        value = self.game.raw_mouse_sensitivity
         title = self.option_font.render("Settings", True, (255, 255, 255))
         label = self.footer_font.render("Mouse sensitivity", True, (230, 232, 250))
         value_text = self.footer_font.render(f"{value:.2f}x", True, (255, 244, 160))
@@ -1428,6 +1438,9 @@ class MainMenuScene(BaseScene):
         surface.blit(hint, (24, height - hint.get_height() - 18))
 
         self.settings_slider_rect = slider.move(panel.topleft)
+        if len(self.settings_panel_cache) > 12:
+            self.settings_panel_cache.clear()
+        self.settings_panel_cache[cache_key] = (surface, slider.copy())
         screen.blit(surface, panel)
 
     def _footer_surface(self, text, alpha):
