@@ -66,12 +66,18 @@ Baixe as músicas do seu interese diretamente no site oficial do game, https://o
 
 ## Performance e profiler
 
-Durante testes em PCs fracos, pressione `F3` para abrir o profiler interno. Ele mostra FPS, tempo medio do frame, p95, piores frames e custo de eventos/update/render/flip/pacer. O mesmo resumo tambem aparece no terminal a cada poucos segundos.
+Durante testes em PCs fracos, pressione `F3` para abrir o profiler interno. Ele mostra FPS, tempo medio do frame, p95, piores frames e custos separados de eventos, update, render, visualizer, hitobjects, sliders, UI, flip e pacer. O mesmo resumo tambem aparece no terminal a cada poucos segundos.
 
 Tambem e possivel iniciar o jogo ja com o profiler ativo:
 
 ```bash
 $env:PYOSU_PROFILE="1"; py -3.12 main.py
+```
+
+Para deixar o modo de auditoria ligado por padrao:
+
+```bash
+$env:PYOSU_DEBUG_PERFORMANCE="1"; py -3.12 main.py
 ```
 
 O jogo usa `240 FPS` como alvo padrao para reduzir stutter em PCs fracos. Para testar outro limite:

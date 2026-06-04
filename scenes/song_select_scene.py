@@ -244,6 +244,7 @@ class SongSelectScene(BaseScene):
         self.card_image_cache = {}
         self.card_layer_cache = {}
         self.text_cache = {}
+        self.panel_surface_cache = {}
         self._layout()
         self._apply_filter()
         initial_index = self._index_for_music_path(self.initial_music_path)
@@ -309,6 +310,7 @@ class SongSelectScene(BaseScene):
         self.card_image_cache.clear()
         self.card_layer_cache.clear()
         self.text_cache.clear()
+        self.panel_surface_cache.clear()
 
     def handle_event(self, event):
         if self.pending_play_info is not None:
@@ -721,14 +723,25 @@ class SongSelectScene(BaseScene):
 
     def _draw_search_bar(self, screen):
         rect = self._search_rect()
-        pygame.draw.rect(screen, (13, 14, 26, 220), rect, border_radius=7)
-        pygame.draw.rect(screen, (92, 135, 255, 145), rect, 2, border_radius=7)
-        text = self._text_surface(
-            self.small_font,
-            f"Search: {self.search_text or 'Type to search!'}",
-            (235, 238, 255)
-        )
-        screen.blit(text, (rect.x + 16, rect.y + rect.height // 2 - text.get_height() // 2))
+        text_value = f"Search: {self.search_text or 'Type to search!'}"
+        cache_key = ("search", rect.size, text_value, id(self.small_font))
+        surface = self.panel_surface_cache.get(cache_key)
+        if surface is None:
+            surface = pygame.Surface(rect.size, pygame.SRCALPHA).convert_alpha()
+            local_rect = surface.get_rect()
+            pygame.draw.rect(surface, (13, 14, 26), local_rect, border_radius=7)
+            pygame.draw.rect(surface, (92, 135, 255), local_rect, 2, border_radius=7)
+            text = self._text_surface(
+                self.small_font,
+                text_value,
+                (235, 238, 255)
+            )
+            surface.blit(
+                text,
+                (16, local_rect.centery - text.get_height() // 2)
+            )
+            self._cache_panel_surface(cache_key, surface)
+        screen.blit(surface, rect)
 
     def _search_rect(self):
         width = int(clamp(self.game.WIDTH * 0.34, 360, 560))
@@ -749,35 +762,49 @@ class SongSelectScene(BaseScene):
         width = int(self.game.WIDTH * 0.51)
         height = int(clamp(self.game.HEIGHT * 0.18, 118, 150))
         rect = pygame.Rect(x, y, width, height)
-        pygame.draw.rect(screen, (0, 0, 0, 185), rect, border_radius=8)
-        pygame.draw.rect(screen, (78, 130, 255, 185), rect, 2, border_radius=8)
-
         title_text = f"{info.artist} - {info.title} [{info.version}]"
-        title = self._text_surface(self.medium_font, title_text, (255, 255, 255))
-        mapper = self._text_surface(self.small_font, f"Mapped by {info.creator}", (230, 235, 245))
-        stats1 = self._text_surface(
-            self.small_font,
-            f"Length: {info.length_text}  BPM: {info.bpm_text}  Objects: {info.object_count}",
-            (238, 238, 245)
+        cache_key = (
+            "info",
+            rect.size,
+            str(info.osu_file),
+            title_text,
+            id(self.medium_font),
+            id(self.small_font),
+            id(self.tiny_font)
         )
-        stats2 = self._text_surface(
-            self.small_font,
-            f"Circles: {info.circle_count}  Sliders: {info.slider_count}  Spinners: {info.spinner_count}",
-            (238, 238, 245)
-        )
-        stats3 = self._text_surface(
-            self.tiny_font,
-            f"CS:{info.cs:g} AR:{info.ar:g} OD:{info.od:g} HP:{info.hp:g}  Star Rating: {info.stars:.2f}",
-            (225, 230, 245)
-        )
-        for surf, yy in (
-            (title, y + 10),
-            (mapper, y + 40),
-            (stats1, y + 67),
-            (stats2, y + 91),
-            (stats3, y + 116)
-        ):
-            screen.blit(surf, (x + 14, yy))
+        surface = self.panel_surface_cache.get(cache_key)
+        if surface is None:
+            surface = pygame.Surface(rect.size, pygame.SRCALPHA).convert_alpha()
+            local_rect = surface.get_rect()
+            pygame.draw.rect(surface, (0, 0, 0), local_rect, border_radius=8)
+            pygame.draw.rect(surface, (78, 130, 255), local_rect, 2, border_radius=8)
+            title = self._text_surface(self.medium_font, title_text, (255, 255, 255))
+            mapper = self._text_surface(self.small_font, f"Mapped by {info.creator}", (230, 235, 245))
+            stats1 = self._text_surface(
+                self.small_font,
+                f"Length: {info.length_text}  BPM: {info.bpm_text}  Objects: {info.object_count}",
+                (238, 238, 245)
+            )
+            stats2 = self._text_surface(
+                self.small_font,
+                f"Circles: {info.circle_count}  Sliders: {info.slider_count}  Spinners: {info.spinner_count}",
+                (238, 238, 245)
+            )
+            stats3 = self._text_surface(
+                self.tiny_font,
+                f"CS:{info.cs:g} AR:{info.ar:g} OD:{info.od:g} HP:{info.hp:g}  Star Rating: {info.stars:.2f}",
+                (225, 230, 245)
+            )
+            for surf, yy in (
+                (title, 10),
+                (mapper, 40),
+                (stats1, 67),
+                (stats2, 91),
+                (stats3, 116)
+            ):
+                surface.blit(surf, (14, yy))
+            self._cache_panel_surface(cache_key, surface)
+        screen.blit(surface, rect)
 
     def _draw_rank_panel(self, screen):
         x = self.margin
@@ -785,17 +812,27 @@ class SongSelectScene(BaseScene):
         w = int(self.game.WIDTH * 0.42)
         h = int(self.game.HEIGHT * 0.095)
         rect = pygame.Rect(x, y, w, h)
-        pygame.draw.rect(screen, (15, 15, 26, 145), rect, border_radius=8)
-        pygame.draw.rect(screen, (78, 130, 255, 155), rect, 2, border_radius=8)
-        title = self._text_surface(self.small_font, "Local Ranking", (255, 255, 255))
-        screen.blit(title, (x + 14, y + 9))
-
         records = []
         if self.items:
             records = self.score_manager.records_for(self.items[self.selected_index]["info"].osu_file)
-        if not records:
-            text = self._text_surface(self.tiny_font, "No records set!", (210, 210, 225))
-            screen.blit(text, (x + 14, y + 38))
+        record_key = tuple(
+            (record.get("score"), record.get("accuracy"), record.get("combo"))
+            for record in records[:3]
+        )
+        cache_key = ("rank", rect.size, record_key, id(self.small_font), id(self.tiny_font))
+        surface = self.panel_surface_cache.get(cache_key)
+        if surface is None:
+            surface = pygame.Surface(rect.size, pygame.SRCALPHA).convert_alpha()
+            local_rect = surface.get_rect()
+            pygame.draw.rect(surface, (15, 15, 26), local_rect, border_radius=8)
+            pygame.draw.rect(surface, (78, 130, 255), local_rect, 2, border_radius=8)
+            title = self._text_surface(self.small_font, "Local Ranking", (255, 255, 255))
+            surface.blit(title, (14, 9))
+            if not records:
+                text = self._text_surface(self.tiny_font, "No records set!", (210, 210, 225))
+                surface.blit(text, (14, 38))
+            self._cache_panel_surface(cache_key, surface)
+        screen.blit(surface, rect)
 
     def _draw_cards(self, screen):
         if not self.items:
@@ -813,15 +850,21 @@ class SongSelectScene(BaseScene):
     def _draw_bottom_bar(self, screen):
         h = 58
         y = self.game.HEIGHT - h
-        pygame.draw.rect(screen, (10, 10, 18, 205), (0, y, self.game.WIDTH, h))
-        back = pygame.Rect(18, y + 10, 118, 38)
-        pygame.draw.rect(screen, (130, 70, 120, 220), back, border_radius=6)
-        pygame.draw.rect(screen, (255, 255, 255, 80), back, 1, border_radius=6)
-        screen.blit(self._text_surface(self.medium_font, "Back", (255, 255, 255)), (back.x + 33, back.y + 7))
-        guest = self._text_surface(self.small_font, "Guest", (230, 230, 240))
-        screen.blit(guest, (self.game.WIDTH - guest.get_width() - 22, y + 20))
-        action = self._text_surface(self.small_font, "Enter: play   Up/Down or wheel: navigate   Ctrl+F: search   Tab: sort", (200, 200, 215))
-        screen.blit(action, (160, y + 20))
+        cache_key = ("bottom", self.game.WIDTH, h, id(self.medium_font), id(self.small_font))
+        surface = self.panel_surface_cache.get(cache_key)
+        if surface is None:
+            surface = pygame.Surface((self.game.WIDTH, h)).convert()
+            pygame.draw.rect(surface, (10, 10, 18), surface.get_rect())
+            back = pygame.Rect(18, 10, 118, 38)
+            pygame.draw.rect(surface, (130, 70, 120), back, border_radius=6)
+            pygame.draw.rect(surface, (255, 255, 255), back, 1, border_radius=6)
+            surface.blit(self._text_surface(self.medium_font, "Back", (255, 255, 255)), (back.x + 33, back.y + 7))
+            guest = self._text_surface(self.small_font, "Guest", (230, 230, 240))
+            surface.blit(guest, (self.game.WIDTH - guest.get_width() - 22, 20))
+            action = self._text_surface(self.small_font, "Enter: play   Up/Down or wheel: navigate   Ctrl+F: search   Tab: sort", (200, 200, 215))
+            surface.blit(action, (160, 20))
+            self._cache_panel_surface(cache_key, surface)
+        screen.blit(surface, (0, y))
 
     def _draw_empty(self, screen):
         text = self._text_surface(self.title_font, "No beatmaps found", (255, 255, 255))
@@ -839,3 +882,8 @@ class SongSelectScene(BaseScene):
         surface = font.render(str(text), True, color)
         self.text_cache[key] = surface
         return surface
+
+    def _cache_panel_surface(self, key, surface):
+        if len(self.panel_surface_cache) > 96:
+            self.panel_surface_cache.clear()
+        self.panel_surface_cache[key] = surface

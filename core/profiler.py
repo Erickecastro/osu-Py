@@ -6,6 +6,24 @@ import pygame
 
 
 class FrameProfiler:
+    REPORT_SECTIONS = (
+        "frame",
+        "events",
+        "update",
+        "scene_manager_update",
+        "scene_update",
+        "hitobjects",
+        "audio",
+        "render",
+        "scene_render",
+        "visualizer",
+        "sliders",
+        "hitobjects_render",
+        "ui_draw",
+        "flip",
+        "pacer"
+    )
+
     def __init__(self, enabled=False, sample_limit=360):
         self.enabled = enabled or os.environ.get("PYOSU_PROFILE", "0") == "1"
         self.sample_limit = sample_limit
@@ -16,6 +34,15 @@ class FrameProfiler:
         self.report_interval = 2.5
         self.font = None
         self.small_font = None
+        self.scene_name = None
+
+    def _reset_scene_samples(self, scene_name):
+        if self.scene_name == scene_name:
+            return
+        self.scene_name = scene_name
+        self.samples.clear()
+        self.starts.clear()
+        self.last_report = time.perf_counter()
 
     def toggle(self):
         self.enabled = not self.enabled
@@ -40,9 +67,15 @@ class FrameProfiler:
             return
         self.samples[name].append((time.perf_counter() - start) * 1000.0)
 
+    def add(self, name, milliseconds):
+        if not self.enabled:
+            return
+        self.samples[name].append(float(milliseconds))
+
     def end_frame(self, scene_name, fps):
         if not self.enabled:
             return
+        self._reset_scene_samples(scene_name)
         if self.frame_start:
             self.samples["frame"].append((time.perf_counter() - self.frame_start) * 1000.0)
 
@@ -52,7 +85,7 @@ class FrameProfiler:
 
         self.last_report = now
         parts = [f"[profiler] {scene_name} fps={fps:.1f}"]
-        for name in ("frame", "events", "update", "render", "scene_render", "ui_draw", "flip", "pacer"):
+        for name in self.REPORT_SECTIONS:
             stats = self.stats(name)
             if stats is None:
                 continue
@@ -77,12 +110,13 @@ class FrameProfiler:
     def draw_overlay(self, screen, scene_name, fps):
         if not self.enabled:
             return
+        self._reset_scene_samples(scene_name)
         if self.font is None:
             self.font = pygame.font.SysFont("consolas", 15)
             self.small_font = pygame.font.SysFont("consolas", 13)
 
         lines = [f"F3 profiler | {scene_name} | FPS {fps:5.1f}"]
-        for name in ("frame", "events", "update", "render", "scene_render", "ui_draw", "flip", "pacer"):
+        for name in self.REPORT_SECTIONS:
             stats = self.stats(name)
             if stats is None:
                 continue

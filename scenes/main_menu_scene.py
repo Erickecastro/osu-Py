@@ -123,6 +123,9 @@ class MenuOption:
         )
         cached = self._surface_cache.get(cache_key)
         if cached is not None:
+            render_alpha = int(255 * visible)
+            if cached["surface"].get_alpha() != render_alpha:
+                cached["surface"].set_alpha(render_alpha)
             surface.blit(
                 cached["surface"],
                 (rect.x - cached["pad_x"], rect.y - cached["pad_y"])
@@ -200,6 +203,9 @@ class MenuOption:
             "pad_y": pad_y
         }
 
+        render_alpha = int(255 * visible)
+        if layer.get_alpha() != render_alpha:
+            layer.set_alpha(render_alpha)
         surface.blit(layer, (rect.x - pad_x, rect.y - pad_y))
 
     def _text_surface(self, font, available_width):
@@ -851,7 +857,13 @@ class MainMenuScene(BaseScene):
             and not self.music_paused
             and pygame.mixer.music.get_busy()
         )
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("visualizer")
         self.visualizer.update(dt, current_time_ms, music_active)
+        if profiler_enabled:
+            profiler.end("visualizer")
         self.beat_level = self.visualizer.beat_level
         self.beat_phase = self.visualizer.beat_phase
         self.music_energy = self.visualizer.energy
@@ -877,7 +889,11 @@ class MainMenuScene(BaseScene):
             option.update(dt, mouse_pos, self.menu_open)
 
         self.snow.update(dt, self.game.WIDTH, self.game.HEIGHT)
+        if profiler_enabled:
+            profiler.start("audio")
         self._advance_finished_menu_track()
+        if profiler_enabled:
+            profiler.end("audio")
 
     def render(self, screen):
         if screen.get_size() != (self.game.WIDTH, self.game.HEIGHT):
@@ -892,6 +908,10 @@ class MainMenuScene(BaseScene):
         menu_shift_x = int(menu_t * -self.circle.base_radius * 0.48)
         original_center = self.circle.center
         self.circle.center = (original_center[0] + menu_shift_x, original_center[1])
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("visualizer")
         self.visualizer.draw(
             screen,
             self.circle.center,
@@ -900,6 +920,8 @@ class MainMenuScene(BaseScene):
             self.music_energy,
             (255, 240, 252)
         )
+        if profiler_enabled:
+            profiler.end("visualizer")
 
         for option in self.options:
             option.draw(screen, self.option_font)
@@ -1040,7 +1062,7 @@ class MainMenuScene(BaseScene):
             self.footer_cache.clear()
             self.analyzed_music_path = None
             self.visualizer_analysis_delay = 0.16
-            self.visualizer.load_audio_analysis(None, self.current_timing_points)
+            self.visualizer.request_audio_analysis(None, self.current_timing_points)
         else:
             self._set_track_metadata(track_index)
 
@@ -1115,7 +1137,7 @@ class MainMenuScene(BaseScene):
         if not force and self.visualizer_analysis_delay > 0.0:
             return
 
-        self.visualizer.load_audio_analysis(
+        self.visualizer.request_audio_analysis(
             self.music_path,
             self.current_timing_points
         )
@@ -1133,7 +1155,7 @@ class MainMenuScene(BaseScene):
         self.beat_phase = 0.0
         self.analyzed_music_path = None
         self.visualizer_analysis_delay = 0.16
-        self.visualizer.load_audio_analysis(None, self.current_timing_points)
+        self.visualizer.request_audio_analysis(None, self.current_timing_points)
 
     def _advance_finished_menu_track(self):
         if (

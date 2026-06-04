@@ -1,5 +1,6 @@
 import os
 import math
+import time
 from bisect import bisect_left, bisect_right
 
 import pygame
@@ -268,6 +269,7 @@ class GameplayScene(BaseScene):
         )
 
         self.slider_renderer = SliderRenderer(self)
+        self.slider_precache_complete = False
 
         self.circle_number_font = rounded_font(32, bold=True)
 
@@ -279,7 +281,9 @@ class GameplayScene(BaseScene):
         self.hit_sound = self._load_hit_sound()
         self.fail_sound = self._load_fail_sound()
         self.sliderball_diameter = self._calculate_sliderball_diameter()
-        self._precache_gameplay_surfaces()
+        self.surface_precache_jobs = self._build_gameplay_surface_precache_jobs()
+        self.surface_precache_index = 0
+        self.surface_precache_complete = not self.surface_precache_jobs
         
         self.miss_indicators = []
         self.hit_result_indicators = []
@@ -1441,48 +1445,68 @@ class GameplayScene(BaseScene):
                     alpha=point_alpha
                 )
 
-    def _precache_gameplay_surfaces(self):
+    def _build_gameplay_surface_precache_jobs(self):
         base_radius = max(1, int(self.scaled_radius))
         max_hit_radius = max(base_radius, int(base_radius * 1.42) + 1)
+        jobs = []
 
         for color in self.DEFAULT_COMBO_COLORS:
-            self._aa_circle_surface(
-                base_radius,
-                fill_color=color,
-                outline_color=(255, 255, 255),
-                outline_width=3
-            )
+            jobs.append((base_radius, color, (255, 255, 255), 3))
             for radius in range(base_radius, max_hit_radius + 1):
                 for outline_width in (1, 2, 3):
-                    self._aa_circle_surface(
-                        radius,
-                        fill_color=color,
-                        outline_color=(255, 255, 255),
-                        outline_width=outline_width
-                    )
+                    jobs.append((radius, color, (255, 255, 255), outline_width))
 
             for radius in range(2, base_radius + 1):
-                self._aa_circle_surface(
-                    radius,
-                    fill_color=color
-                )
+                jobs.append((radius, color, None, 0))
 
         for radius in range(2, base_radius + 1):
+            jobs.append((radius, None, (255, 255, 255), 1))
+            jobs.append((radius, None, (255, 255, 255), 2))
+            jobs.append((radius, None, (255, 255, 255), 3))
+        return jobs
+
+    def _precache_gameplay_surfaces(self):
+        for radius, fill_color, outline_color, outline_width in (
+            self._build_gameplay_surface_precache_jobs()
+        ):
             self._aa_circle_surface(
                 radius,
-                outline_color=(255, 255, 255),
-                outline_width=1
+                fill_color=fill_color,
+                outline_color=outline_color,
+                outline_width=outline_width
             )
+
+    def _warm_gameplay_surface_cache(self, max_ms=2, max_items=6):
+        if self.surface_precache_complete:
+            return
+
+        start = pygame.time.get_ticks()
+        count = 0
+        total_jobs = len(self.surface_precache_jobs)
+        while self.surface_precache_index < total_jobs:
+            radius, fill_color, outline_color, outline_width = (
+                self.surface_precache_jobs[self.surface_precache_index]
+            )
+            self.surface_precache_index += 1
             self._aa_circle_surface(
                 radius,
-                outline_color=(255, 255, 255),
-                outline_width=2
+                fill_color=fill_color,
+                outline_color=outline_color,
+                outline_width=outline_width
             )
-            self._aa_circle_surface(
-                radius,
-                outline_color=(255, 255, 255),
-                outline_width=3
-            )
+            count += 1
+            if count >= max_items or pygame.time.get_ticks() - start >= max_ms:
+                break
+
+        self.surface_precache_complete = self.surface_precache_index >= total_jobs
+
+    def _warm_slider_cache(self, max_ms=2, max_items=1):
+        if self.slider_precache_complete:
+            return
+        self.slider_precache_complete = self.slider_renderer.precache_step(
+            max_ms=max_ms,
+            max_items=max_items
+        )
 
     def _load_background_surface(self):
         background = self.beatmap.get("background")
@@ -1670,7 +1694,12 @@ class GameplayScene(BaseScene):
         if self.failed or self.paused:
             return
 
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+
         if not self.music_started:
+            self._warm_gameplay_surface_cache(max_ms=2, max_items=6)
+            self._warm_slider_cache(max_ms=2, max_items=1)
             ready_elapsed = (
                 pygame.time.get_ticks()
                 - self.ready_start_time
@@ -1691,7 +1720,11 @@ class GameplayScene(BaseScene):
                     - self.pre_music_started_at
                 )
                 if lead_elapsed < self.pre_music_lead_in_ms:
+                    self._warm_gameplay_surface_cache(max_ms=2, max_items=6)
+                    self._warm_slider_cache(max_ms=2, max_items=1)
                     self.current_time = lead_elapsed - self.pre_music_lead_in_ms
+                    if profiler_enabled:
+                        profiler.start("hitobjects")
                     self.next_note_index = activate_due_notes(
                         self.notes,
                         self.active_notes,
@@ -1699,11 +1732,17 @@ class GameplayScene(BaseScene):
                         self.current_time,
                         self.approach_time
                     )
+                    if profiler_enabled:
+                        profiler.end("hitobjects")
                     return
 
+            if profiler_enabled:
+                profiler.start("audio")
             self.start_time = start_music(
                 self.music_path
             )
+            if profiler_enabled:
+                profiler.end("audio")
             if self.start_time is None:
                 self.start_time = pygame.time.get_ticks()
 
@@ -1732,6 +1771,8 @@ class GameplayScene(BaseScene):
             self._fail()
             return
 
+        if profiler_enabled:
+            profiler.start("hitobjects")
         self.next_note_index = activate_due_notes(
             self.notes,
             self.active_notes,
@@ -1764,6 +1805,8 @@ class GameplayScene(BaseScene):
             self.hit_fade_out_time,
             self.hit_explosion_duration
         )
+        if profiler_enabled:
+            profiler.end("hitobjects")
 
     def scale_position(self, x, y):
 
@@ -1899,6 +1942,12 @@ class GameplayScene(BaseScene):
 
         overlay = self.overlay_surface
         overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
+
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        slider_render_elapsed = 0.0
+        if profiler_enabled:
+            profiler.start("hitobjects_render")
 
         self._draw_followpoints(overlay)
 
@@ -2079,6 +2128,8 @@ class GameplayScene(BaseScene):
                     slider_draw_points = render_slider_points
                     slider_cache_key = None
 
+                if profiler_enabled:
+                    slider_start = time.perf_counter()
                 self.slider_renderer.draw(
                     overlay,
                     slider_draw_points,
@@ -2096,6 +2147,10 @@ class GameplayScene(BaseScene):
                     span_duration=note.get("span_duration", 0.0),
                     screen_offset=slider_screen_offset
                 )
+                if profiler_enabled:
+                    slider_render_elapsed += (
+                        time.perf_counter() - slider_start
+                    ) * 1000.0
 
                 head_result = note.get("head_hit_result")
                 head_alpha = self._slider_head_alpha(note, alpha)
@@ -2378,6 +2433,11 @@ class GameplayScene(BaseScene):
                     (x + half, y - half),
                     width
                 )
+
+        if profiler_enabled:
+            profiler.end("hitobjects_render")
+            if slider_render_elapsed > 0.0:
+                profiler.add("sliders", slider_render_elapsed)
 
         screen.blit(
             overlay,

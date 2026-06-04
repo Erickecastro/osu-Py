@@ -3,6 +3,7 @@ import pygame_gui
 
 from core.beatmap_loader import BeatmapLoader
 from core.performance import (
+    DEBUG_PERFORMANCE,
     MAX_FRAME_DT,
     MIXER_BUFFER,
     MIXER_CHANNELS,
@@ -54,7 +55,7 @@ class Game:
         # -------------------------
         self.clock = pygame.time.Clock()
         self.dt = 1.0 / self.FPS
-        self.profiler = FrameProfiler()
+        self.profiler = FrameProfiler(enabled=DEBUG_PERFORMANCE)
         self.settings = GameSettings.load()
         self.mouse_pos = pygame.mouse.get_pos()
         self.raw_mouse_enabled = False
@@ -364,7 +365,12 @@ class Game:
         if getattr(current_scene, "uses_ui", True):
             self.ui_manager.update(dt)
 
+        profiler_enabled = self.profiler.enabled
+        if profiler_enabled:
+            self.profiler.start("scene_manager_update")
         self.scene_manager.update(dt)
+        if profiler_enabled:
+            self.profiler.end("scene_manager_update")
         if not getattr(current_scene, "draws_own_cursor", False):
             self.cursor_renderer.update(dt, self.mouse_pos)
 

@@ -1,4 +1,5 @@
 import math
+import threading
 
 import pygame
 import pygame.sndarray
@@ -75,8 +76,68 @@ class CircularMenuVisualizer:
         self._layer_shrink_elapsed = 0.0
         self._redraw_elapsed = 1.0
         self.render_interval = 1.0 / 60.0
+        self._analysis_lock = threading.Lock()
+        self._analysis_thread = None
+        self._analysis_thread_key = None
+        self._pending_analysis = None
 
     def load_audio_analysis(self, audio_path, timing_points=None):
+        self._reset_analysis_state(timing_points)
+
+        if not audio_path:
+            self._analysis_thread_key = None
+            self._pending_analysis = None
+            return
+
+        cache_key = (str(audio_path), self.bar_count, self.analysis_step_ms)
+        self._analysis_thread_key = cache_key
+        self._pending_analysis = None
+        cached = self._analysis_cache.get(cache_key)
+        if cached is not None:
+            self.analysis, self.rms_envelope = cached
+            return
+
+        result = self._build_audio_analysis(audio_path)
+        if result is None:
+            return
+
+        self.analysis, self.rms_envelope = result
+        self._store_analysis_cache(cache_key, result)
+
+    def request_audio_analysis(self, audio_path, timing_points=None):
+        self._reset_analysis_state(timing_points)
+
+        if not audio_path:
+            self._analysis_thread_key = None
+            self._pending_analysis = None
+            return
+
+        cache_key = (str(audio_path), self.bar_count, self.analysis_step_ms)
+        cached = self._analysis_cache.get(cache_key)
+        if cached is not None:
+            self._analysis_thread_key = cache_key
+            self._pending_analysis = None
+            self.analysis, self.rms_envelope = cached
+            return
+
+        if (
+            self._analysis_thread is not None
+            and self._analysis_thread.is_alive()
+            and self._analysis_thread_key == cache_key
+        ):
+            return
+
+        self._analysis_thread_key = cache_key
+        self._pending_analysis = None
+        thread = threading.Thread(
+            target=self._analysis_worker,
+            args=(cache_key, audio_path),
+            daemon=True
+        )
+        self._analysis_thread = thread
+        thread.start()
+
+    def _reset_analysis_state(self, timing_points=None):
         self.timing_points = self.parse_timing_points(timing_points or [])
         self._timing_index = 0
         self.analysis = []
@@ -91,28 +152,45 @@ class CircularMenuVisualizer:
         self.level_hold = [0.0] * self.bar_count
         self.region_targets = [0.0] * self.bar_count
 
-        if not audio_path:
+    def _analysis_worker(self, cache_key, audio_path):
+        result = self._build_audio_analysis(audio_path)
+        with self._analysis_lock:
+            self._pending_analysis = (cache_key, result)
+
+    def _apply_pending_analysis(self):
+        with self._analysis_lock:
+            pending = self._pending_analysis
+            self._pending_analysis = None
+
+        if pending is None:
             return
 
-        cache_key = (str(audio_path), self.bar_count, self.analysis_step_ms)
-        cached = self._analysis_cache.get(cache_key)
-        if cached is not None:
-            self.analysis, self.rms_envelope = cached
+        cache_key, result = pending
+        if cache_key != self._analysis_thread_key or result is None:
             return
 
+        self.analysis, self.rms_envelope = result
+        self._store_analysis_cache(cache_key, result)
+
+    def _store_analysis_cache(self, cache_key, result):
+        if len(self._analysis_cache) > 8:
+            self._analysis_cache.clear()
+        self._analysis_cache[cache_key] = result
+
+    def _build_audio_analysis(self, audio_path):
         try:
             import numpy as np
         except ImportError:
-            return
+            return None
 
         try:
             sound = pygame.mixer.Sound(str(audio_path))
             samples = pygame.sndarray.array(sound)
         except (pygame.error, ValueError, TypeError):
-            return
+            return None
 
         if samples.size == 0:
-            return
+            return None
 
         samples = samples.astype("float32")
         if samples.ndim > 1:
@@ -120,7 +198,7 @@ class CircularMenuVisualizer:
 
         peak = float(np.max(np.abs(samples))) if samples.size else 0.0
         if peak <= 0.0:
-            return
+            return None
         samples = samples / peak
 
         mixer_init = pygame.mixer.get_init()
@@ -128,7 +206,7 @@ class CircularMenuVisualizer:
         fft_size = 2048
         hop = max(1, int(sample_rate * self.analysis_step_ms / 1000))
         if len(samples) < fft_size:
-            return
+            return None
 
         freqs = np.fft.rfftfreq(fft_size, 1.0 / sample_rate)
         edges = np.geomspace(38.0, min(17000.0, sample_rate * 0.48), self.bar_count + 1)
@@ -153,7 +231,7 @@ class CircularMenuVisualizer:
             rms_values.append(rms)
 
         if not frames:
-            return
+            return None
 
         matrix = np.vstack(frames)
         band_floor = np.percentile(matrix, 18, axis=0)
@@ -168,11 +246,7 @@ class CircularMenuVisualizer:
         rms = np.clip((rms - rms_floor) / max(1e-6, rms_peak - rms_floor), 0.0, 1.0)
         rms = np.power(rms, 0.86)
 
-        self.analysis = matrix.astype("float32")
-        self.rms_envelope = [float(value) for value in rms]
-        if len(self._analysis_cache) > 8:
-            self._analysis_cache.clear()
-        self._analysis_cache[cache_key] = (self.analysis, self.rms_envelope)
+        return matrix.astype("float32"), [float(value) for value in rms]
 
     def parse_timing_points(self, timing_points):
         parsed = []
@@ -190,6 +264,7 @@ class CircularMenuVisualizer:
         return parsed
 
     def update(self, dt, current_time_ms, audio_active=True):
+        self._apply_pending_analysis()
         self._redraw_elapsed += dt
         self._layer_shrink_elapsed += dt
         audio_active = bool(audio_active)
@@ -231,11 +306,12 @@ class CircularMenuVisualizer:
             1.0 - math.exp(-dt * (12.0 if audible_target > self.audible_level else 5.0))
         )
 
-        low = sum(bands[:max(1, self.bar_count // 5)]) / max(1, self.bar_count // 5)
+        low_end = max(1, self.bar_count // 5)
+        low = self._mean_band_range(bands, 0, low_end)
         mid_start = self.bar_count // 5
         mid_end = self.bar_count * 3 // 5
-        mid = sum(bands[mid_start:mid_end]) / max(1, mid_end - mid_start)
-        high = sum(bands[mid_end:]) / max(1, self.bar_count - mid_end)
+        mid = self._mean_band_range(bands, mid_start, mid_end)
+        high = self._mean_band_range(bands, mid_end, self.bar_count)
 
         beat_audio = _clamp((low * 0.72) + (rms * 0.42), 0.0, 1.0)
         beat_pulse = _clamp(timing_beat * 0.72 * self.audible_level, 0.0, 1.0)
@@ -485,6 +561,14 @@ class CircularMenuVisualizer:
         bands = self.analysis[index]
         rms = self.rms_envelope[index] if index < len(self.rms_envelope) else 0.0
         return bands, rms
+
+    def _mean_band_range(self, bands, start, stop):
+        count = max(1, stop - start)
+        segment = bands[start:stop]
+        mean = getattr(segment, "mean", None)
+        if mean is not None:
+            return float(mean())
+        return sum(segment) / count
 
     def _timing_at(self, current_time_ms):
         if not self.timing_points:
