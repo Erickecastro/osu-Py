@@ -536,6 +536,25 @@ class GameplayScene(BaseScene):
     def _note_can_receive_early_hit(self, note):
         return self.current_time >= note["time"] - self._early_hit_limit_ms()
 
+    def event_music_time(self, event):
+        now = pygame.time.get_ticks()
+        event_tick = getattr(event, "timestamp", None)
+        if (
+            event_tick is None
+            or event_tick <= 0
+            or abs(float(event_tick) - now) > 60000
+        ):
+            event_tick = now
+        return self.music_time_from_tick(event_tick)
+
+    def music_time_from_tick(self, tick_ms):
+        if self.start_time is None or not self.music_started:
+            return self.current_time
+        return max(
+            -float(self.pre_music_lead_in_ms),
+            float(tick_ms) - float(self.start_time)
+        )
+
     def _slider_end_time(self, note):
         span_duration = float(note.get("span_duration", 0.0))
         repeat_count = int(note.get("repeat_count", 1))
@@ -629,7 +648,15 @@ class GameplayScene(BaseScene):
         wobble = math.sin(progress * math.tau * 4.0)
         return (amplitude * wobble, 0.0)
 
-    def _try_hit_at(self, pos):
+    def _try_hit_at(self, pos, input_time=None):
+        if input_time is not None:
+            previous_time = self.current_time
+            self.current_time = float(input_time)
+            try:
+                return self._try_hit_at(pos)
+            finally:
+                self.current_time = previous_time
+
         locked_note = self._notelock_target()
 
         def can_attempt_hit(note):
@@ -972,8 +999,15 @@ class GameplayScene(BaseScene):
         self.image_surface_cache[key] = scaled
         return scaled
 
-    def _scaled_square_image(self, image, diameter):
+    def _quantized_diameter(self, diameter, quantum=2):
         diameter = max(1, int(round(diameter)))
+        if diameter < 48:
+            return diameter
+        quantum = max(1, int(quantum))
+        return max(1, int(round(diameter / quantum)) * quantum)
+
+    def _scaled_square_image(self, image, diameter):
+        diameter = self._quantized_diameter(diameter, quantum=2)
         return self._scaled_image(
             image,
             (diameter, diameter)
@@ -1152,7 +1186,7 @@ class GameplayScene(BaseScene):
             target,
             image,
             center,
-            diameter=radius * 2,
+            diameter=self._quantized_diameter(radius * 2, quantum=4),
             alpha=alpha
         )
 
@@ -1446,6 +1480,13 @@ class GameplayScene(BaseScene):
                 )
 
     def _build_gameplay_surface_precache_jobs(self):
+        if (
+            self.skin_images.get("hitcircle") is not None
+            and self.skin_images.get("hitcircle_overlay") is not None
+            and self.skin_images.get("approach") is not None
+        ):
+            return []
+
         base_radius = max(1, int(self.scaled_radius))
         max_hit_radius = max(base_radius, int(base_radius * 1.42) + 1)
         jobs = []
@@ -1476,7 +1517,7 @@ class GameplayScene(BaseScene):
                 outline_width=outline_width
             )
 
-    def _warm_gameplay_surface_cache(self, max_ms=2, max_items=6):
+    def _warm_gameplay_surface_cache(self, max_ms=1, max_items=1):
         if self.surface_precache_complete:
             return
 
@@ -1500,7 +1541,7 @@ class GameplayScene(BaseScene):
 
         self.surface_precache_complete = self.surface_precache_index >= total_jobs
 
-    def _warm_slider_cache(self, max_ms=2, max_items=1):
+    def _warm_slider_cache(self, max_ms=1, max_items=1):
         if self.slider_precache_complete:
             return
         self.slider_precache_complete = self.slider_renderer.precache_step(
@@ -1698,8 +1739,8 @@ class GameplayScene(BaseScene):
         profiler_enabled = bool(profiler and profiler.enabled)
 
         if not self.music_started:
-            self._warm_gameplay_surface_cache(max_ms=2, max_items=6)
-            self._warm_slider_cache(max_ms=2, max_items=1)
+            self._warm_gameplay_surface_cache()
+            self._warm_slider_cache()
             ready_elapsed = (
                 pygame.time.get_ticks()
                 - self.ready_start_time
@@ -1720,8 +1761,8 @@ class GameplayScene(BaseScene):
                     - self.pre_music_started_at
                 )
                 if lead_elapsed < self.pre_music_lead_in_ms:
-                    self._warm_gameplay_surface_cache(max_ms=2, max_items=6)
-                    self._warm_slider_cache(max_ms=2, max_items=1)
+                    self._warm_gameplay_surface_cache()
+                    self._warm_slider_cache()
                     self.current_time = lead_elapsed - self.pre_music_lead_in_ms
                     if profiler_enabled:
                         profiler.start("hitobjects")

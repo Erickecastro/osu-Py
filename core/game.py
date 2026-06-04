@@ -304,6 +304,14 @@ class Game:
             )
 
         for event in pygame.event.get():
+            if (
+                self.raw_mouse_enabled
+                and event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN)
+            ):
+                self._apply_raw_mouse_delta(
+                    pygame.mouse.get_rel()
+                )
+
             if not self.raw_mouse_enabled and hasattr(event, "pos"):
                 self.mouse_pos = event.pos
 

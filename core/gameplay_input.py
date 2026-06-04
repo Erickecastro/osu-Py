@@ -26,7 +26,10 @@ class GameplayInputController:
 
         if event.key in self.HIT_KEYS:
             self.scene.hit_keys_held.add(event.key)
-            self.scene._try_hit_at(self.scene.game.mouse_pos)
+            self.scene._try_hit_at(
+                self.scene.game.mouse_pos,
+                input_time=self.scene.event_music_time(event)
+            )
             return True
 
         return False
@@ -40,7 +43,10 @@ class GameplayInputController:
     def _handle_mouse_down(self, event):
         if event.button in self.HIT_MOUSE_BUTTONS:
             self.scene.hit_mouse_buttons_held.add(event.button)
-            self.scene._try_hit_at(self.scene.game.mouse_pos)
+            self.scene._try_hit_at(
+                self.scene.game.mouse_pos,
+                input_time=self.scene.event_music_time(event)
+            )
             return True
         return False
 
