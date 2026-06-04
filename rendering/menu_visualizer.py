@@ -68,6 +68,7 @@ class CircularMenuVisualizer:
         self.analysis = []
         self.rms_envelope = []
         self.timing_points = []
+        self._timing_index = 0
         self._layer = None
         self._layer_size = None
         self._layer_radius = 0
@@ -77,6 +78,7 @@ class CircularMenuVisualizer:
 
     def load_audio_analysis(self, audio_path, timing_points=None):
         self.timing_points = self.parse_timing_points(timing_points or [])
+        self._timing_index = 0
         self.analysis = []
         self.rms_envelope = []
         self.energy = 0.12
@@ -394,14 +396,14 @@ class CircularMenuVisualizer:
         bar_light = _clamp(
             0.22
             + (level * 0.26)
-            + (sweep * (0.34 + beat * 0.12))
+            + (sweep * (0.44 + beat * 0.16))
             + (self.kiai_level * 0.08),
             0.0,
             1.0
         )
         base_gray = int(_clamp(156 + (bar_light * 74), 130, 236))
         base_alpha = int(_clamp(
-            (44 + (self.audible_level * 10) + (beat * 4) + (sweep * 12))
+            (44 + (self.audible_level * 10) + (beat * 4) + (sweep * 16))
             * (0.58 + (self.alpha_bias[index] * 0.36)),
             16,
             82
@@ -485,10 +487,22 @@ class CircularMenuVisualizer:
         return bands, rms
 
     def _timing_at(self, current_time_ms):
-        active = None
-        for point in self.timing_points:
-            if point["time"] <= current_time_ms:
-                active = point
-            else:
-                break
-        return active
+        if not self.timing_points:
+            return None
+
+        if (
+            self._timing_index >= len(self.timing_points)
+            or self.timing_points[self._timing_index]["time"] > current_time_ms
+        ):
+            self._timing_index = 0
+
+        while (
+            self._timing_index + 1 < len(self.timing_points)
+            and self.timing_points[self._timing_index + 1]["time"] <= current_time_ms
+        ):
+            self._timing_index += 1
+
+        point = self.timing_points[self._timing_index]
+        if point["time"] > current_time_ms:
+            return None
+        return point

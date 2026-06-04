@@ -195,6 +195,7 @@ class GameplayScene(BaseScene):
         self.miss_pop_duration = 260  # ms
         self.hit_number_fade_out_time = 120  # ms
         self.hit_explosion_duration = 360  # ms
+        self.slider_follow_return_grace_ms = 350  # ms
 
         self.usable_width = (
             self.playfield_width * self.scale
@@ -2215,42 +2216,50 @@ class GameplayScene(BaseScene):
                             + slider_total_duration
                             - self.current_time
                         )
-                        tolerance_ms = max(
+                        end_tolerance_ms = max(
                             120,
                             min(240, span_duration * 0.12)
                         )
                         if outside:
-                            if remaining <= tolerance_ms:
-                                note["slider_follow_released_near_end"] = True
-                            else:
-                                outside_since = note.get(
-                                    "slider_follow_outside_since"
+                            outside_since = note.get(
+                                "slider_follow_outside_since"
+                            )
+                            if outside_since is None:
+                                note["slider_follow_outside_since"] = (
+                                    self.current_time
                                 )
-                                if outside_since is None:
-                                    note["slider_follow_outside_since"] = (
-                                        self.current_time
+                                note["slider_follow_outside_reason"] = (
+                                    "cursor"
+                                    if cursor_outside
+                                    else "release"
+                                )
+                                outside_elapsed = 0
+                            else:
+                                outside_elapsed = (
+                                    self.current_time - outside_since
+                                )
+                                if cursor_outside:
+                                    note[
+                                        "slider_follow_outside_reason"
+                                    ] = "cursor"
+
+                            if (
+                                outside_elapsed
+                                >= self.slider_follow_return_grace_ms
+                            ):
+                                early_release = (
+                                    note.get(
+                                        "slider_follow_outside_reason"
                                     )
-                                    note["slider_follow_outside_reason"] = (
-                                        "cursor"
-                                        if cursor_outside
-                                        else "release"
-                                    )
-                                elif self.current_time - outside_since > 250:
-                                    if cursor_outside:
-                                        note[
-                                            "slider_follow_outside_reason"
-                                        ] = "cursor"
-                                    early_release = (
-                                        note.get(
-                                            "slider_follow_outside_reason"
-                                        )
-                                        == "release"
-                                    )
-                                    self._register_slider_follow_miss(
-                                        note,
-                                        ball_pos,
-                                        early_release=early_release
-                                    )
+                                    == "release"
+                                )
+                                self._register_slider_follow_miss(
+                                    note,
+                                    ball_pos,
+                                    early_release=early_release
+                                )
+                            elif remaining <= end_tolerance_ms:
+                                note["slider_follow_released_near_end"] = True
                         else:
                             note["slider_follow_outside_since"] = None
                             note["slider_follow_outside_reason"] = None
@@ -2260,7 +2269,7 @@ class GameplayScene(BaseScene):
                     if outside_since is not None:
                         outside_elapsed = self.current_time - outside_since
                         follow_alpha *= 1.0 - self._clamp01(
-                            outside_elapsed / 250
+                            outside_elapsed / self.slider_follow_return_grace_ms
                         )
 
                     if show_slider_follow:
