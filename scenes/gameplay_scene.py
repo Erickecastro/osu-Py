@@ -278,6 +278,10 @@ class GameplayScene(BaseScene):
         self.effects_renderer = GameplayEffectsRenderer(self)
         self.hud_renderer = GameplayHUDRenderer(self.font)
         self.skin_images = self._load_skin_images()
+        self.followpoint_segment_surface = (
+            self._build_followpoint_segment_surface()
+        )
+        self._prepare_followpoint_connections()
         self.hit_sound = self._load_hit_sound()
         self.fail_sound = self._load_fail_sound()
         self.sliderball_diameter = self._calculate_sliderball_diameter()
@@ -1246,18 +1250,198 @@ class GameplayScene(BaseScene):
     def _note_follow_anchor(self, note):
         if note["type"] == "slider":
             points = note.get("scaled_slider_points")
+            if points is None and hasattr(self, "slider_renderer"):
+                points = self.slider_renderer.build_points(note)
+                note["scaled_slider_points"] = points
             if points:
+                if int(note.get("repeat_count", 1)) % 2 == 0:
+                    return points[0]
                 return points[-1]
         return self._note_screen_pos(note)
+
+    def _prepare_followpoint_connections(self):
+        for note in self.notes:
+            note.pop("followpoint_connection", None)
+            note.pop("followpoint_state", None)
+
+        if len(self.notes) < 2:
+            return
+
+        for index in range(len(self.notes) - 1):
+            connection = self._build_followpoint_connection(
+                self.notes[index],
+                self.notes[index + 1],
+                index
+            )
+            if connection is not None:
+                self.notes[index]["followpoint_connection"] = connection
+
+    def _build_followpoint_connection(self, note, next_note, index):
+        if note["type"] == "spinner" or next_note["type"] == "spinner":
+            return None
+
+        if next_note.get("new_combo") or next_note.get("combo_index", 0) <= 1:
+            return None
+
+        gap = next_note["time"] - note["time"]
+        if gap < 80 or gap > 1800:
+            return None
+
+        start_anchor = self._note_follow_anchor(note)
+        end_anchor = self._note_screen_pos(next_note)
+        dx = end_anchor[0] - start_anchor[0]
+        dy = end_anchor[1] - start_anchor[1]
+        center_distance = (dx * dx + dy * dy) ** 0.5
+        if center_distance <= 0:
+            return None
+
+        beat_length = max(
+            120.0,
+            float(
+                effective_beat_length_at(
+                    self.timing_points,
+                    next_note["time"]
+                )
+            )
+        )
+
+        # Streams e objetos muito próximos normalmente não recebem followpoints
+        # no osu! stable; eles poluem a leitura e custam draw calls extras.
+        close_stream_gap = max(
+            95.0,
+            min(270.0, beat_length * 0.58)
+        )
+        close_stream_distance = self.scaled_radius * 4.05
+        if gap <= close_stream_gap and center_distance < close_stream_distance:
+            return None
+
+        if center_distance < self.scaled_radius * 2.55:
+            return None
+
+        ux = dx / center_distance
+        uy = dy / center_distance
+        start = (
+            start_anchor[0] + ux * self.scaled_radius * 0.92,
+            start_anchor[1] + uy * self.scaled_radius * 0.92
+        )
+        end = (
+            end_anchor[0] - ux * self.scaled_radius * 0.92,
+            end_anchor[1] - uy * self.scaled_radius * 0.92
+        )
+        edge_dx = end[0] - start[0]
+        edge_dy = end[1] - start[1]
+        distance = (edge_dx * edge_dx + edge_dy * edge_dy) ** 0.5
+        if distance < self.scaled_radius * 0.92:
+            return None
+
+        note_start = note.get(
+            "start_time",
+            note["time"] - self.approach_time
+        )
+        note_approach_len = max(1.0, note["time"] - note_start)
+        next_start = next_note.get(
+            "start_time",
+            next_note["time"] - self.approach_time
+        )
+        next_approach_len = max(1.0, next_note["time"] - next_start)
+        lead_time = min(
+            gap * 0.98,
+            max(
+                240.0,
+                min(
+                    self.approach_time * 0.68,
+                    beat_length * 1.05
+                )
+            )
+        )
+        both_visible_time = max(
+            note_start + (note_approach_len * 0.10),
+            next_start + (next_approach_len * 0.015)
+        )
+        earliest_pre_hit_start = note["time"] - max(
+            210.0,
+            min(430.0, gap * 0.92, beat_length * 0.95)
+        )
+        latest_pre_hit_start = note["time"] - max(
+            90.0,
+            min(230.0, gap * 0.58)
+        )
+        pre_hit_start = max(
+            both_visible_time,
+            earliest_pre_hit_start,
+            note_start,
+            next_note["time"] - lead_time
+        )
+        if pre_hit_start <= latest_pre_hit_start:
+            start_time = pre_hit_start
+        else:
+            start_time = max(
+                both_visible_time,
+                note_start
+            )
+
+        appear_duration = max(
+            82.0,
+            min(
+                280.0,
+                gap * 0.50,
+                beat_length * 0.48,
+                max(82.0, (next_note["time"] - start_time) * 0.36)
+            )
+        )
+        fade_in_duration = max(
+            35.0,
+            min(95.0, appear_duration * 0.34, beat_length * 0.16)
+        )
+        fade_out_duration = max(
+            38.0,
+            min(92.0, gap * 0.12, beat_length * 0.12)
+        )
+
+        followpoint_radius = self.followpoint_visual_radius
+        segment_width = max(20, int(followpoint_radius * 0.82))
+        spacing = max(9, int(segment_width * 0.50))
+
+        return {
+            "target": next_note.get("render_index", index + 1),
+            "start_time": start_time,
+            "natural_fade_start": next_note["time"] + 18.0,
+            "fade_out_duration": fade_out_duration,
+            "appear_duration": appear_duration,
+            "fade_in_duration": fade_in_duration,
+            "sequence_smoothing": max(1.0, min(2.35, gap / 180.0)),
+            "start": start,
+            "dx": edge_dx,
+            "dy": edge_dy,
+            "distance": distance,
+            "angle": -math.degrees(math.atan2(uy, ux)),
+            "count": max(1, int(distance / spacing))
+        }
 
     def _note_judged_time(self, note):
         if note["type"] == "slider":
             return note.get("head_hit_time") or note.get("hit_time")
         return note.get("hit_time")
 
-    def _draw_followpoints(self, target):
+    def _build_followpoint_segment_surface(self):
         frames = self.skin_images.get("followpoints", [])
-        if not frames or len(self.notes) < 2:
+        if not frames:
+            return None
+
+        frame = self._cropped_alpha_image(frames[-1])
+        followpoint_radius = self.followpoint_visual_radius
+        segment_width = max(20, int(followpoint_radius * 0.82))
+        return self._scaled_image(
+            frame,
+            (
+                int(segment_width * 1.17),
+                max(7, int(followpoint_radius * 0.155))
+            )
+        )
+
+    def _draw_followpoints(self, target):
+        scaled = self.followpoint_segment_surface
+        if scaled is None or len(self.notes) < 2:
             return
 
         start_index = max(
@@ -1277,81 +1461,19 @@ class GameplayScene(BaseScene):
 
         for index in range(start_index, end_index):
             note = self.notes[index]
+            connection = note.get("followpoint_connection")
+            if connection is None:
+                continue
+
             next_note = self.notes[index + 1]
-            if note["type"] == "spinner" or next_note["type"] == "spinner":
-                continue
-            if next_note.get("new_combo"):
-                continue
-
-            gap = next_note["time"] - note["time"]
-            if gap < 80 or gap > 1800:
-                continue
-
-            note_start = note.get(
-                "start_time",
-                note["time"] - self.approach_time
-            )
-            note_approach_len = max(1.0, note["time"] - note_start)
-            next_start = next_note.get(
-                "start_time",
-                next_note["time"] - self.approach_time
-            )
-            next_approach_len = max(1.0, next_note["time"] - next_start)
-            beat_length = max(
-                120.0,
-                float(
-                    effective_beat_length_at(
-                        self.timing_points,
-                        next_note["time"]
-                    )
-                )
-            )
-            lead_time = min(
-                gap * 0.98,
-                max(
-                    240.0,
-                    min(
-                        self.approach_time * 0.68,
-                        beat_length * 1.05
-                    )
-                )
-            )
-            both_visible_time = max(
-                note_start + (note_approach_len * 0.10),
-                next_start + (next_approach_len * 0.015)
-            )
-            earliest_pre_hit_start = note["time"] - max(
-                210.0,
-                min(430.0, gap * 0.92, beat_length * 0.95)
-            )
-            latest_pre_hit_start = note["time"] - max(
-                90.0,
-                min(230.0, gap * 0.58)
-            )
-            pre_hit_start = max(
-                both_visible_time,
-                earliest_pre_hit_start,
-                note_start
-            )
-            if pre_hit_start <= latest_pre_hit_start:
-                start_time = pre_hit_start
-            else:
-                start_time = max(
-                    both_visible_time,
-                    note_start
-                )
             judged_time = self._note_judged_time(next_note)
-            fade_out_duration = max(
-                38.0,
-                min(92.0, gap * 0.12, beat_length * 0.12)
-            )
             state = note.setdefault("followpoint_state", {})
-            state_index = next_note.get("render_index", index + 1)
+            state_index = connection["target"]
             if state.get("target") != state_index:
                 state.clear()
                 state["target"] = state_index
 
-            natural_fade_start = next_note["time"] + 18.0
+            natural_fade_start = connection["natural_fade_start"]
             requested_fade_start = (
                 judged_time
                 if judged_time is not None
@@ -1367,58 +1489,22 @@ class GameplayScene(BaseScene):
             if state.get("hidden"):
                 continue
 
+            fade_out_duration = connection["fade_out_duration"]
             end_time = (
                 fade_start + fade_out_duration
                 if fade_start is not None
                 else natural_fade_start + fade_out_duration
             )
+            start_time = connection["start_time"]
             if self.current_time < start_time or self.current_time > end_time:
                 if self.current_time > end_time:
                     state["hidden"] = True
                 continue
 
-            start = self._note_follow_anchor(note)
-            end = self._note_screen_pos(next_note)
-            dx = end[0] - start[0]
-            dy = end[1] - start[1]
-            distance = (dx * dx + dy * dy) ** 0.5
-            if distance < self.scaled_radius * 1.15:
-                continue
-
-            ux = dx / distance
-            uy = dy / distance
-            start = (
-                start[0] + ux * self.scaled_radius * 0.92,
-                start[1] + uy * self.scaled_radius * 0.92
-            )
-            end = (
-                end[0] - ux * self.scaled_radius * 0.92,
-                end[1] - uy * self.scaled_radius * 0.92
-            )
-            dx = end[0] - start[0]
-            dy = end[1] - start[1]
-            distance = (dx * dx + dy * dy) ** 0.5
-            if distance <= 0:
-                continue
-
-            angle = -math.degrees(
-                math.atan2(uy, ux)
-            )
             elapsed = self.current_time - start_time
-            appear_duration = max(
-                82.0,
-                min(
-                    280.0,
-                    gap * 0.50,
-                    beat_length * 0.48,
-                    max(82.0, (next_note["time"] - start_time) * 0.36)
-                )
-            )
+            appear_duration = connection["appear_duration"]
             progress = self._clamp01(elapsed / appear_duration)
-            fade_in_duration = max(
-                35.0,
-                min(95.0, appear_duration * 0.34, beat_length * 0.16)
-            )
+            fade_in_duration = connection["fade_in_duration"]
             fade_in = self._clamp01(elapsed / fade_in_duration)
             fade_out = 1.0
             if fade_start is not None:
@@ -1434,31 +1520,20 @@ class GameplayScene(BaseScene):
             if alpha <= 0:
                 continue
 
-            followpoint_radius = self.followpoint_visual_radius
-            segment_width = max(20, int(followpoint_radius * 0.82))
-            spacing = max(9, int(segment_width * 0.50))
-            count = max(1, int(distance / spacing))
-            frame = self._cropped_alpha_image(frames[-1])
-            size = (
-                int(segment_width * 1.38),
-                max(7, int(followpoint_radius * 0.155))
-            )
-            scaled = self._scaled_image(frame, size)
-            if scaled is None:
-                continue
             rotated = self._rotated_image(
                 scaled,
-                angle
+                connection["angle"]
             )
             if rotated is None:
                 continue
 
+            start = connection["start"]
+            dx = connection["dx"]
+            dy = connection["dy"]
+            count = connection["count"]
+            sequence_smoothing = connection["sequence_smoothing"]
             for point_index in range(1, count + 1):
                 t = point_index / (count + 1)
-                sequence_smoothing = max(
-                    1.0,
-                    min(2.35, gap / 180.0)
-                )
                 appear = self._clamp01(
                     (progress * (count + 7) - point_index + 2)
                     / sequence_smoothing
