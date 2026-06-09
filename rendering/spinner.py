@@ -2,7 +2,7 @@ import math
 
 import pygame
 
-from core.assets import asset_path
+from core.assets import load_image
 
 
 class SpinnerRenderer:
@@ -15,11 +15,7 @@ class SpinnerRenderer:
         self.cache = {}
 
     def _load_image(self, filename):
-        path = asset_path(filename, "spinner")
-        try:
-            return pygame.image.load(str(path)).convert_alpha()
-        except pygame.error:
-            return None
+        return load_image(filename, "spinner")
 
     def draw(self, target, note):
         start = note["spinner_start_time"]
