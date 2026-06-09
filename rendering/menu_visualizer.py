@@ -416,8 +416,14 @@ class CircularMenuVisualizer:
         if self._layer_radius > 0:
             if target_layer_radius > self._layer_radius:
                 self._layer_shrink_elapsed = 0.0
-            elif target_layer_radius < self._layer_radius and self._layer_shrink_elapsed < 0.45:
-                layer_radius = self._layer_radius
+                layer_radius = int(math.ceil((target_layer_radius * 1.12) / 32.0) * 32)
+            elif target_layer_radius < self._layer_radius:
+                if self._layer_shrink_elapsed < 1.20:
+                    layer_radius = self._layer_radius
+                else:
+                    layer_radius = int(math.ceil((target_layer_radius * 1.12) / 32.0) * 32)
+        else:
+            layer_radius = int(math.ceil((target_layer_radius * 1.12) / 32.0) * 32)
         output_size = (layer_radius * 2, layer_radius * 2)
         if (
             self._layer is not None

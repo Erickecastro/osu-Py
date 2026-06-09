@@ -3,8 +3,8 @@ from pathlib import Path
 
 import pygame
 
-from core.audio import find_audio_file
-from core.assets import asset_path
+from core.audio import find_audio_file, mark_music_loaded
+from core.assets import load_image
 from core.beatmap_info import BeatmapParser, LocalScoreManager
 from core.fonts import rounded_font
 from scenes.base_scene import BaseScene
@@ -227,6 +227,7 @@ class SongSelectScene(BaseScene):
         self.search_active = False
         self.sort_mode_index = 0
         self.background_cache = {}
+        self.background_load_delay = 0.12
         self.current_background_key = None
         self.current_background = None
         self.previous_background = None
@@ -273,11 +274,7 @@ class SongSelectScene(BaseScene):
         self.card_tiny_font = rounded_font(max(12, h // 72), bold=False)
 
     def _load_card_base_image(self):
-        path = asset_path("menu-button-background.png", "songselect_cards")
-        try:
-            return pygame.image.load(str(path)).convert_alpha()
-        except pygame.error:
-            return None
+        return load_image("menu-button-background.png", "songselect_cards")
 
     def card_background_surface(self, size):
         if self.card_base_image is None:
@@ -395,7 +392,13 @@ class SongSelectScene(BaseScene):
         self.selected_index = max(0, min(self.selected_index, len(self.items) - 1))
         self.browse_index = max(0, min(self.browse_index, len(self.items) - 1))
         selected = self.items[self.selected_index]["info"]
-        self._ensure_background(selected)
+        if self.background_load_delay > 0.0:
+            self.background_load_delay = max(
+                0.0,
+                self.background_load_delay - dt
+            )
+        else:
+            self._ensure_background(selected)
         self.background_t = min(1.0, self.background_t + dt * 3.0)
 
         visible = self._visible_infos()
@@ -466,6 +469,7 @@ class SongSelectScene(BaseScene):
             return
         try:
             pygame.mixer.music.load(music_path)
+            mark_music_loaded(music_path)
             pygame.mixer.music.set_volume(self.preview_volume)
             pygame.mixer.music.play()
             self.current_preview_path = normalized
@@ -498,6 +502,7 @@ class SongSelectScene(BaseScene):
 
         try:
             pygame.mixer.music.load(self.current_preview_path)
+            mark_music_loaded(self.current_preview_path)
             pygame.mixer.music.set_volume(self.preview_volume)
             pygame.mixer.music.play()
         except pygame.error:
@@ -674,6 +679,9 @@ class SongSelectScene(BaseScene):
             pygame.draw.circle(screen, (60, 55, 105), center, int(min(w, h) * (0.12 + i * 0.012)), 2)
 
     def _ensure_background(self, info):
+        if self.background_load_delay > 0.0:
+            return
+
         key = info.background_path
         if key == self.current_background_key:
             return
@@ -716,7 +724,7 @@ class SongSelectScene(BaseScene):
         source_w, source_h = image.get_size()
         scale = max(target_w / source_w, target_h / source_h)
         scaled_size = (max(1, int(source_w * scale)), max(1, int(source_h * scale)))
-        scaled = pygame.transform.smoothscale(image, scaled_size)
+        scaled = pygame.transform.scale(image, scaled_size)
         result = pygame.Surface(target_size).convert()
         result.blit(scaled, ((target_w - scaled_size[0]) // 2, (target_h - scaled_size[1]) // 2))
         return result

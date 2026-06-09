@@ -6,8 +6,8 @@ from bisect import bisect_left, bisect_right
 import pygame
 
 from scenes.base_scene import BaseScene
-from core.audio import find_audio_file, start_music
-from core.assets import asset_path
+from core.audio import find_audio_file, preload_music, start_music
+from core.assets import asset_path, load_image
 from core.fonts import rounded_font
 from core.gameplay import calculate_accuracy, hit_result_for_delta
 from core.health import apply_health_drain, apply_health_result
@@ -40,6 +40,7 @@ from rendering.spinner import SpinnerRenderer
 class GameplayScene(BaseScene):
     draws_own_cursor = True
     uses_ui = False
+    _sound_cache = {}
 
     MAX_SLIDER_SURFACE_SIZE = 4096
     MAX_SLIDER_POINTS = 4000
@@ -90,6 +91,8 @@ class GameplayScene(BaseScene):
         self.tinted_surface_cache = {}
         self.overlay_surface = None
         self.overlay_surface_size = None
+        self.background_path = None
+        self.background_load_attempted = False
         self.background_source = None
         self.background_surface = None
         self.background_surface_size = None
@@ -223,11 +226,9 @@ class GameplayScene(BaseScene):
             self.beatmap["path"],
             self.beatmap.get("audio_filename")
         )
+        self.music_preloaded = False
         self.audio_lead_in = int(self.beatmap.get("audio_lead_in", 0) or 0)
         self._load_background_surface()
-        self._scaled_background(
-            (self.game.WIDTH, self.game.HEIGHT)
-        )
 
         self.slider_multiplier = (
             self.beatmap["difficulty"].get(
@@ -281,7 +282,8 @@ class GameplayScene(BaseScene):
         self.followpoint_segment_surface = (
             self._build_followpoint_segment_surface()
         )
-        self._prepare_followpoint_connections()
+        self._reset_followpoint_connections()
+        self._warm_followpoint_connections(max_ms=1, max_items=32)
         self.hit_sound = self._load_hit_sound()
         self.fail_sound = self._load_fail_sound()
         self.sliderball_diameter = self._calculate_sliderball_diameter()
@@ -442,9 +444,15 @@ class GameplayScene(BaseScene):
         for path in candidates:
             if not path.exists():
                 continue
+            cache_key = str(path)
+            cached = self._sound_cache.get(cache_key)
+            if cached is not None:
+                cached.set_volume(0.29)
+                return cached
             try:
                 sound = pygame.mixer.Sound(str(path))
                 sound.set_volume(0.29)
+                self._sound_cache[cache_key] = sound
                 return sound
             except pygame.error:
                 continue
@@ -462,9 +470,15 @@ class GameplayScene(BaseScene):
         path = asset_path("failsound.wav", "failsound")
         if not path.exists():
             return None
+        cache_key = str(path)
+        cached = self._sound_cache.get(cache_key)
+        if cached is not None:
+            cached.set_volume(0.72)
+            return cached
         try:
             sound = pygame.mixer.Sound(str(path))
             sound.set_volume(0.72)
+            self._sound_cache[cache_key] = sound
             return sound
         except pygame.error:
             return None
@@ -933,14 +947,7 @@ class GameplayScene(BaseScene):
     def _load_image(self, *parts):
         if not parts:
             return None
-        path = asset_path(parts[-1], *parts[:-1])
-        if not path.exists():
-            return None
-
-        try:
-            return pygame.image.load(str(path)).convert_alpha()
-        except pygame.error:
-            return None
+        return load_image(parts[-1], *parts[:-1])
 
     def _load_skin_images(self):
         images = {
@@ -1259,15 +1266,33 @@ class GameplayScene(BaseScene):
                 return points[-1]
         return self._note_screen_pos(note)
 
-    def _prepare_followpoint_connections(self):
+    def _reset_followpoint_connections(self):
         for note in self.notes:
             note.pop("followpoint_connection", None)
             note.pop("followpoint_state", None)
 
-        if len(self.notes) < 2:
+        self.followpoint_prepare_index = 0
+        self.followpoint_prepare_complete = len(self.notes) < 2
+
+    def _prepare_followpoint_connections(self):
+        self._reset_followpoint_connections()
+        while not self.followpoint_prepare_complete:
+            self._warm_followpoint_connections(max_ms=None, max_items=256)
+
+    def _warm_followpoint_connections(self, max_ms=1, max_items=24):
+        if self.followpoint_prepare_complete:
             return
 
-        for index in range(len(self.notes) - 1):
+        if len(self.notes) < 2:
+            self.followpoint_prepare_complete = True
+            return
+
+        start = pygame.time.get_ticks()
+        count = 0
+        last_index = len(self.notes) - 1
+        while self.followpoint_prepare_index < last_index:
+            index = self.followpoint_prepare_index
+            self.followpoint_prepare_index += 1
             connection = self._build_followpoint_connection(
                 self.notes[index],
                 self.notes[index + 1],
@@ -1275,6 +1300,19 @@ class GameplayScene(BaseScene):
             )
             if connection is not None:
                 self.notes[index]["followpoint_connection"] = connection
+            count += 1
+
+            if max_items is not None and count >= max_items:
+                break
+            if (
+                max_ms is not None
+                and pygame.time.get_ticks() - start >= max_ms
+            ):
+                break
+
+        self.followpoint_prepare_complete = (
+            self.followpoint_prepare_index >= last_index
+        )
 
     def _build_followpoint_connection(self, note, next_note, index):
         if note["type"] == "spinner" or next_note["type"] == "spinner":
@@ -1636,8 +1674,23 @@ class GameplayScene(BaseScene):
         if not os.path.exists(path):
             return
 
+        self.background_path = path
+        self.background_load_attempted = False
+
+    def _warm_background_surface(self):
+        if (
+            self.background_source is not None
+            or self.background_load_attempted
+            or not self.background_path
+        ):
+            return
+
+        self.background_load_attempted = True
         try:
-            self.background_source = pygame.image.load(path).convert()
+            self.background_source = pygame.image.load(
+                self.background_path
+            ).convert()
+            self._scaled_background((self.game.WIDTH, self.game.HEIGHT))
         except pygame.error:
             self.background_source = None
 
@@ -1662,7 +1715,7 @@ class GameplayScene(BaseScene):
             max(1, int(image_w * scale)),
             max(1, int(image_h * scale))
         )
-        scaled = pygame.transform.smoothscale(
+        scaled = pygame.transform.scale(
             source,
             target_size
         ).convert()
@@ -1816,10 +1869,15 @@ class GameplayScene(BaseScene):
         if not self.music_started:
             self._warm_gameplay_surface_cache()
             self._warm_slider_cache()
+            self._warm_followpoint_connections()
             ready_elapsed = (
                 pygame.time.get_ticks()
                 - self.ready_start_time
             )
+            if ready_elapsed >= 100:
+                self._warm_background_surface()
+            if ready_elapsed >= 250:
+                self._warm_music_load()
             total_intro_delay = (
                 self.pre_start_delay_ms
                 + self.post_ready_delay_ms
@@ -1838,6 +1896,7 @@ class GameplayScene(BaseScene):
                 if lead_elapsed < self.pre_music_lead_in_ms:
                     self._warm_gameplay_surface_cache()
                     self._warm_slider_cache()
+                    self._warm_followpoint_connections()
                     self.current_time = lead_elapsed - self.pre_music_lead_in_ms
                     if profiler_enabled:
                         profiler.start("hitobjects")
@@ -1864,6 +1923,10 @@ class GameplayScene(BaseScene):
 
             self.music_started = True
             self._publish_current_track_state()
+
+        self._warm_slider_cache(max_ms=1, max_items=1)
+        self._warm_followpoint_connections(max_ms=1, max_items=16)
+        self._warm_background_surface()
 
         if self.start_time is not None:
 
@@ -2637,6 +2700,11 @@ class GameplayScene(BaseScene):
             self.skip_button_surface_size = rect.size
 
         screen.blit(self.skip_button_surface, rect)
+
+    def _warm_music_load(self):
+        if self.music_preloaded or not self.music_path:
+            return
+        self.music_preloaded = preload_music(self.music_path)
 
     def _draw_center_overlay(self, screen, title, subtitle, accent):
         size = screen.get_size()

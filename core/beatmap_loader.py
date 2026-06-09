@@ -95,7 +95,7 @@ class BeatmapLoader:
         artist = metadata.get("Artist") or metadata.get("ArtistUnicode") or ""
 
         title = self.clean_display_text(title)
-        artist = self.clean_display_text(artist)
+        artist = self.clean_display_text(artist) 
 
         if title and title != "Unknown" and artist and artist != "Unknown":
             return f"{artist} - {title}"

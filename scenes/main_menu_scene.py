@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pygame
 
-from core.audio import is_sound_effect_file
-from core.assets import ACTIVE_SKIN_DIR, asset_path
+from core.audio import is_sound_effect_file, mark_music_loaded
+from core.assets import ACTIVE_SKIN_DIR, asset_path, load_image
 from core.fonts import rounded_font
 from rendering.menu_visualizer import CircularMenuVisualizer
 from scenes.base_scene import BaseScene
@@ -343,7 +343,7 @@ class MenuSnow:
         )
         fade_before_ground = self.random.random() < 0.58
         ground_y = height - self.random.uniform(5, 22)
-        image = pygame.transform.smoothscale(
+        image = pygame.transform.scale(
             self.image,
             (max(4, int(size)), max(4, int(size)))
         ).convert_alpha()
@@ -376,12 +376,9 @@ class MenuSnow:
 
     def _load_image(self):
         for name in self.IMAGE_NAMES:
-            path = asset_path(name, "menu")
-            if path.exists():
-                try:
-                    return pygame.image.load(str(path)).convert_alpha()
-                except pygame.error:
-                    continue
+            image = load_image(name, "menu")
+            if image is not None:
+                return image
 
         return None
 
@@ -586,7 +583,7 @@ class PulseCircle:
         surface.blit(caption_surface, caption_rect)
 
     def _scaled_logo(self, radius):
-        radius_key = max(1, int(round(radius / 4.0) * 4))
+        radius_key = max(1, int(round(radius / 8.0) * 8))
         key = radius_key
         cached = self._logo_cache.get(key)
         if cached is not None:
@@ -595,9 +592,9 @@ class PulseCircle:
         source = self._logo_surface or self._load_logo_surface()
         self._logo_surface = source
         diameter = max(1, int(radius_key * 2.12))
-        scaled = pygame.transform.smoothscale(source, (diameter, diameter)).convert_alpha()
+        scaled = pygame.transform.scale(source, (diameter, diameter)).convert_alpha()
 
-        if len(self._logo_cache) > 96:
+        if len(self._logo_cache) > 48:
             self._logo_cache.clear()
         self._logo_cache[key] = scaled
         return scaled
@@ -700,7 +697,8 @@ class MainMenuScene(BaseScene):
             MenuOption("Exit", self._exit_game)
         ]
 
-        self.background = self._load_background()
+        self.background = None
+        self.background_load_attempted = False
         self.scaled_background = None
         self.dimmed_background = None
         self.background_size = None
@@ -773,7 +771,7 @@ class MainMenuScene(BaseScene):
     def on_resume(self):
         self._prepare_mouse()
         self._sync_from_shared_music(defer_analysis=True)
-        self.visualizer_analysis_delay = max(self.visualizer_analysis_delay, 0.45)
+        self.visualizer_analysis_delay = max(self.visualizer_analysis_delay, 0.85)
 
     def on_resize(self):
         self._layout()
@@ -846,6 +844,8 @@ class MainMenuScene(BaseScene):
         dt = min(dt, 1.0 / 20.0)
         self.time_seconds += dt
         mouse_pos = self.game.mouse_pos
+        if self.time_seconds >= 0.08:
+            self._warm_background()
 
         self._sync_from_shared_music()
         if self.visualizer_analysis_delay > 0.0:
@@ -1061,7 +1061,7 @@ class MainMenuScene(BaseScene):
             )
             self.footer_cache.clear()
             self.analyzed_music_path = None
-            self.visualizer_analysis_delay = 0.16
+            self.visualizer_analysis_delay = 0.65
             self.visualizer.request_audio_analysis(None, self.current_timing_points)
         else:
             self._set_track_metadata(track_index)
@@ -1072,7 +1072,7 @@ class MainMenuScene(BaseScene):
             self.music_paused_at_ms = 0
         self.last_shared_music_path = shared_path
         if defer_analysis:
-            self.visualizer_analysis_delay = max(self.visualizer_analysis_delay, 0.45)
+            self.visualizer_analysis_delay = max(self.visualizer_analysis_delay, 0.85)
         else:
             self._ensure_visualizer_analysis()
         return True
@@ -1098,6 +1098,17 @@ class MainMenuScene(BaseScene):
 
         return None
 
+    def _warm_background(self):
+        if self.background is not None or self.background_load_attempted:
+            return
+
+        self.background_load_attempted = True
+        self.background = self._load_background()
+        self.scaled_background = None
+        self.dimmed_background = None
+        self.background_size = None
+        self.dimmed_background_key = None
+
     def _start_menu_music(self):
         self._sync_from_shared_music(defer_analysis=True)
         if self.music_started and (pygame.mixer.music.get_busy() or self.music_paused):
@@ -1116,6 +1127,7 @@ class MainMenuScene(BaseScene):
 
         try:
             pygame.mixer.music.load(str(self.music_path))
+            mark_music_loaded(self.music_path)
             pygame.mixer.music.set_volume(0.42)
             pygame.mixer.music.play()
             self.music_started = True
@@ -1154,7 +1166,7 @@ class MainMenuScene(BaseScene):
         self.current_timing_points = track.get("timing_points", [])
         self.beat_phase = 0.0
         self.analyzed_music_path = None
-        self.visualizer_analysis_delay = 0.16
+        self.visualizer_analysis_delay = 0.85
         self.visualizer.request_audio_analysis(None, self.current_timing_points)
 
     def _advance_finished_menu_track(self):
@@ -1293,7 +1305,7 @@ class MainMenuScene(BaseScene):
             max(1, int(image_w * scale)),
             max(1, int(image_h * scale))
         )
-        scaled = pygame.transform.smoothscale(image, scaled_size)
+        scaled = pygame.transform.scale(image, scaled_size)
         result = pygame.Surface(target_size)
         result.blit(
             scaled,
