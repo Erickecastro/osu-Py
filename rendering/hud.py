@@ -1,6 +1,6 @@
 import pygame
 
-from core.assets import asset_path
+from core.assets import load_image
 
 
 class GameplayHUDRenderer:
@@ -14,12 +14,7 @@ class GameplayHUDRenderer:
         self.hit_error_marker_cache = {}
 
     def _load_health_bar_image(self):
-        path = asset_path("scorebar-colour.png", "HP")
-        try:
-            image = pygame.image.load(str(path)).convert_alpha()
-        except (pygame.error, FileNotFoundError):
-            return None
-        return image
+        return load_image("scorebar-colour.png", "HP")
 
     def text_surface(self, text, color=(255, 255, 255)):
         key = (text, tuple(color))

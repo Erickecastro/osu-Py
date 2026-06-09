@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+import pygame
+
 
 ASSETS_ROOT = Path("assets")
 ACTIVE_SKIN_DIR = Path(
@@ -9,6 +11,8 @@ ACTIVE_SKIN_DIR = Path(
         str(ASSETS_ROOT / "skins" / "default")
     )
 )
+
+_IMAGE_CACHE = {}
 
 
 def asset_path(filename, *legacy_parts):
@@ -26,3 +30,30 @@ def asset_path(filename, *legacy_parts):
         return root_path
 
     return skin_path
+
+
+def _resolved_key(path):
+    try:
+        return str(path.resolve())
+    except (OSError, RuntimeError):
+        return str(path)
+
+
+def load_image(filename, *legacy_parts, alpha=True):
+    path = asset_path(filename, *legacy_parts)
+    if not path.exists():
+        return None
+
+    key = (_resolved_key(path), bool(alpha))
+    cached = _IMAGE_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        image = pygame.image.load(str(path))
+        image = image.convert_alpha() if alpha else image.convert()
+    except pygame.error:
+        return None
+
+    _IMAGE_CACHE[key] = image
+    return image

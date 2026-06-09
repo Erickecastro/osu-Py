@@ -3,6 +3,8 @@ import os
 import pygame
 
 
+_LOADED_MUSIC_PATH = None
+
 SOUND_EFFECT_NAME_PARTS = (
     "hitnormal",
     "hitclap",
@@ -56,15 +58,54 @@ def find_audio_file(folder_path, preferred_filename=None):
     return None
 
 
+def _normalise_music_path(music_path):
+    if not music_path:
+        return None
+    return os.path.abspath(str(music_path))
+
+
+def mark_music_loaded(music_path):
+    global _LOADED_MUSIC_PATH
+    _LOADED_MUSIC_PATH = _normalise_music_path(music_path)
+
+
+def clear_loaded_music():
+    global _LOADED_MUSIC_PATH
+    _LOADED_MUSIC_PATH = None
+
+
+def preload_music(music_path):
+    global _LOADED_MUSIC_PATH
+    normalized = _normalise_music_path(music_path)
+    if not normalized:
+        return False
+
+    if _LOADED_MUSIC_PATH == normalized:
+        return True
+
+    try:
+        pygame.mixer.music.stop()
+        pygame.mixer.music.load(normalized)
+        _LOADED_MUSIC_PATH = normalized
+        return True
+    except pygame.error:
+        _LOADED_MUSIC_PATH = None
+        return False
+
+
 def start_music(music_path, start_ms=0):
+    global _LOADED_MUSIC_PATH
     if not music_path:
         return None
 
     try:
+        normalized = _normalise_music_path(music_path)
         start_seconds = max(0.0, float(start_ms or 0) / 1000.0)
         actual_start_ms = int(start_ms or 0)
         pygame.mixer.music.stop()
-        pygame.mixer.music.load(music_path)
+        if _LOADED_MUSIC_PATH != normalized:
+            pygame.mixer.music.load(normalized)
+            _LOADED_MUSIC_PATH = normalized
         try:
             pygame.mixer.music.play(start=start_seconds)
         except TypeError:
@@ -75,5 +116,6 @@ def start_music(music_path, start_ms=0):
             pygame.mixer.music.play()
         return pygame.time.get_ticks() - actual_start_ms
     except Exception as exc:
+        _LOADED_MUSIC_PATH = None
         print(exc)
         return None
