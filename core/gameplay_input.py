@@ -19,6 +19,12 @@ class GameplayInputController:
             return self._handle_mouse_up(event)
         return False
 
+    def _hit_position_now(self):
+        sampler = getattr(self.scene.game, "sample_mouse_now", None)
+        if sampler is not None:
+            return sampler()
+        return self.scene.game.mouse_pos
+
     def _handle_key_down(self, event):
         if event.key == pygame.K_ESCAPE:
             self.scene.game.scene_manager.pop_scene()
@@ -27,7 +33,7 @@ class GameplayInputController:
         if event.key in self.HIT_KEYS:
             self.scene.hit_keys_held.add(event.key)
             self.scene._try_hit_at(
-                self.scene.game.mouse_pos,
+                self._hit_position_now(),
                 input_time=self.scene.event_music_time(event)
             )
             return True
@@ -44,7 +50,7 @@ class GameplayInputController:
         if event.button in self.HIT_MOUSE_BUTTONS:
             self.scene.hit_mouse_buttons_held.add(event.button)
             self.scene._try_hit_at(
-                self.scene.game.mouse_pos,
+                self._hit_position_now(),
                 input_time=self.scene.event_music_time(event)
             )
             return True

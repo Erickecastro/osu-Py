@@ -191,6 +191,22 @@ class Game:
 
         pygame.mouse.get_rel()
 
+    def sample_mouse_now(self, pump=False):
+        if pump:
+            try:
+                pygame.event.pump()
+            except pygame.error:
+                pass
+
+        if self.raw_mouse_enabled:
+            rel = pygame.mouse.get_rel()
+            if rel != (0, 0):
+                self._apply_raw_mouse_delta(rel)
+            return self.mouse_pos
+
+        self.mouse_pos = pygame.mouse.get_pos()
+        return self.mouse_pos
+
     def disable_raw_mouse(self):
         pygame.event.set_blocked(pygame.MOUSEMOTION)
         self.mouse_motion_blocked = True
@@ -298,19 +314,14 @@ class Game:
             pygame.event.set_blocked(pygame.MOUSEMOTION)
             self.mouse_motion_blocked = True
 
-        if self.raw_mouse_enabled:
-            self._apply_raw_mouse_delta(
-                pygame.mouse.get_rel()
-            )
+        self.sample_mouse_now(pump=True)
 
         for event in pygame.event.get():
             if (
                 self.raw_mouse_enabled
                 and event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN)
             ):
-                self._apply_raw_mouse_delta(
-                    pygame.mouse.get_rel()
-                )
+                self.sample_mouse_now()
 
             if not self.raw_mouse_enabled and hasattr(event, "pos"):
                 self.mouse_pos = event.pos
@@ -361,8 +372,7 @@ class Game:
                     event
                 )
 
-        if not self.raw_mouse_enabled:
-            self.mouse_pos = pygame.mouse.get_pos()
+        self.sample_mouse_now()
 
     # -------------------------
     # UPDATE
@@ -387,12 +397,7 @@ class Game:
     # -------------------------
     def render(self):
         current_scene = self.scene_manager.current_scene
-        if self.raw_mouse_enabled:
-            self._apply_raw_mouse_delta(
-                pygame.mouse.get_rel()
-            )
-        else:
-            self.mouse_pos = pygame.mouse.get_pos()
+        self.sample_mouse_now(pump=True)
 
         profiler_enabled = self.profiler.enabled
         if profiler_enabled:

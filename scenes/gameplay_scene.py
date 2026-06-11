@@ -666,6 +666,15 @@ class GameplayScene(BaseScene):
         wobble = math.sin(progress * math.tau * 4.0)
         return (amplitude * wobble, 0.0)
 
+    def _activate_notes_until(self, time_ms):
+        self.next_note_index = activate_due_notes(
+            self.notes,
+            self.active_notes,
+            self.next_note_index,
+            time_ms,
+            self.approach_time
+        )
+
     def _try_hit_at(self, pos, input_time=None):
         if input_time is not None:
             previous_time = self.current_time
@@ -675,6 +684,7 @@ class GameplayScene(BaseScene):
             finally:
                 self.current_time = previous_time
 
+        self._activate_notes_until(self.current_time)
         locked_note = self._notelock_target()
 
         def can_attempt_hit(note):
@@ -1855,6 +1865,10 @@ class GameplayScene(BaseScene):
         self.input_controller.handle_event(event)
 
     def update(self, dt):
+        sampler = getattr(self.game, "sample_mouse_now", None)
+        if sampler is not None:
+            sampler()
+
         self.cursor_renderer.update(
             dt,
             self.game.mouse_pos
