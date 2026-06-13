@@ -25,6 +25,7 @@ class CircularMenuVisualizer:
         self.level_hold = [0.0] * bar_count
         self.band_memory = [0.0] * bar_count
         self.band_transients = [0.0] * bar_count
+        self.dynamic_caps = [1.0] * bar_count
         self.angles = [(index / bar_count) * math.tau for index in range(bar_count)]
         self.units = [(math.cos(angle), math.sin(angle)) for angle in self.angles]
         self.variation = []
@@ -158,6 +159,7 @@ class CircularMenuVisualizer:
         self.level_hold = [0.0] * self.bar_count
         self.band_memory = [0.0] * self.bar_count
         self.band_transients = [0.0] * self.bar_count
+        self.dynamic_caps = [1.0] * self.bar_count
         self.region_targets = [0.0] * self.bar_count
 
     def _analysis_worker(self, cache_key, audio_path):
@@ -398,6 +400,26 @@ class CircularMenuVisualizer:
             target *= 0.90 + ((self.length_bias[index] - 1.0) * 0.18)
             target *= 0.84 + (self.activity_bias[index] * 0.22)
             target *= 1.0 + (contrast * 0.42) + (self.band_transients[index] * 0.30)
+            peak_drive = _clamp(max(beat_pulse, fft_pulse, rms), 0.0, 1.0)
+            dynamic_rank = _clamp(
+                (float(value) * 0.44)
+                + (contrast * 0.42)
+                + (self.band_transients[index] * 0.32)
+                + (sweep * 0.10)
+                + (detail_wave * 0.08),
+                0.0,
+                1.0
+            )
+            diversity_gate = 0.56 + (dynamic_rank * 0.44)
+            target *= 1.0 - (peak_drive * (1.0 - diversity_gate) * 0.54)
+            self.dynamic_caps[index] = _clamp(
+                0.30
+                + (dynamic_rank * 0.66)
+                + (peak_drive * 0.12)
+                + (self.kiai_level * 0.06),
+                0.24,
+                1.0
+            )
             target *= self.audible_level
             raw_targets[index] = _clamp(target, 0.0, 1.0)
 
@@ -411,6 +433,7 @@ class CircularMenuVisualizer:
                 + ((left_1 + right_1) * 0.13)
                 + ((left_2 + right_2) * 0.05)
             )
+            target = min(target, self.dynamic_caps[index])
             target = _clamp(target, 0.0, 1.0)
             instant_target = target
             peak_target = max(0.0, instant_target - self.levels[index])

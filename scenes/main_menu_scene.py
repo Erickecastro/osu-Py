@@ -693,7 +693,7 @@ class MainMenuScene(BaseScene):
         self.settings_panel_cache = {}
 
         self.circle = PulseCircle(self.title)
-        self.visualizer = CircularMenuVisualizer(bar_count=175)
+        self.visualizer = CircularMenuVisualizer(bar_count=150)
         self.snow = MenuSnow(self.assets_dir)
         self.snow.load()
         self.options = [
