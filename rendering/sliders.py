@@ -666,9 +666,10 @@ class SliderRenderer:
             return None
 
         max_distance = float(max_distance)
-        distances = np.full(
+        max_distance_sq = (max_distance + 2.0) ** 2
+        distances_sq = np.full(
             (height, width),
-            max_distance + 2.0,
+            max_distance_sq,
             dtype=np.float32
         )
         for i in range(len(points) - 1):
@@ -687,7 +688,7 @@ class SliderRenderer:
             if min_x > max_x or min_y > max_y:
                 continue
 
-            ys, xs = np.mgrid[min_y:max_y + 1, min_x:max_x + 1]
+            ys, xs = np.ogrid[min_y:max_y + 1, min_x:max_x + 1]
             sample_x = xs.astype(np.float32) + 0.5
             sample_y = ys.astype(np.float32) + 0.5
             px = sample_x - float(x1)
@@ -699,17 +700,18 @@ class SliderRenderer:
             )
             nearest_x = float(x1) + (t * dx)
             nearest_y = float(y1) + (t * dy)
-            segment_distance = np.sqrt(
+            segment_distance_sq = (
                 ((sample_x - nearest_x) ** 2)
                 + ((sample_y - nearest_y) ** 2)
             )
-            current = distances[min_y:max_y + 1, min_x:max_x + 1]
+            current = distances_sq[min_y:max_y + 1, min_x:max_x + 1]
             np.minimum(
                 current,
-                segment_distance,
+                segment_distance_sq,
                 out=current
             )
-        return distances
+        np.sqrt(distances_sq, out=distances_sq)
+        return distances_sq
 
     def _alpha_from_distance(self, distances, radius, alpha):
         coverage = np.clip(

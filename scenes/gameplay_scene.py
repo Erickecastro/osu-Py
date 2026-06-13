@@ -1881,16 +1881,18 @@ class GameplayScene(BaseScene):
         profiler_enabled = bool(profiler and profiler.enabled)
 
         if not self.music_started:
-            self._warm_gameplay_surface_cache()
-            self._warm_slider_cache()
-            self._warm_followpoint_connections()
             ready_elapsed = (
                 pygame.time.get_ticks()
                 - self.ready_start_time
             )
-            if ready_elapsed >= 100:
+            self._warm_gameplay_surface_cache()
+            if ready_elapsed >= 180:
+                self._warm_followpoint_connections()
+            if ready_elapsed >= 420:
+                self._warm_slider_cache()
+            if ready_elapsed >= 650:
                 self._warm_background_surface()
-            if ready_elapsed >= 250:
+            if ready_elapsed >= 900:
                 self._warm_music_load()
             total_intro_delay = (
                 self.pre_start_delay_ms
