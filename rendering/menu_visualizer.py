@@ -58,7 +58,7 @@ class CircularMenuVisualizer:
                 self.alpha_bias.append(0.90 + (value - 0.88) * 0.84)
         self.region_targets = [0.0] * bar_count
         self.max_length_scale = 0.904
-        self.bar_width = 12.0
+        self.bar_width = 18.0
         self.minimum_level_base = 0.08
         self.minimum_alpha = 0
         self.attack_amount = 0.85
@@ -309,19 +309,22 @@ class CircularMenuVisualizer:
                 for index in range(self.bar_count)
             ]
 
-        audible_target = _clamp((rms - 0.026) / 0.15, 0.0, 1.0)
-        self.audible_level = _lerp(
-            self.audible_level,
-            audible_target,
-            1.0 - math.exp(-dt * (12.0 if audible_target > self.audible_level else 5.0))
-        )
-
         low_end = max(1, self.bar_count // 5)
         low = self._mean_band_range(bands, 0, low_end)
         mid_start = self.bar_count // 5
         mid_end = self.bar_count * 3 // 5
         mid = self._mean_band_range(bands, mid_start, mid_end)
         high = self._mean_band_range(bands, mid_end, self.bar_count)
+        band_signal = max(low, mid, high)
+        audible_signal = (rms * 0.68) + (band_signal * 0.32)
+        audible_target = _clamp((audible_signal - 0.010) / 0.120, 0.0, 1.0)
+        if audio_active and audible_signal > 0.006:
+            audible_target = max(audible_target, 0.095)
+        self.audible_level = _lerp(
+            self.audible_level,
+            audible_target,
+            1.0 - math.exp(-dt * (13.0 if audible_target > self.audible_level else 4.2))
+        )
 
         beat_audio = _clamp((low * 0.72) + (rms * 0.42), 0.0, 1.0)
         beat_pulse = _clamp(timing_beat * 0.72 * self.audible_level, 0.0, 1.0)
@@ -393,7 +396,17 @@ class CircularMenuVisualizer:
                 0.0,
                 1.0
             )
-            minimum = (self.minimum_level_base + (rms * 0.028) + (self.kiai_level * 0.010)) * self.audible_level
+            calm_visibility = (
+                0.22
+                + (self.activity_bias[index] * 0.34)
+                + (detail_wave * 0.18)
+                + (sweep * 0.16)
+            )
+            minimum = (
+                self.minimum_level_base
+                + (rms * 0.022)
+                + (self.kiai_level * 0.008)
+            ) * self.audible_level * calm_visibility
             target = max(minimum * self.length_bias[index], band)
             target *= 0.82 + (beat_pulse * 0.20) + (fft_pulse * 0.12) + (self.kiai_level * 0.14)
             target *= 1.0 + (sweep * (0.18 + beat_pulse * 0.10))
@@ -410,15 +423,15 @@ class CircularMenuVisualizer:
                 0.0,
                 1.0
             )
-            diversity_gate = 0.56 + (dynamic_rank * 0.44)
-            target *= 1.0 - (peak_drive * (1.0 - diversity_gate) * 0.54)
+            diversity_gate = 0.42 + (dynamic_rank * 0.58)
+            target *= 1.0 - (peak_drive * (1.0 - diversity_gate) * 0.70)
             self.dynamic_caps[index] = _clamp(
-                0.30
-                + (dynamic_rank * 0.66)
-                + (peak_drive * 0.12)
-                + (self.kiai_level * 0.06),
-                0.24,
-                1.0
+                0.18
+                + (dynamic_rank * 0.62)
+                + (peak_drive * 0.08)
+                + (self.kiai_level * 0.04),
+                0.16,
+                0.92
             )
             target *= self.audible_level
             raw_targets[index] = _clamp(target, 0.0, 1.0)
@@ -526,7 +539,7 @@ class CircularMenuVisualizer:
         surface.blit(layer, (center[0] - layer_radius, center[1] - layer_radius))
 
     def _draw_bar(self, layer, local_center, index, level, inner_radius, logo_radius, max_length, beat):
-        if level <= 0.007 or self.audible_level <= 0.012:
+        if level <= 0.0035 or self.audible_level <= 0.004:
             return
 
         ux, uy = self.units[index]
@@ -534,13 +547,13 @@ class CircularMenuVisualizer:
         sweep_distance = abs(((position - self.sweep_position + 0.5) % 1.0) - 0.5) * 2.0
         sweep = max(0.0, 1.0 - (sweep_distance / 0.24)) ** 2.0
         transient = self.band_transients[index]
-        length = max(4.0, max_length * (level ** 1.08) * self.length_bias[index])
+        length = max(4.0, max_length * (level ** 1.16) * self.length_bias[index])
         length *= 1.0 + (transient * 0.22)
         length *= 1.0 + (sweep * (0.14 + beat * 0.08))
         start_radius = inner_radius
         end_radius = logo_radius + max(5.0, length)
         base_arc_spacing = (math.tau * start_radius) / max(1, self.bar_count)
-        base_gap = max(1.0, base_arc_spacing * 0.17)
+        base_gap = max(1.0, base_arc_spacing * 0.08)
         width = int(math.floor(_clamp(
             self.bar_width,
             2.0,
@@ -559,7 +572,7 @@ class CircularMenuVisualizer:
         base_alpha = int(_clamp(
             (44 + (self.audible_level * 10) + (beat * 4) + (sweep * 16))
             * (0.58 + (self.alpha_bias[index] * 0.36)),
-            16,
+            18,
             82
         ))
         line_color = (
