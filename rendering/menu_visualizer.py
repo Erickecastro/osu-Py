@@ -23,12 +23,18 @@ class CircularMenuVisualizer:
         self.band_targets = [0.0] * bar_count
         self.band_alpha = [0.0] * bar_count
         self.level_hold = [0.0] * bar_count
+        self.band_memory = [0.0] * bar_count
+        self.band_transients = [0.0] * bar_count
         self.angles = [(index / bar_count) * math.tau for index in range(bar_count)]
         self.units = [(math.cos(angle), math.sin(angle)) for angle in self.angles]
         self.variation = []
         for index in range(bar_count):
             value = ((index * 37) % 100) / 100.0
             self.variation.append(0.42 + (value ** 1.28) * 1.22)
+        self.length_bias = [
+            0.86 + (((value - 0.42) / 1.22) * 0.28)
+            for value in self.variation
+        ]
         self.alpha_variation = [
             0.68 + ((((index * 53) % 100) / 100.0) * 0.42)
             for index in range(bar_count)
@@ -150,6 +156,8 @@ class CircularMenuVisualizer:
         self.levels = [0.0] * self.bar_count
         self.band_alpha = [0.0] * self.bar_count
         self.level_hold = [0.0] * self.bar_count
+        self.band_memory = [0.0] * self.bar_count
+        self.band_transients = [0.0] * self.bar_count
         self.region_targets = [0.0] * self.bar_count
 
     def _analysis_worker(self, cache_key, audio_path):
@@ -331,27 +339,65 @@ class CircularMenuVisualizer:
         raw_targets = self.region_targets
         for index, value in enumerate(bands):
             position = index / self.bar_count
+            left_2_value = float(bands[(index - 2) % self.bar_count])
+            left_1_value = float(bands[(index - 1) % self.bar_count])
+            right_1_value = float(bands[(index + 1) % self.bar_count])
+            right_2_value = float(bands[(index + 2) % self.bar_count])
+            local_average = (
+                (float(value) * 0.36)
+                + ((left_1_value + right_1_value) * 0.22)
+                + ((left_2_value + right_2_value) * 0.10)
+            )
+            previous_band = self.band_memory[index]
+            transient = max(0.0, float(value) - previous_band)
+            memory_speed = 18.0 if value > previous_band else 4.8
+            self.band_memory[index] = _lerp(
+                previous_band,
+                float(value),
+                1.0 - math.exp(-dt * memory_speed)
+            )
+            self.band_transients[index] = _lerp(
+                self.band_transients[index],
+                transient,
+                1.0 - math.exp(-dt * (28.0 if transient > self.band_transients[index] else 8.0))
+            )
+            contrast = _clamp(
+                ((float(value) - local_average) * 2.35)
+                + (self.band_transients[index] * 1.75),
+                0.0,
+                1.0
+            )
             wave = (
                 math.sin((position - wave_offset) * math.tau * 2.0)
+                + 1.0
+            ) * 0.5
+            detail_wave = (
+                math.sin(
+                    (position * math.tau * 9.0)
+                    - (self.sweep_position * math.tau * 2.6)
+                )
                 + 1.0
             ) * 0.5
             sweep_distance = abs(((position - self.sweep_position + 0.5) % 1.0) - 0.5) * 2.0
             sweep = max(0.0, 1.0 - (sweep_distance / 0.30)) ** 2.2
             band = _clamp(
-                (value * 0.72)
+                (value * 0.86)
                 + (mid * 0.16)
-                + (high * 0.08 * self.alpha_variation[index])
+                + (high * 0.12 * self.alpha_variation[index])
                 + (low * 0.14 * (wave ** 1.6))
+                + (contrast * (0.24 + (rms * 0.22) + (beat_pulse * 0.10)))
+                + (detail_wave * contrast * 0.08)
                 + (sweep * (0.034 + beat_pulse * 0.082 + rms * 0.038)),
                 0.0,
                 1.0
             )
-            minimum = (self.minimum_level_base + (rms * 0.034) + (self.kiai_level * 0.014)) * self.audible_level
-            target = max(minimum * self.variation[index], band)
+            minimum = (self.minimum_level_base + (rms * 0.028) + (self.kiai_level * 0.010)) * self.audible_level
+            target = max(minimum * self.length_bias[index], band)
             target *= 0.82 + (beat_pulse * 0.20) + (fft_pulse * 0.12) + (self.kiai_level * 0.14)
             target *= 1.0 + (sweep * (0.18 + beat_pulse * 0.10))
-            target *= 0.72 + ((self.variation[index] - 0.54) * 0.20)
-            target *= self.activity_bias[index]
+            target *= 0.90 + ((self.length_bias[index] - 1.0) * 0.18)
+            target *= 0.84 + (self.activity_bias[index] * 0.22)
+            target *= 1.0 + (contrast * 0.42) + (self.band_transients[index] * 0.30)
             target *= self.audible_level
             raw_targets[index] = _clamp(target, 0.0, 1.0)
 
@@ -361,9 +407,9 @@ class CircularMenuVisualizer:
             right_1 = raw_targets[(index + 1) % self.bar_count]
             right_2 = raw_targets[(index + 2) % self.bar_count]
             target = (
-                (target * 0.52)
-                + ((left_1 + right_1) * 0.18)
-                + ((left_2 + right_2) * 0.06)
+                (target * 0.64)
+                + ((left_1 + right_1) * 0.13)
+                + ((left_2 + right_2) * 0.05)
             )
             target = _clamp(target, 0.0, 1.0)
             instant_target = target
@@ -464,7 +510,9 @@ class CircularMenuVisualizer:
         position = index / self.bar_count
         sweep_distance = abs(((position - self.sweep_position + 0.5) % 1.0) - 0.5) * 2.0
         sweep = max(0.0, 1.0 - (sweep_distance / 0.24)) ** 2.0
-        length = max(4.0, max_length * (level ** 1.12) * self.variation[index])
+        transient = self.band_transients[index]
+        length = max(4.0, max_length * (level ** 1.08) * self.length_bias[index])
+        length *= 1.0 + (transient * 0.22)
         length *= 1.0 + (sweep * (0.14 + beat * 0.08))
         start_radius = inner_radius
         end_radius = logo_radius + max(5.0, length)
@@ -477,7 +525,8 @@ class CircularMenuVisualizer:
         )))
         bar_light = _clamp(
             0.22
-            + (level * 0.26)
+            + (level * 0.18)
+            + (transient * 0.20)
             + (sweep * (0.44 + beat * 0.16))
             + (self.kiai_level * 0.08),
             0.0,
