@@ -270,7 +270,14 @@ class GameplayScene(BaseScene):
         )
 
         self.slider_renderer = SliderRenderer(self)
-        self.slider_precache_complete = False
+        self.slider_cache_notes = [
+            note
+            for note in self.notes
+            if note["type"] == "slider"
+        ]
+        self.next_slider_cache_index = 0
+        self.slider_cache_cooldown_until = 0
+        self.slider_precache_complete = not self.slider_cache_notes
 
         self.circle_number_font = rounded_font(32, bold=True)
 
@@ -1664,13 +1671,57 @@ class GameplayScene(BaseScene):
 
         self.surface_precache_complete = self.surface_precache_index >= total_jobs
 
-    def _warm_slider_cache(self, max_ms=1, max_items=1):
+    def _warm_slider_cache(self, max_ms=1, max_items=1, horizon_ms=None):
         if self.slider_precache_complete:
             return
-        self.slider_precache_complete = self.slider_renderer.precache_step(
-            max_ms=max_ms,
-            max_items=max_items
-        )
+
+        now = pygame.time.get_ticks()
+        if now < self.slider_cache_cooldown_until:
+            return
+
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("slider_warm")
+
+        if horizon_ms is None:
+            horizon_ms = self.approach_time + 900
+
+        try:
+            horizon_time = self.current_time + horizon_ms
+            if not self.music_started and self.pre_music_started_at is None:
+                horizon_time = max(horizon_time, self.approach_time + 900)
+
+            start = now
+            count = 0
+            total = len(self.slider_cache_notes)
+            while self.next_slider_cache_index < total:
+                note = self.slider_cache_notes[self.next_slider_cache_index]
+                if note["time"] > horizon_time:
+                    break
+
+                self.next_slider_cache_index += 1
+                cache_key = note.get("render_index")
+                if cache_key in self.slider_surface_cache:
+                    continue
+
+                cache_start = pygame.time.get_ticks()
+                self.slider_renderer.cache_full_surface(note)
+                cache_elapsed = pygame.time.get_ticks() - cache_start
+                count += 1
+                if cache_elapsed > max_ms:
+                    self.slider_cache_cooldown_until = (
+                        pygame.time.get_ticks()
+                        + min(120, max(16, int(cache_elapsed * 1.35)))
+                    )
+                    break
+                if count >= max_items or pygame.time.get_ticks() - start >= max_ms:
+                    break
+
+            self.slider_precache_complete = self.next_slider_cache_index >= total
+        finally:
+            if profiler_enabled:
+                profiler.end("slider_warm")
 
     def _load_background_surface(self):
         background = self.beatmap.get("background")

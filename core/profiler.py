@@ -12,6 +12,7 @@ class FrameProfiler:
         "update",
         "scene_manager_update",
         "scene_update",
+        "slider_warm",
         "hitobjects",
         "audio",
         "render",

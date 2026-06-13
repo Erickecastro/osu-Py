@@ -452,22 +452,34 @@ class PulseCircle:
         music_active = bool(music_active)
         beat_phase = clamp(beat_phase, 0.0, 1.0)
         music_energy = clamp(music_energy, 0.0, 1.0) if music_active else 0.02
-        crossed_beat = self.last_beat_phase > 0.72 and beat_phase < 0.24
-        if music_active and crossed_beat and self.pulse_scale > 1.035:
-            self.ghost_scale = self.pulse_scale
-            self.ghost_alpha = clamp(0.74 + (music_energy * 0.32), 0.0, 0.98)
+        crossed_beat = self.last_beat_phase > 0.78 and beat_phase < 0.22
+        if music_active and crossed_beat:
+            self.ghost_scale = max(
+                self.pulse_scale,
+                1.055 + (music_energy * 0.055)
+            )
+            self.ghost_alpha = clamp(0.78 + (music_energy * 0.28), 0.0, 0.98)
             self.beat_waves.append({
                 "age": 0.0,
                 "duration": 0.33,
                 "energy": music_energy
             })
-        self.last_beat_phase = beat_phase
 
         if music_active:
-            if beat_phase < 0.08:
+            expand_start = 0.06
+            return_start = 0.80
+            if beat_phase < expand_start:
                 prebeat = 0.0
+            elif beat_phase < return_start:
+                prebeat = ease_in_out(
+                    (beat_phase - expand_start)
+                    / (return_start - expand_start)
+                )
             else:
-                prebeat = ease_in_out((beat_phase - 0.08) / 0.92)
+                prebeat = 1.0 - ease_out_cubic(
+                    (beat_phase - return_start)
+                    / (1.0 - return_start)
+                )
         else:
             previous_idle_phase = self.idle_pulse_phase
             self.idle_pulse_phase = (self.idle_pulse_phase + max(0.0, dt)) % 1.0
@@ -482,35 +494,30 @@ class PulseCircle:
             else:
                 return_phase = (self.idle_pulse_phase - expand_end) / (1.0 - expand_end)
                 prebeat = 1.0 - ease_out_cubic(return_phase)
+            self.last_beat_phase = 0.0
 
         if music_active:
-            beat_push = prebeat * (0.085 + music_energy * 0.035)
+            beat_push = prebeat * (0.09 + music_energy * 0.03)
         else:
             beat_push = max(0.0, prebeat * 0.014)
         hover_push = self.hover * 0.075
         flash_push = ease_out_cubic(self.click_flash) * 0.14
         menu_push = 0.025 if menu_open else 0.0
         self.target_pulse_scale = 1.0 + beat_push + hover_push + flash_push + menu_push
-        expand_speed = 6.5 + music_energy * 3.4
+        expand_speed = 8.2 + music_energy * 4.4
         if not music_active:
-            expand_speed = 5.6
+            expand_speed = 4.8
         scale_speed = expand_speed
         if self.target_pulse_scale < self.pulse_scale:
-            scale_speed = expand_speed * (1.25 if music_active else 1.85)
+            scale_speed = expand_speed * (1.65 if music_active else 1.42)
         self.pulse_scale = lerp(
             self.pulse_scale,
             self.target_pulse_scale,
             1.0 - math.exp(-dt * scale_speed)
         )
-        target_radius = self.base_radius * self.pulse_scale
-        radius_speed = 12.0
-        if target_radius < self.radius:
-            radius_speed *= (1.25 if music_active else 1.65)
-        self.radius = lerp(
-            self.radius,
-            target_radius,
-            1.0 - math.exp(-dt * radius_speed)
-        )
+        self.radius = self.base_radius * self.pulse_scale
+        if music_active:
+            self.last_beat_phase = beat_phase
 
     def trigger_click(self):
         self.click_flash = 1.0
@@ -583,7 +590,7 @@ class PulseCircle:
         surface.blit(caption_surface, caption_rect)
 
     def _scaled_logo(self, radius):
-        radius_key = max(1, int(round(radius / 8.0) * 8))
+        radius_key = max(1, int(round(radius / 2.0) * 2))
         key = radius_key
         cached = self._logo_cache.get(key)
         if cached is not None:
@@ -594,7 +601,7 @@ class PulseCircle:
         diameter = max(1, int(radius_key * 2.12))
         scaled = pygame.transform.scale(source, (diameter, diameter)).convert_alpha()
 
-        if len(self._logo_cache) > 48:
+        if len(self._logo_cache) > 96:
             self._logo_cache.clear()
         self._logo_cache[key] = scaled
         return scaled
