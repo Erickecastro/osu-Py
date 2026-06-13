@@ -1,6 +1,7 @@
 import os
 import math
 import time
+from concurrent.futures import ThreadPoolExecutor
 from bisect import bisect_left, bisect_right
 
 import pygame
@@ -33,7 +34,12 @@ from rendering.primitives import (
     draw_aa_circle,
     draw_centered_text
 )
-from rendering.sliders import SliderRenderer
+from rendering.sliders import (
+    SliderRenderer,
+    can_render_track_pixels,
+    render_track_surface_pixels,
+    surface_from_track_pixels
+)
 from rendering.spinner import SpinnerRenderer
 
 
@@ -278,6 +284,16 @@ class GameplayScene(BaseScene):
         self.next_slider_cache_index = 0
         self.slider_cache_cooldown_until = 0
         self.slider_precache_complete = not self.slider_cache_notes
+        self.slider_cache_executor = (
+            ThreadPoolExecutor(
+                max_workers=1,
+                thread_name_prefix="pyosu-slider-cache"
+            )
+            if can_render_track_pixels()
+            else None
+        )
+        self.slider_cache_futures = {}
+        self.slider_cache_failed = set()
 
         self.circle_number_font = rounded_font(32, bold=True)
 
@@ -1304,32 +1320,41 @@ class GameplayScene(BaseScene):
             self.followpoint_prepare_complete = True
             return
 
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("followpoint_warm")
+
         start = pygame.time.get_ticks()
         count = 0
         last_index = len(self.notes) - 1
-        while self.followpoint_prepare_index < last_index:
-            index = self.followpoint_prepare_index
-            self.followpoint_prepare_index += 1
-            connection = self._build_followpoint_connection(
-                self.notes[index],
-                self.notes[index + 1],
-                index
+        try:
+            while self.followpoint_prepare_index < last_index:
+                index = self.followpoint_prepare_index
+                self.followpoint_prepare_index += 1
+                connection = self._build_followpoint_connection(
+                    self.notes[index],
+                    self.notes[index + 1],
+                    index
+                )
+                if connection is not None:
+                    self.notes[index]["followpoint_connection"] = connection
+                count += 1
+
+                if max_items is not None and count >= max_items:
+                    break
+                if (
+                    max_ms is not None
+                    and pygame.time.get_ticks() - start >= max_ms
+                ):
+                    break
+
+            self.followpoint_prepare_complete = (
+                self.followpoint_prepare_index >= last_index
             )
-            if connection is not None:
-                self.notes[index]["followpoint_connection"] = connection
-            count += 1
-
-            if max_items is not None and count >= max_items:
-                break
-            if (
-                max_ms is not None
-                and pygame.time.get_ticks() - start >= max_ms
-            ):
-                break
-
-        self.followpoint_prepare_complete = (
-            self.followpoint_prepare_index >= last_index
-        )
+        finally:
+            if profiler_enabled:
+                profiler.end("followpoint_warm")
 
     def _build_followpoint_connection(self, note, next_note, index):
         if note["type"] == "spinner" or next_note["type"] == "spinner":
@@ -1651,29 +1676,132 @@ class GameplayScene(BaseScene):
         if self.surface_precache_complete:
             return
 
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("surface_warm")
+
         start = pygame.time.get_ticks()
         count = 0
         total_jobs = len(self.surface_precache_jobs)
-        while self.surface_precache_index < total_jobs:
-            radius, fill_color, outline_color, outline_width = (
-                self.surface_precache_jobs[self.surface_precache_index]
-            )
-            self.surface_precache_index += 1
-            self._aa_circle_surface(
-                radius,
-                fill_color=fill_color,
-                outline_color=outline_color,
-                outline_width=outline_width
-            )
-            count += 1
-            if count >= max_items or pygame.time.get_ticks() - start >= max_ms:
-                break
+        try:
+            while self.surface_precache_index < total_jobs:
+                radius, fill_color, outline_color, outline_width = (
+                    self.surface_precache_jobs[self.surface_precache_index]
+                )
+                self.surface_precache_index += 1
+                self._aa_circle_surface(
+                    radius,
+                    fill_color=fill_color,
+                    outline_color=outline_color,
+                    outline_width=outline_width
+                )
+                count += 1
+                if count >= max_items or pygame.time.get_ticks() - start >= max_ms:
+                    break
 
-        self.surface_precache_complete = self.surface_precache_index >= total_jobs
+            self.surface_precache_complete = self.surface_precache_index >= total_jobs
+        finally:
+            if profiler_enabled:
+                profiler.end("surface_warm")
+
+    def _schedule_slider_cache_job(self, note):
+        if self.slider_cache_executor is None:
+            return False
+
+        cache_key = note.get("render_index")
+        if cache_key is None:
+            return False
+        if (
+            cache_key in self.slider_surface_cache
+            or cache_key in self.slider_cache_futures
+            or cache_key in self.slider_cache_failed
+        ):
+            return True
+
+        slider_points = note.get("scaled_slider_points")
+        if slider_points is None:
+            slider_points = self.slider_renderer.build_points(note)
+            note["scaled_slider_points"] = slider_points
+
+        cumulative, total_length = self.slider_renderer.path_metrics(slider_points)
+        note["scaled_slider_cumulative"] = cumulative
+        note["scaled_slider_length"] = total_length
+
+        geometry = self.slider_renderer._surface_geometry(slider_points)
+        if geometry is None:
+            self.slider_cache_failed.add(cache_key)
+            return True
+
+        size, local_points, surface_pos = geometry
+        outline_radius = self.slider_path_radius
+        body_radius = max(
+            1,
+            int(outline_radius - max(3, outline_radius * 0.11))
+        )
+        future = self.slider_cache_executor.submit(
+            render_track_surface_pixels,
+            size,
+            tuple(local_points),
+            outline_radius,
+            body_radius
+        )
+        self.slider_cache_futures[cache_key] = (
+            future,
+            size,
+            surface_pos
+        )
+        return True
+
+    def _collect_slider_cache_results(self, max_ms=0.75, max_items=2):
+        if not self.slider_cache_futures:
+            return
+
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("slider_collect")
+
+        start = time.perf_counter()
+        installed = 0
+        try:
+            for cache_key, payload in list(self.slider_cache_futures.items()):
+                future, size, surface_pos = payload
+                if not future.done():
+                    continue
+
+                try:
+                    pixels = future.result()
+                except Exception:
+                    pixels = None
+
+                if pixels is None:
+                    self.slider_cache_failed.add(cache_key)
+                else:
+                    self.slider_surface_cache[cache_key] = (
+                        surface_from_track_pixels(size, pixels),
+                        surface_pos
+                    )
+
+                self.slider_cache_futures.pop(cache_key, None)
+                installed += 1
+                elapsed_ms = (time.perf_counter() - start) * 1000.0
+                if installed >= max_items or elapsed_ms >= max_ms:
+                    break
+        finally:
+            if profiler_enabled:
+                profiler.end("slider_collect")
+
+        self.slider_precache_complete = (
+            self.next_slider_cache_index >= len(self.slider_cache_notes)
+            and not self.slider_cache_futures
+        )
 
     def _warm_slider_cache(self, max_ms=1, max_items=1, horizon_ms=None):
         if self.slider_precache_complete:
             return
+
+        self._collect_slider_cache_results(max_ms=0.55, max_items=2)
 
         now = pygame.time.get_ticks()
         if now < self.slider_cache_cooldown_until:
@@ -1685,12 +1813,12 @@ class GameplayScene(BaseScene):
             profiler.start("slider_warm")
 
         if horizon_ms is None:
-            horizon_ms = self.approach_time + 900
+            horizon_ms = self.approach_time + 2400
 
         try:
             horizon_time = self.current_time + horizon_ms
             if not self.music_started and self.pre_music_started_at is None:
-                horizon_time = max(horizon_time, self.approach_time + 900)
+                horizon_time = max(horizon_time, self.approach_time + 4200)
 
             start = now
             count = 0
@@ -1703,6 +1831,16 @@ class GameplayScene(BaseScene):
                 self.next_slider_cache_index += 1
                 cache_key = note.get("render_index")
                 if cache_key in self.slider_surface_cache:
+                    continue
+
+                if self.slider_cache_executor is not None:
+                    self._schedule_slider_cache_job(note)
+                    count += 1
+                    if (
+                        count >= max_items
+                        or pygame.time.get_ticks() - start >= max_ms
+                    ):
+                        break
                     continue
 
                 cache_start = pygame.time.get_ticks()
@@ -1718,7 +1856,10 @@ class GameplayScene(BaseScene):
                 if count >= max_items or pygame.time.get_ticks() - start >= max_ms:
                     break
 
-            self.slider_precache_complete = self.next_slider_cache_index >= total
+            self.slider_precache_complete = (
+                self.next_slider_cache_index >= total
+                and not self.slider_cache_futures
+            )
         finally:
             if profiler_enabled:
                 profiler.end("slider_warm")
@@ -1746,6 +1887,11 @@ class GameplayScene(BaseScene):
         ):
             return
 
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("background_warm")
+
         self.background_load_attempted = True
         try:
             self.background_source = pygame.image.load(
@@ -1754,6 +1900,9 @@ class GameplayScene(BaseScene):
             self._scaled_background((self.game.WIDTH, self.game.HEIGHT))
         except pygame.error:
             self.background_source = None
+        finally:
+            if profiler_enabled:
+                profiler.end("background_warm")
 
     def _scaled_background(self, screen_size):
         source = getattr(self, "background_source", None)
@@ -1940,7 +2089,7 @@ class GameplayScene(BaseScene):
             if ready_elapsed >= 180:
                 self._warm_followpoint_connections()
             if ready_elapsed >= 420:
-                self._warm_slider_cache()
+                self._warm_slider_cache(max_ms=2, max_items=8)
             if ready_elapsed >= 650:
                 self._warm_background_surface()
             if ready_elapsed >= 900:
@@ -1962,7 +2111,7 @@ class GameplayScene(BaseScene):
                 )
                 if lead_elapsed < self.pre_music_lead_in_ms:
                     self._warm_gameplay_surface_cache()
-                    self._warm_slider_cache()
+                    self._warm_slider_cache(max_ms=2, max_items=8)
                     self._warm_followpoint_connections()
                     self.current_time = lead_elapsed - self.pre_music_lead_in_ms
                     if profiler_enabled:
@@ -1991,7 +2140,7 @@ class GameplayScene(BaseScene):
             self.music_started = True
             self._publish_current_track_state()
 
-        self._warm_slider_cache(max_ms=1, max_items=1)
+        self._warm_slider_cache(max_ms=1, max_items=4)
         self._warm_followpoint_connections(max_ms=1, max_items=16)
         self._warm_background_surface()
 
@@ -2188,6 +2337,7 @@ class GameplayScene(BaseScene):
 
         overlay = self.overlay_surface
         overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
+        self._collect_slider_cache_results(max_ms=0.45, max_items=2)
 
         profiler = getattr(self.game, "profiler", None)
         profiler_enabled = bool(profiler and profiler.enabled)
@@ -2880,6 +3030,14 @@ class GameplayScene(BaseScene):
         screen.blit(text, rect)
 
     def destroy(self):
+
+        if self.slider_cache_executor is not None:
+            self.slider_cache_executor.shutdown(
+                wait=False,
+                cancel_futures=True
+            )
+            self.slider_cache_executor = None
+            self.slider_cache_futures.clear()
 
         if self.music_started and not self.failed:
             if self.paused:

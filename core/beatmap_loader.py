@@ -102,7 +102,7 @@ class BeatmapLoader:
 
         if title and title != "Unknown":
             return title
-
+ 
         return self.clean_folder_name(fallback)
 
     def clean_display_text(self, text):
