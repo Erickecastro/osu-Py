@@ -214,7 +214,10 @@ def surface_from_track_pixels(size, pixels):
     alpha[:, :] = final_alpha.T
     del rgb
     del alpha
-    return surface
+    try:
+        return surface.convert_alpha()
+    except pygame.error:
+        return surface
 
 
 def can_render_track_pixels():

@@ -39,11 +39,14 @@ class CursorRenderer:
         self.pos = pos
         self.emit_timer += dt
 
-        live_trail = []
-        for entry in self.trail:
-            entry["age"] += dt
-            if entry["age"] <= self.trail_duration:
-                live_trail.append(entry)
+        live_trail = self.trail
+        write_index = 0
+        for entry in live_trail:
+            entry[1] += dt
+            if entry[1] <= self.trail_duration:
+                live_trail[write_index] = entry
+                write_index += 1
+        del live_trail[write_index:]
 
         dx = self.pos[0] - self.last_emit_pos[0]
         dy = self.pos[1] - self.last_emit_pos[1]
@@ -53,24 +56,23 @@ class CursorRenderer:
             self.emit_timer >= self.trail_emit_interval
             and moved_distance >= self.trail_min_distance
         ):
-            live_trail.append({
-                "pos": self.pos,
-                "age": 0.0
-            })
+            live_trail.append([self.pos, 0.0])
             self.emit_timer = 0.0
             self.last_emit_pos = self.pos
 
-        self.trail = live_trail[-self.trail_max_points:]
+        if len(live_trail) > self.trail_max_points:
+            del live_trail[:-self.trail_max_points]
 
     def draw(self, screen, pos=None):
         if pos is not None:
             self.pos = pos
 
         for entry in self.trail:
+            entry_pos, entry_age = entry
             progress = self._clamp01(
-                entry["age"] / self.trail_duration
+                entry_age / self.trail_duration
             )
-            fade_in = self._clamp01(entry["age"] / 0.018)
+            fade_in = self._clamp01(entry_age / 0.018)
             fade_out = 1.0 - progress
             alpha = int(
                 220
@@ -81,7 +83,7 @@ class CursorRenderer:
             self._blit_centered(
                 screen,
                 self.trail_image,
-                entry["pos"],
+                entry_pos,
                 alpha=alpha,
                 scale=scale
             )

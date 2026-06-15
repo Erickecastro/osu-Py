@@ -431,6 +431,7 @@ class Game:
             )
 
         if not getattr(current_scene, "draws_own_cursor", False):
+            self.sample_mouse_now()
             self.cursor_renderer.draw(self.screen, self.mouse_pos)
 
         if profiler_enabled:

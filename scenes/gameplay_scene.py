@@ -2841,6 +2841,9 @@ class GameplayScene(BaseScene):
             self.overlay_dirty_rect
         )
 
+        sampler = getattr(self.game, "sample_mouse_now", None)
+        if sampler is not None:
+            sampler()
         self.cursor_renderer.draw(screen, self.game.mouse_pos)
         self._draw_skip_button(screen)
         if self.paused:

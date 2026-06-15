@@ -66,8 +66,8 @@ class SongCard:
         is_difficulty = meta and meta.get("type") == "difficulty"
         is_group = meta and meta.get("type") == "group"
         width_factor = 0.88 if is_difficulty else 1.0
-        width = int(round((scene.card_width * self.scale * width_factor) / 2.0) * 2)
-        height = int(round((scene.card_height * self.scale) / 2.0) * 2)
+        width = scene.quantize_card_size(scene.card_width * self.scale * width_factor, 8)
+        height = scene.quantize_card_size(scene.card_height * self.scale, 4)
         rect = pygame.Rect(0, 0, width, height)
         rect.center = (int(self.x), int(self.y))
 
@@ -289,6 +289,10 @@ class SongSelectScene(BaseScene):
             self.card_image_cache[key] = cached
         return cached.copy()
 
+    def quantize_card_size(self, value, quantum):
+        quantum = max(1, int(quantum))
+        return max(quantum, int(round(float(value) / quantum)) * quantum)
+
     def selected_group_key(self):
         if not self.items:
             return None
@@ -441,12 +445,14 @@ class SongSelectScene(BaseScene):
             self._rebuild_items()
             self.selected_index = min(index, len(self.items) - 1)
             self.browse_index = self.selected_index
+            self.background_load_delay = 0.04
             self._ensure_background(self.items[self.selected_index]["info"])
             self._start_preview_music(self.items[self.selected_index]["info"])
             return
 
         self.selected_index = index
         self.browse_index = self.selected_index
+        self.background_load_delay = 0.04
         self._ensure_background(self.items[self.selected_index]["info"])
         if play_preview:
             self._start_preview_music(self.items[self.selected_index]["info"])

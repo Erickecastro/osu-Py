@@ -143,8 +143,10 @@ class SceneManager:
         alpha = int((1.0 - progress) * 190)
         size = screen.get_size()
         if self.transition_overlay is None or self.transition_overlay_size != size:
-            self.transition_overlay = pygame.Surface(size, pygame.SRCALPHA)
+            self.transition_overlay = pygame.Surface(size).convert()
+            self.transition_overlay.fill((0, 0, 0))
             self.transition_overlay_size = size
 
-        self.transition_overlay.fill((0, 0, 0, alpha))
+        if self.transition_overlay.get_alpha() != alpha:
+            self.transition_overlay.set_alpha(alpha)
         screen.blit(self.transition_overlay, (0, 0))
