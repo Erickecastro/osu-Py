@@ -2346,6 +2346,7 @@ class GameplayScene(BaseScene):
             profiler.start("hitobjects_render")
 
         self._draw_followpoints(overlay)
+        approach_draws = []
 
         for note in self.active_notes:
 
@@ -2413,20 +2414,11 @@ class GameplayScene(BaseScene):
                 approach_alpha = int(
                     alpha * (0.42 + (0.58 * self._clamp01(progress)))
                 )
-                if not self._draw_approach_skin(
-                    overlay,
+                approach_draws.append((
                     (scaled_x, scaled_y),
                     approach_radius,
-                    alpha=approach_alpha
-                ):
-                    self._draw_aa_circle(
-                        overlay,
-                        (scaled_x, scaled_y),
-                        approach_radius,
-                        outline_color=(255, 255, 255),
-                        outline_width=5,
-                        alpha=approach_alpha
-                    )
+                    approach_alpha
+                ))
 
             if note["type"] == "circle":
                 circle_color = note.get(
@@ -2750,6 +2742,22 @@ class GameplayScene(BaseScene):
                             outline_width=2,
                             alpha=slider_ball_alpha
                         )
+
+        for center, approach_radius, approach_alpha in approach_draws:
+            if not self._draw_approach_skin(
+                overlay,
+                center,
+                approach_radius,
+                alpha=approach_alpha
+            ):
+                self._draw_aa_circle(
+                    overlay,
+                    center,
+                    approach_radius,
+                    outline_color=(255, 255, 255),
+                    outline_width=5,
+                    alpha=approach_alpha
+                )
 
         self.miss_indicators = [
             indicator
