@@ -1,43 +1,43 @@
-# osu-Py
+# OSU-Py
 
-OSU-Py é um projeto fan-made de jogo de ritmo inspirado no OSU!, feito em Python com pygame-ce. O objetivo e carregar beatmaps no formato `.osu`, tocar a musica correspondente e renderizar uma gameplay jogavel com hit circles, sliders, approach circles, combo, score, accuracy, cursor customizado e selecao de musicas/dificuldades.
+osu-Py is a fan-made rhythm game project inspired by osu!, built with Python and pygame-ce. Its goal is to load beatmaps in the `.osu` format, play the corresponding music, and render a playable gameplay experience featuring hit circles, sliders, approach circles, combo tracking, score, accuracy, a custom cursor, and song/difficulty selection.
 
-O projeto ainda esta em desenvolvimento, mas a gameplay principal ja esta funcional e vem sendo reorganizada aos poucos para facilitar a manutencao, melhorar a performance e separar melhor as responsabilidades entre loader, cenas, renderizadores e regras de jogo.
+The project is still under development, but the core gameplay is already functional. The codebase is being gradually reorganized to improve maintainability, enhance performance, and better separate responsibilities between loaders, scenes, renderers, and gameplay systems.
 
-## Funcionalidades atuais
+## Current Features
 
-- Leitura de pastas de beatmaps dentro de `songs/`.
-- Parse de metadata, difficulty, timing points, hit circles, sliders e cores de combo.
-- Gameplay com circles, sliders, reverse markers, slider ball, fade in/out, miss pop, score, combo e accuracy.
-- Renderizacao de cursor, notas, sliders, spinner, HUD e menu usando a skin em `assets/skins/default/`.
-- Menus com `pygame_gui` para selecionar musica e dificuldade.
-- Suporte a fullscreen e troca de fullscreen para modo janela e vice-versa com `F11`.
+* Loads beatmaps from the `songs/` directory.
+* Parses metadata, difficulty settings, timing points, hit circles, sliders, and combo colors.
+* Gameplay support for hit circles, sliders, reverse markers, slider balls, fade-in/fade-out animations, miss indicators, score, combo, and accuracy.
+* Renders cursor, notes, sliders, spinner, HUD, and menus using the default skin located in `assets/skins/default/`.
+* Song and difficulty selection menus powered by `pygame_gui`.
+* Fullscreen support with seamless switching between fullscreen and windowed mode using `F11`.
 
-## Requisitos
+## Requirements
 
-- Python 3.12 recomendado.
-- Windows foi o ambiente principal de desenvolvimento/teste.
-- Dependencias listadas em `requirements.txt`.
+* Python 3.12 recommended.
+* Windows was the primary development and testing environment.
+* Dependencies listed in `requirements.txt`.
 
-Instale as dependencias com:
+Install dependencies with:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Em alguns ambientes Windows, o comando pode ser:
+On some Windows environments, you may need to use:
 
 ```bash
 py -3.12 -m pip install -r requirements.txt
 ```
 
-## Como rodar
+## Running the Game
 
 ```bash
 py -3.12 main.py
 ```
 
-Ou, se `python` apontar para a versao correta:
+Or, if `python` points to the correct version:
 
 ```bash
 python main.py
@@ -45,48 +45,53 @@ python main.py
 
 ## Beatmaps
 
-Coloque as musicas dentro da pasta `songs/`. Cada beatmap deve manter sua estrutura original, incluindo pelo menos:
+Place your beatmaps inside the `songs/` directory. Each beatmap should preserve its original structure, including at least:
 
-- Arquivo `.osu`.
-- Arquivo de audio referenciado pelo `.osu`.
-- Arquivo da música principal `.wav/.mp3`.
-- Assets opcionais do beatmap, quando existirem.
+* A `.osu` file.
+* The audio file referenced by the `.osu` file.
+* The main music file (`.wav` or `.mp3`).
+* Optional beatmap assets, when available.
 
-O loader percorre as subpastas de `songs/`, encontra arquivos `.osu` e monta a lista de dificuldades disponiveis.
-Baixe as músicas do seu interese diretamente no site oficial do game, https://osu.ppy.sh/beatmapsets. 
+The loader scans all subdirectories inside `songs/`, detects `.osu` files, and builds the list of available difficulties.
 
-## Controles
+You can download beatmaps directly from the official osu! website:
 
-- `Z` ou `X`: acertar objetos.
-- `Clique esquerdo` ou `clique direito` do mouse para acertar os objetos.
-- `Esc`: sair da gameplay ou voltar uma cena.
-- `F3`: alternar profiler de performance.
-- `F11`: alternar fullscreen.
-- `Alt + F4`: sair do jogo.
+https://osu.ppy.sh/beatmapsets
 
-## Performance e profiler
+## Controls
 
-Durante testes em PCs fracos, pressione `F3` para abrir o profiler interno. Ele mostra FPS, tempo medio do frame, p95, piores frames e custos separados de eventos, update, render, visualizer, hitobjects, sliders, UI, flip e pacer. O mesmo resumo tambem aparece no terminal a cada poucos segundos.
+* `Z` or `X`: hit objects.
+* `Left Mouse Button` or `Right Mouse Button`: hit objects.
+* `Esc`: exit gameplay or go back to the previous scene.
+* `F3`: toggle the performance profiler.
+* `F11`: toggle fullscreen mode.
+* `Alt + F4`: quit the game.
 
-Tambem e possivel iniciar o jogo ja com o profiler ativo:
+## Performance and Profiling
+
+When testing on low-end PCs, press `F3` to enable the built-in profiler. It displays FPS, average frame time, p95 latency, worst frames, and detailed timing information for events, updates, rendering, visualizer, hit objects, sliders, UI, display flipping, and frame pacing.
+
+The same summary is periodically printed to the terminal.
+
+You can also start the game with the profiler enabled:
 
 ```bash
 $env:PYOSU_PROFILE="1"; py -3.12 main.py
 ```
 
-Para deixar o modo de auditoria ligado por padrao:
+To enable performance auditing by default:
 
 ```bash
 $env:PYOSU_DEBUG_PERFORMANCE="1"; py -3.12 main.py
 ```
 
-O jogo usa `240 FPS` como alvo padrao para reduzir stutter em PCs fracos. Para testar outro limite:
+The game targets `240 FPS` by default to reduce stuttering on lower-end hardware. To test a different frame limit:
 
 ```bash
 $env:PYOSU_TARGET_FPS="360"; py -3.12 main.py
 ```
 
-Para testar o modo de menor latencia com maior uso de CPU:
+To test the low-latency frame pacing mode (with increased CPU usage):
 
 ```bash
 $env:PYOSU_BUSY_FRAME_PACER="1"; py -3.12 main.py
@@ -94,28 +99,48 @@ $env:PYOSU_BUSY_FRAME_PACER="1"; py -3.12 main.py
 
 ## Skins
 
-Os assets padrao ficam concentrados em `assets/skins/default/`. Para testar outra skin mantendo os mesmos nomes de arquivo:
+Default assets are located in:
 
-```bash
-$env:PYOSU_SKIN_DIR="assets/skins/minha-skin"; py -3.12 main.py
+```text
+assets/skins/default/
 ```
 
-## Estrutura do projeto
+To test a different skin while keeping the same asset filenames:
 
-- `main.py`: ponto de entrada.
-- `core/`: loop principal, audio, loader de beatmaps, scene manager e calculos de gameplay.
-- `scenes/`: menus, selecao de musica/dificuldade e cena de gameplay.
-- `rendering/`: renderizacao de primitivas, cursor e sliders.
-- `assets/skins/default/`: skin padrao com imagens e sons usados pelo jogo.
-- `songs/`: beatmaps usados nos testes.
-- `ui/`: espaco reservado para componentes/temas de interface.
+```bash
+$env:PYOSU_SKIN_DIR="assets/skins/my-skin"; py -3.12 main.py
+```
 
-## Observacoes de desenvolvimento
+## Project Structure
 
-O projeto prioriza manter uma base simples e facil de evoluir. A cena de gameplay ainda concentra bastante logica, entao uma das proximas etapas será fragmentar melhor toda a estrutura de código em componentes menores, especialmente HUD, lifecycle dos objetos, julgamento de hit e renderizacao especifica de notas.
+* `main.py` – Application entry point.
+* `core/` – Main loop, audio system, beatmap loader, scene manager, and gameplay calculations.
+* `scenes/` – Menus, song/difficulty selection, and gameplay scenes.
+* `rendering/` – Rendering systems for primitives, cursor, and sliders.
+* `assets/skins/default/` – Default skin containing game images and sounds.
+* `songs/` – Beatmaps used for testing.
+* `ui/` – Reserved space for future UI components and themes.
 
-Se aparecer o aviso `libpng warning: iCCP: known incorrect sRGB profile`, ele normalmente indica um perfil de cor invalido em algum PNG carregado pelo pygame. Em geral isso nao impede o jogo de funcionar.
+## Development Notes
 
-## Aviso
+The project prioritizes keeping the codebase simple, maintainable, and easy to evolve.
 
-- Esse projeto é feito totalmente por um fã, sem qualquer intuito comercial e não possui qualquer ligação com o jogo oficial e seus responsáveis. 
+The gameplay scene still contains a significant amount of logic, so one of the next major goals is to further split the architecture into smaller, dedicated components, especially for:
+
+* HUD management
+* Object lifecycle handling
+* Hit judgment logic
+* Specialized note rendering
+
+If you encounter the warning:
+
+```text
+libpng warning: iCCP: known incorrect sRGB profile
+```
+
+it usually indicates an invalid color profile embedded in a PNG file loaded by pygame. In most cases, this does not affect gameplay.
+
+## Disclaimer
+
+* This project is entirely fan-made, created for educational and non-commercial purposes.
+* It is not affiliated with, endorsed by, or associated with the official osu! game, its developers, or its publishers in any way.
