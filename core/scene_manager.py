@@ -127,6 +127,20 @@ class SceneManager:
 
         self._draw_transition(screen)
 
+    def on_resize(self):
+        self.transition_overlay = None
+        self.transition_overlay_size = None
+
+        current = self.current_scene
+        for scene in self.scene_stack:
+            if scene is current and getattr(scene, "uses_ui", True):
+                if hasattr(scene, "destroy"):
+                    scene.destroy()
+                if hasattr(scene, "create_ui"):
+                    scene.create_ui()
+            elif hasattr(scene, "on_resize"):
+                scene.on_resize()
+
     def _start_transition(self):
         self.transition_start = pygame.time.get_ticks()
 
