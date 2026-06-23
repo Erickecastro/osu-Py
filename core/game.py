@@ -138,14 +138,20 @@ class Game:
         self.fullscreen = not self.fullscreen
 
         self.create_window()
+        self.mouse_pos = self._clamp_mouse_pos(self.mouse_pos)
 
         self.ui_manager = pygame_gui.UIManager(
             (self.WIDTH, self.HEIGHT)
         )
 
-        current_scene = (
-            self.scene_manager.current_scene
-        )
+        self._notify_resize()
+
+    def _notify_resize(self):
+        if hasattr(self.scene_manager, "on_resize"):
+            self.scene_manager.on_resize()
+            return
+
+        current_scene = self.scene_manager.current_scene
 
         if current_scene:
 
@@ -162,6 +168,16 @@ class Game:
             elif hasattr(current_scene, "on_resize"):
 
                 current_scene.on_resize()
+
+    def _sync_display_size(self):
+        size = self.screen.get_size()
+        if size == (self.WIDTH, self.HEIGHT):
+            return
+
+        self.WIDTH, self.HEIGHT = size
+        self.mouse_pos = self._clamp_mouse_pos(self.mouse_pos)
+        self.ui_manager = pygame_gui.UIManager(size)
+        self._notify_resize()
 
     def enable_raw_mouse(self, pos=None):
         if pos is None:
@@ -397,6 +413,7 @@ class Game:
     # -------------------------
     def render(self):
         current_scene = self.scene_manager.current_scene
+        self._sync_display_size()
         self.sample_mouse_now(pump=True)
 
         profiler_enabled = self.profiler.enabled
