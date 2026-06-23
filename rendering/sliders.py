@@ -565,7 +565,7 @@ class SliderRenderer:
 
         arrow_size = max(
             18,
-            int(self.scene.scaled_radius * 1.18 * pulse_scale)
+            int(self.scene.scaled_radius * 1.53 * pulse_scale)
         )
 
         repeat_index = 1
