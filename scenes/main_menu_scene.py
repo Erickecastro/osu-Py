@@ -689,6 +689,7 @@ class MainMenuScene(BaseScene):
         self.current_track_index = self._initial_track_index()
         self.option_font = None
         self.footer_font = None
+        self.layout_size = None
         self.footer_cache = {}
         self.settings_panel_cache = {}
 
@@ -732,6 +733,11 @@ class MainMenuScene(BaseScene):
     def _layout(self):
         width = self.game.WIDTH
         height = self.game.HEIGHT
+        size = (width, height)
+        if self.layout_size != size:
+            self._clear_size_dependent_caches()
+            self.layout_size = size
+
         self.circle.layout(width, height)
         self.option_font = rounded_font(
             max(28, int(self.circle.base_radius * 0.164)),
@@ -777,11 +783,15 @@ class MainMenuScene(BaseScene):
 
     def on_resume(self):
         self._prepare_mouse()
+        self._layout()
         self._sync_from_shared_music(defer_analysis=True)
         self.visualizer_analysis_delay = max(self.visualizer_analysis_delay, 0.85)
 
     def on_resize(self):
         self._layout()
+        self._clear_size_dependent_caches()
+
+    def _clear_size_dependent_caches(self):
         self.scaled_background = None
         self.dimmed_background = None
         self.background_size = None
@@ -792,6 +802,9 @@ class MainMenuScene(BaseScene):
         self.fallback_orbit_size = None
         self.overlay_cache.clear()
         self.settings_panel_cache.clear()
+        for option in self.options:
+            option._surface_cache.clear()
+            option._text_cache.clear()
 
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
