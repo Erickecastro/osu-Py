@@ -1,6 +1,7 @@
 import os
 import re
 
+from core.utils import discover_user_data_directories, resolve_user_data_path
 from core.osu_hitobjects import parse_hitobjects_section
 from core.osu_sections import (
     parse_background_event,
@@ -16,22 +17,44 @@ from core.slider_paths import SliderPathGenerator
 
 class BeatmapLoader:
 
-    SONGS_PATH = "songs"
-
     def __init__(self):
+        self.songs_path = resolve_user_data_path("songs")
         self.slider_paths = SliderPathGenerator()
         self.load_errors = []
 
     def load_songs(self):
         beatmaps = []
         self.load_errors.clear()
+        beatmaps_by_path = {}
 
-        if not os.path.exists(self.SONGS_PATH):
-            os.makedirs(self.SONGS_PATH)
+        for songs_path in discover_user_data_directories("songs"):
+            for beatmap in self._load_songs_from_directory(songs_path):
+                key = os.path.normcase(beatmap["path"])
+                if key not in beatmaps_by_path:
+                    beatmaps_by_path[key] = beatmap
+
+        beatmaps = list(beatmaps_by_path.values())
+        beatmaps.sort(key=lambda item: item["display_name"].lower())
+
+        if beatmaps:
+            self.songs_path = discover_user_data_directories("songs")[0]
+
+        return beatmaps
+
+    def _load_songs_from_directory(self, songs_path):
+        beatmaps = []
+
+        if not os.path.isdir(songs_path):
             return beatmaps
 
-        for folder in os.listdir(self.SONGS_PATH):
-            path = os.path.join(self.SONGS_PATH, folder)
+        try:
+            folders = os.listdir(songs_path)
+        except OSError as exc:
+            self.load_errors.append((songs_path, str(exc)))
+            return beatmaps
+
+        for folder in folders:
+            path = os.path.join(songs_path, folder)
             if not os.path.isdir(path):
                 continue
 
@@ -57,8 +80,24 @@ class BeatmapLoader:
                 )
                 beatmaps.append(beatmap_data)
 
-        beatmaps.sort(key=lambda item: item["display_name"].lower())
         return beatmaps
+
+    def ensure_notes_loaded(self, difficulty):
+        notes = difficulty.get("notes")
+        if notes is not None:
+            return notes
+
+        osu_file = difficulty.get("osu_file")
+        if not osu_file:
+            difficulty["notes"] = []
+            return difficulty["notes"]
+
+        lines = read_osu_lines(osu_file)
+        difficulty["notes"] = parse_hitobjects_section(
+            lines,
+            self.generate_slider_path
+        )
+        return difficulty["notes"]
 
     def load_difficulty(self, path, folder, osu_file):
         lines = read_osu_lines(osu_file)
@@ -72,10 +111,7 @@ class BeatmapLoader:
             ),
             "path": path,
             "osu_file": osu_file,
-            "notes": parse_hitobjects_section(
-                lines,
-                self.generate_slider_path
-            ),
+            "notes": None,
             "metadata": metadata,
             "general": general,
             "audio_filename": general.get("AudioFilename", ""),
@@ -95,14 +131,14 @@ class BeatmapLoader:
         artist = metadata.get("Artist") or metadata.get("ArtistUnicode") or ""
 
         title = self.clean_display_text(title)
-        artist = self.clean_display_text(artist) 
+        artist = self.clean_display_text(artist)
 
         if title and title != "Unknown" and artist and artist != "Unknown":
             return f"{artist} - {title}"
 
         if title and title != "Unknown":
             return title
- 
+
         return self.clean_folder_name(fallback)
 
     def clean_display_text(self, text):
