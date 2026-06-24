@@ -1,0 +1,92 @@
+[Events]
+//Background and Video events
+//Storyboard Layer 0 (Background)
+//Storyboard Layer 1 (Fail)
+//Storyboard Layer 2 (Pass)
+//Storyboard Layer 3 (Foreground)
+Sprite,Foreground,Centre,"sb\ciyus miapah.png",320,240
+ M,0,13768,,320,375.4666
+ S,0,13768,,0.4239998
+ F,0,13768,35101,1
+Sprite,Foreground,Centre,"sb\nattu.png",320,240
+ F,0,35101,56434,1
+ M,35101,56434,,320,375.4666
+ S,35101,56434,,0.4239998
+Sprite,Foreground,Centre,"sb\nemesis.png",320,240
+ M,56434,56434,,320,375.4666
+ S,56434,56434,,0.4239998
+ F,0,56434,79101,1
+Sprite,Foreground,Centre,"sb\tankuwi.png",320,240
+ M,79101,79101,,320,375.4666
+ S,79101,79101,,0.4239998
+ F,0,79101,107101,1
+Sprite,Foreground,Centre,"sb\ciyus miapah.png",320,240
+ M,107101,107101,,320,375.4666
+ S,107101,107101,,0.4239998
+ F,0,107101,131101,1
+Sprite,Foreground,Centre,"sb\nattu.png",320,240
+ M,131101,131101,,320,375.4666
+ S,131101,131101,,0.4239998
+ F,0,131101,157768,1
+Sprite,Foreground,Centre,"sb\nemesis.png",320,240
+ M,157768,157768,,320,375.4666
+ S,157768,157768,,0.4239998
+ F,0,157768,179101,1
+Sprite,Foreground,Centre,"sb\tankuwi.png",320,240
+ M,179101,179101,,320,375.4666
+ S,179101,179101,,0.4239998
+ F,0,179101,200434,1
+Sprite,Foreground,Centre,"sb\ciyus miapah.png",320,240
+ M,200434,200434,,320,375.4666
+ S,200434,200434,,0.4239998
+ F,0,200434,223101,1
+Sprite,Foreground,Centre,"sb\nattu.png",320,240
+ M,223101,223101,,320,375.4666
+ S,223101,223101,,0.4239998
+ F,0,223101,244434,1
+Sprite,Foreground,Centre,"sb\AsaBen.png",320,240
+ M,244434,244434,,320,375.4666
+ S,244434,244434,,0.4239998
+ F,0,244434,268434,1
+Sprite,Foreground,Centre,"sb\tankuwi.png",320,240
+ M,268434,268434,,320,375.4666
+ S,268434,268434,,0.4239998
+ F,0,268434,291101,1
+Sprite,Foreground,Centre,"sb\ciyus miapah.png",320,240
+ M,291101,291101,,320,375.4666
+ S,291101,291101,,0.4239998
+ F,0,291101,311101,1
+Sprite,Foreground,Centre,"sb\nattu.png",320,240
+ M,311101,311101,,320,375.4666
+ S,311101,311101,,0.4239998
+ F,0,311101,332434,1
+Sprite,Foreground,Centre,"sb\AsaBen.png",320,240
+ M,332434,332434,,320,375.4666
+ S,332434,332434,,0.4239998
+ F,0,332434,353768,1
+Sprite,Foreground,Centre,"sb\tankuwi.png",320,240
+ M,353768,353768,,320,375.4666
+ S,353768,353768,,0.4239998
+ F,0,353768,375101,1
+Sprite,Foreground,Centre,"sb\ciyus miapah.png",320,240
+ M,375101,375101,,320,375.4666
+ S,375101,375101,,0.4239998
+ F,0,375101,396434,1
+Sprite,Foreground,Centre,"sb\nattu.png",320,240
+ M,396434,396434,,320,375.4666
+ S,396434,396434,,0.4239998
+ F,0,396434,417768,1
+Sprite,Foreground,Centre,"sb\ciyus miapah.png",320,240
+ M,417768,417768,,320,375.4666
+ S,417768,417768,,0.4239998
+ F,0,417768,432268,1
+Sprite,Foreground,Centre,"sb\thanks for.png",320,240
+ M,432268,432268,,320,113.0667
+ S,432268,432268,,0.4239998
+ F,0,432268,435768,1
+Sprite,Foreground,Centre,"sb\playing.png",320,240
+ M,432268,432268,,320,375.4666
+ S,432268,432268,,0.4239998
+ F,0,432268,435768,1
+//Storyboard Layer 4 (Overlay)
+//Storyboard Sound Samples
