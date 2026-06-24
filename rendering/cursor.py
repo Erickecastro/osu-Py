@@ -1,5 +1,3 @@
-import os
-
 import pygame
 
 from core.assets import load_image
@@ -8,11 +6,9 @@ from core.assets import load_image
 class CursorRenderer:
     def __init__(
         self,
-        asset_dir=os.path.join("assets", "cursor"),
         cursor_scale=0.92,
         trail_scale=1.16
     ):
-        self.asset_dir = asset_dir
         self.pos = pygame.mouse.get_pos()
         self.last_emit_pos = self.pos
         self.emit_timer = 0.0

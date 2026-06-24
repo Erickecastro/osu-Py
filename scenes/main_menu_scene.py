@@ -5,7 +5,7 @@ from pathlib import Path
 import pygame
 
 from core.audio import is_sound_effect_file, mark_music_loaded
-from core.assets import ACTIVE_SKIN_DIR, asset_path, load_image
+from core.assets import ACTIVE_SKIN_DIR, ASSETS_ROOT, asset_path, load_image
 from core.fonts import rounded_font
 from rendering.menu_visualizer import CircularMenuVisualizer
 from scenes.base_scene import BaseScene
@@ -661,7 +661,7 @@ class MainMenuScene(BaseScene):
         super().__init__(game)
 
         self.assets_dir = ACTIVE_SKIN_DIR
-        self.menu_music_dir = Path("assets") / "menu"
+        self.menu_music_dir = ASSETS_ROOT / "menu"
         self.title = "OSU!"
         self.time_seconds = 0.0
         self.beat_phase = 0.0
@@ -694,7 +694,7 @@ class MainMenuScene(BaseScene):
         self.settings_panel_cache = {}
 
         self.circle = PulseCircle(self.title)
-        self.visualizer = CircularMenuVisualizer(bar_count=130)
+        self.visualizer = CircularMenuVisualizer(bar_count=88)
         self.snow = MenuSnow(self.assets_dir)
         self.snow.load()
         self.options = [
@@ -870,7 +870,8 @@ class MainMenuScene(BaseScene):
         self._sync_from_shared_music()
         if self.visualizer_analysis_delay > 0.0:
             self.visualizer_analysis_delay = max(0.0, self.visualizer_analysis_delay - dt)
-        self._ensure_visualizer_analysis()
+        if self.visualizer_analysis_delay <= 0.0:
+            self._ensure_visualizer_analysis()
         current_time_ms = self._current_music_position_ms()
         music_active = (
             self.music_started

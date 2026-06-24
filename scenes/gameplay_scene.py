@@ -81,6 +81,7 @@ class GameplayScene(BaseScene):
         self.post_ready_delay_ms = 650
 
         combo_colors = self.DEFAULT_COMBO_COLORS
+        self.game.beatmap_loader.ensure_notes_loaded(beatmap)
         self.notes = clone_notes_with_combo_data(
             beatmap["notes"],
             combo_colors
@@ -457,6 +458,16 @@ class GameplayScene(BaseScene):
             "time": self.current_time,
             "duration": self.hit_error_marker_duration
         })
+
+    def _prune_hit_error_markers(self):
+        markers = self.hit_error_markers
+        write_index = 0
+        cutoff_time = self.current_time
+        for marker in markers:
+            if cutoff_time < marker["time"] + marker["duration"]:
+                markers[write_index] = marker
+                write_index += 1
+        del markers[write_index:]
 
     def _load_hit_sound(self):
         candidates = (
@@ -2307,11 +2318,7 @@ class GameplayScene(BaseScene):
             return
 
         if self.music_started:
-            self.hit_error_markers = [
-                marker
-                for marker in self.hit_error_markers
-                if self.current_time < marker["time"] + marker["duration"]
-            ]
+            self._prune_hit_error_markers()
             self.hud_renderer.draw(
                 screen,
                 self.beatmap,

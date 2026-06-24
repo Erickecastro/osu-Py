@@ -40,16 +40,18 @@ If you use the Windows Python launcher:
 py -3.12 -m pip install -r requirements.txt
 ```
 
-## Running
+The `.venv` folder is for local development only. It is not bundled into the executable.
+
+## Running (Development)
 
 ```bash
-py -3.12 main.py
+python main.py
 ```
 
 or:
 
 ```bash
-python main.py
+py -3.12 main.py
 ```
 
 ## Controls
@@ -86,7 +88,12 @@ python main.py
 
 ## Beatmaps
 
-Beatmaps should be placed in `songs/`, preserving the original osu! extracted folder structure.
+Place beatmaps next to the executable or in the project `songs/` folder. The loader searches, in order:
+
+1. `PYOSU_SONGS_DIR` when set.
+2. `songs/` beside the executable.
+3. `songs/` in the current working directory.
+4. `../songs/` when the executable lives in `dist/`.
 
 Expected structure:
 
@@ -140,11 +147,41 @@ $env:PYOSU_BUSY_FRAME_PACER="1"
 py -3.12 main.py
 ```
 
+- `PYOSU_SONGS_DIR`: sets the beatmaps directory explicitly.
 - `PYOSU_SKIN_DIR`: sets the active skin directory.
 - `PYOSU_PROFILE=1`: starts with the profiler overlay enabled.
 - `PYOSU_DEBUG_PERFORMANCE=1`: enables performance instrumentation by default.
-- `PYOSU_TARGET_FPS`: sets the frame limit. The current code default is `1000`.
+- `PYOSU_TARGET_FPS`: sets the frame limit. The current code default is `480`.
 - `PYOSU_BUSY_FRAME_PACER=1`: uses `tick_busy_loop`, reducing frame-time variance at the cost of higher CPU usage.
+
+## Building the Windows Executable
+
+Install PyInstaller in your development environment (it is not required to run the game):
+
+```bash
+pip install pyinstaller
+```
+
+Generate a single-file executable with bundled assets:
+
+```bash
+pyinstaller --onefile --noconsole --add-data "assets;assets" main.py
+```
+
+On Linux or macOS, use `:` instead of `;` in `--add-data` (for example: `--add-data "assets:assets"`).
+
+The command above embeds everything under `assets/` into the executable. At runtime, PyInstaller extracts those files to a temporary folder and the game resolves them through `resource_path()` in `core/utils.py`.
+
+Place beatmaps next to the executable, not inside it:
+
+```text
+PyOsu.exe
+assets/          (embedded in the .exe)
+songs/           (external, same folder as the .exe)
+scores/          (optional, created at runtime)
+```
+
+After the build finishes, the executable is written to `dist/main.exe`. Rename it if you prefer (for example, `PyOsu.exe`).
 
 ## Architecture
 
@@ -152,6 +189,8 @@ py -3.12 main.py
 main.py                  Application entry point
 core/
   game.py                Main loop, window, global events, cursor, and scenes
+  utils.py               resource_path() and application_path() for PyInstaller
+  assets.py              Asset lookup, caching, and startup preload
   scene_manager.py       Scene stack and transitions
   beatmap_loader.py      Beatmap discovery and loading
   osu_sections.py        .osu section parser
@@ -194,13 +233,16 @@ songs/                   Local beatmaps
 
 The project uses several strategies to reduce stutter:
 
+- fixed frame pacing with `pygame.time.Clock()` (default `240` FPS, configurable);
 - frame `dt` clamping;
 - low mixer buffer;
+- startup preload of shared UI assets in `core/assets.py`;
 - isolated music preload/start logic in `core/audio.py`;
 - surface caching for circles, sliders, backgrounds, HUD, and text;
 - incremental precaching for heavy slider and surface work;
 - optional busy-loop frame pacing;
-- per-subsystem profiler.
+- per-subsystem profiler;
+- gameplay timing driven by `pygame.time.get_ticks()` instead of frame count.
 
 Useful commands:
 
