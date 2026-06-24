@@ -3,9 +3,23 @@ from pathlib import Path
 
 import pygame
 
+from core.utils import application_path, resource_path
 
-ASSETS_ROOT = Path("assets")
-ACTIVE_SKIN_DIR = Path(
+
+def _resolve_env_path(relative_path):
+    path = Path(relative_path)
+    if path.is_absolute():
+        return path
+
+    normalized = relative_path.replace("\\", "/")
+    if normalized == "assets" or normalized.startswith("assets/"):
+        return Path(resource_path(relative_path))
+
+    return Path(application_path(relative_path))
+
+
+ASSETS_ROOT = Path(resource_path("assets"))
+ACTIVE_SKIN_DIR = _resolve_env_path(
     os.environ.get(
         "PYOSU_SKIN_DIR",
         str(ASSETS_ROOT / "skins" / "default")
@@ -13,6 +27,17 @@ ACTIVE_SKIN_DIR = Path(
 )
 
 _IMAGE_CACHE = {}
+
+_STARTUP_PRELOADS = (
+    ("cursor.png", "cursor"),
+    ("cursortrail.png", "cursor"),
+    ("menu-bg.jpg",),
+    ("menu-snow.png", "menu"),
+    ("snow.png", "menu"),
+    ("scorebar-colour.png", "HP"),
+    ("spinner-approachcircle.png", "spinner"),
+    ("spinner-circle.png", "spinner"),
+)
 
 
 def asset_path(filename, *legacy_parts):
@@ -57,3 +82,8 @@ def load_image(filename, *legacy_parts, alpha=True):
 
     _IMAGE_CACHE[key] = image
     return image
+
+
+def preload_startup_assets():
+    for parts in _STARTUP_PRELOADS:
+        load_image(*parts)
