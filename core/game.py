@@ -1,6 +1,7 @@
 import pygame
 import pygame_gui
 
+from core.assets import preload_startup_assets
 from core.beatmap_loader import BeatmapLoader
 from core.performance import (
     DEBUG_PERFORMANCE,
@@ -40,6 +41,8 @@ class Game:
         pygame.init()
 
         pygame.mixer.init()
+        self._configure_event_filters()
+        preload_startup_assets()
 
         # -------------------------
         # DISPLAY
@@ -98,6 +101,27 @@ class Game:
         self.scene_manager.set_scene(
             MainMenuScene(self)
         )
+
+    def _configure_event_filters(self):
+        blocked_events = []
+        for name in (
+            "WINDOWFOCUSLOST",
+            "WINDOWFOCUSGAINED",
+            "WINDOWENTER",
+            "WINDOWLEAVE",
+            "WINDOWSHOWN",
+            "WINDOWHIDDEN",
+            "WINDOWEXPOSED",
+            "WINDOWMINIMIZED",
+            "WINDOWMAXIMIZED",
+            "WINDOWRESTORED",
+        ):
+            event_type = getattr(pygame, name, None)
+            if event_type is not None:
+                blocked_events.append(event_type)
+
+        if blocked_events:
+            pygame.event.set_blocked(blocked_events)
 
     # -------------------------
     # CREATE WINDOW
@@ -270,8 +294,12 @@ class Game:
     # MAIN LOOP
     # -------------------------
     def run(self):
-
         while self.running:
+            if USE_BUSY_FRAME_PACER:
+                elapsed_ms = self.clock.tick_busy_loop(self.FPS)
+            else:
+                elapsed_ms = self.clock.tick(self.FPS)
+            self.dt = min(MAX_FRAME_DT, elapsed_ms / 1000.0)
 
             profiler_enabled = self.profiler.enabled
             if profiler_enabled:
@@ -295,16 +323,6 @@ class Game:
             if profiler_enabled:
                 self.profiler.end("render")
 
-            if profiler_enabled:
-                self.profiler.start("pacer")
-            if USE_BUSY_FRAME_PACER:
-                elapsed_ms = self.clock.tick_busy_loop(self.FPS)
-            else:
-                elapsed_ms = self.clock.tick(self.FPS)
-            if profiler_enabled:
-                self.profiler.end("pacer")
-
-            self.dt = min(MAX_FRAME_DT, elapsed_ms / 1000)
             if profiler_enabled:
                 current_scene = self.scene_manager.current_scene
                 scene_name = (
@@ -388,8 +406,6 @@ class Game:
                     event
                 )
 
-        self.sample_mouse_now()
-
     # -------------------------
     # UPDATE
     # -------------------------
@@ -413,8 +429,8 @@ class Game:
     # -------------------------
     def render(self):
         current_scene = self.scene_manager.current_scene
-        self._sync_display_size()
-        self.sample_mouse_now(pump=True)
+        if self.fullscreen:
+            self._sync_display_size()
 
         profiler_enabled = self.profiler.enabled
         if profiler_enabled:
@@ -448,7 +464,6 @@ class Game:
             )
 
         if not getattr(current_scene, "draws_own_cursor", False):
-            self.sample_mouse_now()
             self.cursor_renderer.draw(self.screen, self.mouse_pos)
 
         if profiler_enabled:
