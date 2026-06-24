@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.osu_sections import read_osu_lines, section_lines
+from core.utils import application_path
 
 
 @dataclass
@@ -71,7 +72,7 @@ class BeatmapParser:
         metadata = difficulty.get("metadata", {})
         diff = difficulty.get("difficulty", {})
         timing_points = difficulty.get("timing_points", [])
-        notes = difficulty.get("notes", [])
+        notes = difficulty.get("notes")
         osu_file = difficulty.get("osu_file", "")
         lines = read_osu_lines(osu_file) if osu_file else []
         raw_counts = cls._hitobject_counts(lines)
@@ -86,7 +87,11 @@ class BeatmapParser:
         tags = cls._clean(metadata.get("Tags") or "")
 
         bpm_min, bpm_max = cls._bpm_range(timing_points)
-        length_ms = cls._length_ms(notes)
+        length_ms = (
+            cls._length_ms(notes)
+            if notes
+            else cls._length_ms_from_lines(lines)
+        )
         circle_count = raw_counts.get("circle", 0)
         slider_count = raw_counts.get("slider", 0)
         spinner_count = raw_counts.get("spinner", 0)
@@ -192,6 +197,21 @@ class BeatmapParser:
         return f"{int(round(bpm_min))}-{int(round(bpm_max))}"
 
     @staticmethod
+    def _length_ms_from_lines(lines):
+        times = []
+        for line in section_lines(lines, "HitObjects"):
+            parts = line.split(",")
+            if len(parts) < 3:
+                continue
+            try:
+                times.append(int(parts[2]))
+            except ValueError:
+                continue
+        if not times:
+            return 0
+        return max(0, max(times) - min(times))
+
+    @staticmethod
     def _length_ms(notes):
         if not notes:
             return 0
@@ -228,8 +248,8 @@ class BeatmapParser:
 
 
 class LocalScoreManager:
-    def __init__(self, path="scores/local_scores.json"):
-        self.path = Path(path)
+    def __init__(self, path=None):
+        self.path = Path(path or application_path("scores/local_scores.json"))
         self.scores = {}
         self.load()
 
