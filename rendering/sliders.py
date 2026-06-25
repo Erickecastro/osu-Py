@@ -567,11 +567,29 @@ class SliderRenderer:
             18,
             int(self.scene.scaled_radius * 1.53 * pulse_scale)
         )
+        if arrow_size >= 32:
+            arrow_size = max(1, int(round(arrow_size / 2.0)) * 2)
 
         repeat_index = 1
         if slider_start_time is not None and span_duration:
             elapsed = self.scene.current_time - slider_start_time
             repeat_index = int(max(0.0, elapsed) / max(1.0, span_duration)) + 1
+            if repeat_index < 1 or repeat_index >= repeat_count:
+                return
+
+            checkpoint_time = slider_start_time + (span_duration * repeat_index)
+            time_until_pass = checkpoint_time - self.scene.current_time
+            if time_until_pass <= 0:
+                return
+
+            pass_fade = max(
+                0.0,
+                min(1.0, time_until_pass / max(55.0, span_duration * 0.08))
+            )
+            pulse_alpha = int(pulse_alpha * pass_fade)
+            if pulse_alpha <= 0:
+                return
+        else:
             repeat_index = max(1, min(repeat_index, repeat_count - 1))
 
         if repeat_index % 2 == 1:
