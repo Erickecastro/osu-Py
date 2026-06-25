@@ -33,6 +33,34 @@ def effective_beat_length_at(timing_points, time_ms):
     return base_beat_len / sv_mult
 
 
+def slider_velocity_multiplier_at(timing_points, time_ms):
+    if not timing_points:
+        return 1.0
+
+    inherited_tp = None
+
+    for tp in timing_points:
+        if tp["time"] > time_ms:
+            break
+        if tp.get("uninherited", 1) == 1:
+            inherited_tp = None
+        else:
+            inherited_tp = tp
+
+    if inherited_tp is None:
+        return 1.0
+
+    mpb = float(inherited_tp.get("ms_per_beat", 0.0))
+    if mpb >= 0:
+        return 1.0
+
+    sv_mult = -100.0 / mpb if mpb != 0 else 1.0
+    if sv_mult <= 0:
+        return 1.0
+
+    return sv_mult
+
+
 def slider_span_duration(
     timing_points,
     slider_multiplier,
