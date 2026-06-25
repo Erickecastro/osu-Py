@@ -10,6 +10,7 @@ MIXER_FREQUENCY = 44100
 MIXER_SIZE = -16
 MIXER_CHANNELS = 2
 MIXER_BUFFER = 256
+AUDIO_OFFSET_MS = float(os.environ.get("PYOSU_AUDIO_OFFSET_MS", "0"))
 
 
 def configure_low_latency_environment():
