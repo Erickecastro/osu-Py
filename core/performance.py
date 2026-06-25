@@ -11,6 +11,9 @@ MIXER_SIZE = -16
 MIXER_CHANNELS = 2
 MIXER_BUFFER = 256
 AUDIO_OFFSET_MS = float(os.environ.get("PYOSU_AUDIO_OFFSET_MS", "0"))
+HIT_ERROR_DISPLAY_OFFSET_MS = float(
+    os.environ.get("PYOSU_HIT_ERROR_DISPLAY_OFFSET_MS", "-8")
+)
 
 
 def configure_low_latency_environment():
@@ -20,3 +23,6 @@ def configure_low_latency_environment():
     os.environ.setdefault("SDL_RENDER_SCALE_QUALITY", "0")
     os.environ.setdefault("SDL_HINT_FRAMEBUFFER_ACCELERATION", "1")
     os.environ.setdefault("SDL_VIDEO_MINIMIZE_ON_FOCUS_LOSS", "0")
+    os.environ.setdefault("SDL_TIMER_RESOLUTION", "1")
+    os.environ.setdefault("SDL_MOUSE_TOUCH_EVENTS", "0")
+    os.environ.setdefault("SDL_TOUCH_MOUSE_EVENTS", "0")
