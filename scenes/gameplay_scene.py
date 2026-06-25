@@ -1382,7 +1382,7 @@ class GameplayScene(BaseScene):
         )
 
     def _slider_scorepoint_diameter(self):
-        return max(6, int(round(self.slider_path_radius * 0.46)))
+        return max(6, int(round(self.slider_path_radius * 0.50)))
 
     def _cropped_alpha_image(self, image):
         if image is None:
@@ -1781,6 +1781,19 @@ class GameplayScene(BaseScene):
             "start_time",
             note["time"] - self.approach_time
         )
+        approach_len = max(1.0, note["time"] - visual_start)
+        fade_fraction = 0.50 + (self._clamp01(self.ar / 10.0) * 0.30)
+        path_fade_len = max(
+            120.0,
+            min(
+                approach_len,
+                approach_len
+                * fade_fraction
+                * self.HITOBJECT_FADE_IN_DURATION_SCALE
+            )
+        )
+        path_ready_time = visual_start + path_fade_len + 22.0
+
         for span_index in range(repeat_count):
             span_start = note["time"] + (span_duration * span_index)
             distance = tick_distance
@@ -1794,27 +1807,18 @@ class GameplayScene(BaseScene):
                     else 1.0 - span_progress
                 )
                 span_visual_start = (
-                    visual_start
+                    path_ready_time
                     if span_index == 0
-                    else span_start + 24.0
-                )
-                appear_lead = min(
-                    700.0,
-                    max(
-                        220.0,
-                        span_duration * 0.67
-                    )
+                    else span_start + 34.0
                 )
                 scorepoints.append({
                     "time": tick_time,
-                    "appear_time": max(
-                        span_visual_start + 55.0,
-                        tick_time - appear_lead
-                    ),
+                    "appear_time": span_visual_start,
                     "fade_in_duration": max(
                         20.0,
                         min(35.0, span_duration * 0.046)
                     ),
+                    "fade_out_duration": 68.0,
                     "span_index": span_index,
                     "path_fraction": path_fraction,
                     "processed": False,
@@ -1874,6 +1878,7 @@ class GameplayScene(BaseScene):
     def _collect_slider_scorepoint(self, note, scorepoint):
         scorepoint["processed"] = True
         scorepoint["collected"] = True
+        scorepoint["processed_time"] = self.current_time
         self.combo += 1
         self.max_combo = max(self.max_combo, self.combo)
         self.score += 10 + max(0, self.combo - 1)
@@ -1881,6 +1886,7 @@ class GameplayScene(BaseScene):
     def _miss_slider_scorepoint(self, note, scorepoint, pos):
         scorepoint["processed"] = True
         scorepoint["missed"] = True
+        scorepoint["processed_time"] = self.current_time
         self._register_slider_follow_miss(
             note,
             pos,
@@ -1980,9 +1986,8 @@ class GameplayScene(BaseScene):
         current_span = self._current_slider_scorepoint_span(note)
 
         for scorepoint in scorepoints:
-            if scorepoint.get("processed"):
-                continue
-            if scorepoint.get("span_index", 0) != current_span:
+            processed = bool(scorepoint.get("processed"))
+            if not processed and scorepoint.get("span_index", 0) != current_span:
                 continue
             appear_time = scorepoint.get("appear_time", note["time"])
             if self.current_time < appear_time:
@@ -1996,7 +2001,19 @@ class GameplayScene(BaseScene):
                 (self.current_time - appear_time)
                 / max(1.0, scorepoint.get("fade_in_duration", 64.0))
             )
-            point_alpha = int(draw_alpha * point_fade)
+            point_fade_out = 1.0
+            if processed:
+                processed_time = scorepoint.get("processed_time")
+                if processed_time is None:
+                    continue
+                point_fade_out = 1.0 - self._smoothstep(
+                    (self.current_time - processed_time)
+                    / max(1.0, scorepoint.get("fade_out_duration", 68.0))
+                )
+                if point_fade_out <= 0:
+                    continue
+
+            point_alpha = int(draw_alpha * point_fade * point_fade_out)
             if point_alpha <= 0:
                 continue
 
