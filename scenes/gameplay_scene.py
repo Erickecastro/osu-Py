@@ -48,7 +48,7 @@ class GameplayScene(BaseScene):
     uses_ui = False
     _sound_cache = {}
 
-    GAMEPLAY_OBJECT_SCALE = 0.90
+    GAMEPLAY_OBJECT_SCALE = 0.945
     GAMEPLAY_OBJECT_ALPHA_SCALE = 0.86
     FOLLOWPOINT_THICKNESS_SCALE = 0.85
 
@@ -212,6 +212,7 @@ class GameplayScene(BaseScene):
         self.hit_number_fade_out_time = 120  # ms
         self.hit_explosion_duration = 360  # ms
         self.slider_follow_return_grace_ms = 350  # ms
+        self.slider_follow_tail_leniency_ms = 520  # ms
 
         self.usable_width = (
             self.playfield_width * self.scale
@@ -1986,7 +1987,10 @@ class GameplayScene(BaseScene):
         if self.slider_precache_complete:
             return
 
-        self._collect_slider_cache_results(max_ms=0.55, max_items=2)
+        self._collect_slider_cache_results(
+            max_ms=min(0.35, max(0.12, max_ms * 0.45)),
+            max_items=1
+        )
 
         now = pygame.time.get_ticks()
         if now < self.slider_cache_cooldown_until:
@@ -2325,8 +2329,8 @@ class GameplayScene(BaseScene):
             self.music_started = True
             self._publish_current_track_state()
 
-        self._warm_slider_cache(max_ms=1, max_items=4)
-        self._warm_followpoint_connections(max_ms=1, max_items=16)
+        self._warm_slider_cache(max_ms=0.45, max_items=1)
+        self._warm_followpoint_connections(max_ms=0.35, max_items=8)
         self._warm_background_surface()
 
         if self.start_time is not None:
@@ -2518,7 +2522,7 @@ class GameplayScene(BaseScene):
 
         overlay = self.overlay_surface
         overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
-        self._collect_slider_cache_results(max_ms=0.45, max_items=2)
+        self._collect_slider_cache_results(max_ms=0.25, max_items=1)
 
         profiler = getattr(self.game, "profiler", None)
         profiler_enabled = bool(profiler and profiler.enabled)
@@ -2832,8 +2836,15 @@ class GameplayScene(BaseScene):
                     follow_radius = self.slider_follow_radius
                     slider_end_time = note["time"] + slider_total_duration
                     end_tolerance_ms = max(
-                        120,
-                        min(240, span_duration * 0.12)
+                        300,
+                        min(
+                            self.slider_follow_tail_leniency_ms,
+                            max(span_duration * 0.24, 360)
+                        )
+                    )
+                    combo_break_ms = max(
+                        self.slider_follow_return_grace_ms * 2,
+                        min(900, max(520, span_duration * 0.34))
                     )
                     show_slider_follow = (
                         note.get("head_hit")
@@ -2853,8 +2864,13 @@ class GameplayScene(BaseScene):
                             + slider_total_duration
                             - self.current_time
                         )
+                        near_tail = remaining <= end_tolerance_ms
                         if outside:
-                            if not note.get("slider_follow_missed"):
+                            if near_tail:
+                                note["slider_follow_released_near_end"] = True
+                                note["slider_follow_outside_since"] = None
+                                note["slider_follow_outside_reason"] = None
+                            elif not note.get("slider_follow_missed"):
                                 outside_since = note.get(
                                     "slider_follow_outside_since"
                                 )
@@ -2881,21 +2897,14 @@ class GameplayScene(BaseScene):
                                     outside_elapsed
                                     >= self.slider_follow_return_grace_ms
                                 ):
-                                    outside_reason = note.get(
-                                        "slider_follow_outside_reason"
-                                    )
                                     early_release = (
-                                        outside_reason
-                                        == "release"
-                                        and remaining <= end_tolerance_ms
+                                        outside_elapsed < combo_break_ms
                                     )
                                     self._register_slider_follow_miss(
                                         note,
                                         ball_pos,
                                         early_release=early_release
                                     )
-                                elif remaining <= end_tolerance_ms:
-                                    note["slider_follow_released_near_end"] = True
                         else:
                             note["slider_follow_outside_since"] = None
                             note["slider_follow_outside_reason"] = None
@@ -2905,20 +2914,23 @@ class GameplayScene(BaseScene):
                         and note.get("slider_follow_outside_since") is not None
                     ):
                         outside_since = note.get("slider_follow_outside_since")
-                        outside_reason = note.get("slider_follow_outside_reason")
                         outside_duration_at_end = max(
                             0.0,
                             slider_end_time - outside_since
                         )
-                        early_release = (
-                            outside_reason == "release"
-                            and outside_duration_at_end <= end_tolerance_ms
-                        )
-                        self._register_slider_follow_miss(
-                            note,
-                            ball_pos,
-                            early_release=early_release
-                        )
+                        if outside_duration_at_end <= end_tolerance_ms:
+                            note["slider_follow_released_near_end"] = True
+                            note["slider_follow_outside_since"] = None
+                            note["slider_follow_outside_reason"] = None
+                        else:
+                            early_release = (
+                                outside_duration_at_end < combo_break_ms
+                            )
+                            self._register_slider_follow_miss(
+                                note,
+                                ball_pos,
+                                early_release=early_release
+                            )
 
                     outside_since = note.get("slider_follow_outside_since")
                     follow_alpha = slider_ball_alpha * 0.82
