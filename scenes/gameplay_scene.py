@@ -27,7 +27,10 @@ from core.performance import (
     AUDIO_OFFSET_MS,
     HIT_ERROR_DISPLAY_OFFSET_MS
 )
-from core.beatmap_timing import effective_beat_length_at
+from core.beatmap_timing import (
+    effective_beat_length_at,
+    slider_velocity_multiplier_at
+)
 from core.gameplay_state import (
     activate_due_notes,
     judge_missed_notes,
@@ -59,6 +62,7 @@ class GameplayScene(BaseScene):
 
     GAMEPLAY_OBJECT_SCALE = 0.97335
     GAMEPLAY_OBJECT_ALPHA_SCALE = 0.86
+    HITOBJECT_VISUAL_ALPHA_SCALE = 0.82
     FOLLOWPOINT_THICKNESS_SCALE = 0.85
     HITOBJECT_FADE_IN_DURATION_SCALE = 0.50
 
@@ -1760,7 +1764,14 @@ class GameplayScene(BaseScene):
 
         tick_distance = max(
             1.0,
-            (100.0 * slider_multiplier) / tick_rate
+            (
+                100.0
+                * slider_multiplier
+                * slider_velocity_multiplier_at(
+                    self.timing_points,
+                    note["time"]
+                )
+            ) / tick_rate
         )
         if tick_distance >= pixel_length - 1.0:
             return []
@@ -1768,8 +1779,8 @@ class GameplayScene(BaseScene):
         endpoint_margin = max(
             6.0,
             min(
-                pixel_length * 0.09,
-                tick_distance * 0.22
+                pixel_length * 0.06,
+                tick_distance * 0.125
             )
         )
         tick_end_distance = pixel_length - endpoint_margin
@@ -3400,17 +3411,27 @@ class GameplayScene(BaseScene):
 
             alpha = self._object_alpha(self._note_alpha(note))
             alpha = int(alpha * fail_alpha_factor)
+            approach_source_alpha = alpha
+            alpha = int(alpha * self.HITOBJECT_VISUAL_ALPHA_SCALE)
             slider_ball_alpha = 0
             slider_track_alpha = alpha
+            slider_scorepoint_alpha = alpha
             if note["type"] == "slider":
                 slider_ball_alpha = self._object_alpha(
                     self._slider_ball_alpha(note)
                 )
-                slider_track_alpha = self._object_alpha(
+                slider_track_base_alpha = self._object_alpha(
                     self._slider_track_alpha(note)
                 )
                 slider_ball_alpha = int(slider_ball_alpha * fail_alpha_factor)
-                slider_track_alpha = int(slider_track_alpha * fail_alpha_factor)
+                slider_track_base_alpha = int(
+                    slider_track_base_alpha * fail_alpha_factor
+                )
+                slider_scorepoint_alpha = slider_track_base_alpha
+                slider_track_alpha = int(
+                    slider_track_base_alpha
+                    * self.HITOBJECT_VISUAL_ALPHA_SCALE
+                )
 
             miss_pop_alpha = 0
             if note.get("hit_result") == 0:
@@ -3444,7 +3465,8 @@ class GameplayScene(BaseScene):
 
             if alpha > 0 and draw_note_approach:
                 approach_alpha = int(
-                    alpha * (0.42 + (0.58 * self._clamp01(progress)))
+                    approach_source_alpha
+                    * (0.42 + (0.58 * self._clamp01(progress)))
                 )
                 approach_draws.append((
                     (scaled_x, scaled_y),
@@ -3581,7 +3603,7 @@ class GameplayScene(BaseScene):
                 self._draw_slider_scorepoints(
                     overlay,
                     note,
-                    slider_track_alpha,
+                    slider_scorepoint_alpha,
                     screen_offset=scorepoint_offset
                 )
 
