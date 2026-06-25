@@ -31,35 +31,67 @@ class SpinnerRenderer:
         duration = max(1, end - start)
         radius = int(min(self.scene.game.WIDTH, self.scene.game.HEIGHT) * 0.3705)
         progress = self.scene._clamp01((current - start) / duration)
+        approach_progress = self.scene._smoothstep(progress)
+        fade_in = self.scene._ease_out_cubic((current - start) / 150.0)
+        fade_out = 1.0
+        fade_out_start = note.get("fade_out_start")
+        if fade_out_start is not None:
+            fade_out_duration = max(1.0, float(note.get("fade_out_duration", 260)))
+            fade_out_progress = self.scene._clamp01(
+                (current - fade_out_start) / fade_out_duration
+            )
+            fade_out = (1.0 - fade_out_progress) ** 1.35
+        object_alpha_scale = getattr(self.scene, "object_alpha_scale", 1.0)
+        alpha = int(255 * fade_in * fade_out * object_alpha_scale)
         visual_angle = -math.degrees(note.get("spinner_visual_angle", 0.0))
-
-        self._draw_image_centered(
-            target,
-            self.images["approach"],
-            center,
-            int(radius * (3.25 - 1.62 * progress)),
-            alpha=235
+        approach_close_fade = 1.0 - self.scene._smoothstep(
+            self.scene._clamp01((progress - 0.94) / 0.06)
         )
+        approach_alpha = int(
+            235
+            * fade_in
+            * fade_out
+            * object_alpha_scale
+            * approach_close_fade
+        )
+
+        if approach_alpha > 0:
+            self._draw_image_centered(
+                target,
+                self.images["approach"],
+                center,
+                int(radius * (3.35 - 3.17 * approach_progress)),
+                alpha=approach_alpha,
+                quantize_step=4
+            )
         if not self._draw_rotated_centered(
             target,
             self.images["circle"],
             center,
             int(radius * 1.35),
             visual_angle,
-            alpha=255
+            alpha=alpha
         ):
             pygame.draw.circle(
                 target,
-                (235, 235, 245, 175),
+                (235, 235, 245, int(175 * fade_in * fade_out * object_alpha_scale)),
                 center,
                 int(radius * 0.68),
                 max(6, radius // 28)
             )
 
-    def _draw_image_centered(self, target, image, center, diameter, alpha=255):
+    def _draw_image_centered(
+        self,
+        target,
+        image,
+        center,
+        diameter,
+        alpha=255,
+        quantize_step=None
+    ):
         if image is None:
             return False
-        scaled = self._scaled(image, diameter)
+        scaled = self._scaled(image, diameter, quantize_step=quantize_step)
         previous_alpha = scaled.get_alpha()
         if alpha != 255:
             scaled.set_alpha(alpha)
@@ -71,7 +103,7 @@ class SpinnerRenderer:
     def _draw_rotated_centered(self, target, image, center, diameter, angle, alpha=255):
         if image is None:
             return False
-        angle_key = int(round(angle / 2.0) * 2) % 360
+        angle_key = int(round(angle / 4.0) * 4) % 360
         key = ("rotated", id(image), max(1, int(diameter)), angle_key)
         rotated = self.cache.get(key)
         if rotated is None:
@@ -87,8 +119,15 @@ class SpinnerRenderer:
             rotated.set_alpha(previous_alpha)
         return True
 
-    def _scaled(self, image, diameter):
+    def _scaled(self, image, diameter, quantize_step=None):
         diameter = max(1, int(diameter))
+        if quantize_step is not None:
+            step = max(1, int(quantize_step))
+            diameter = max(1, int(round(diameter / step)) * step)
+        elif diameter >= 128:
+            diameter = max(1, int(round(diameter / 8.0)) * 8)
+        elif diameter >= 48:
+            diameter = max(1, int(round(diameter / 4.0)) * 4)
         key = (id(image), diameter)
         cached = self.cache.get(key)
         if cached is None:
