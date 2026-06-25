@@ -372,6 +372,36 @@ class SongSelectScene(BaseScene):
                     return
                 self.game.scene_manager.pop_scene()
                 return
+            if event.key == pygame.K_f and pygame.key.get_mods() & pygame.KMOD_CTRL:
+                self.search_active = True
+                return
+
+            if self.search_active:
+                if event.key == pygame.K_BACKSPACE:
+                    self.search_text = self.search_text[:-1]
+                    self._apply_filter()
+                    return
+                if event.key == pygame.K_RETURN:
+                    self._play_selected()
+                    return
+                if event.key == pygame.K_TAB:
+                    self._cycle_sort()
+                    return
+                if (
+                    event.unicode
+                    and event.unicode.isprintable()
+                    and event.unicode not in "\r\n\t"
+                ):
+                    self.search_text += event.unicode
+                    self._apply_filter()
+                    return
+                if event.key == pygame.K_DOWN:
+                    self._move_browse(1)
+                    return
+                if event.key == pygame.K_UP:
+                    self._move_browse(-1)
+                    return
+
             if event.key in (pygame.K_DOWN, pygame.K_s):
                 self._move_browse(1)
                 return
@@ -380,13 +410,6 @@ class SongSelectScene(BaseScene):
                 return
             if event.key == pygame.K_RETURN:
                 self._play_selected()
-                return
-            if event.key == pygame.K_f and pygame.key.get_mods() & pygame.KMOD_CTRL:
-                self.search_active = True
-                return
-            if event.key == pygame.K_BACKSPACE and self.search_active:
-                self.search_text = self.search_text[:-1]
-                self._apply_filter()
                 return
             if event.key == pygame.K_TAB:
                 self._cycle_sort()

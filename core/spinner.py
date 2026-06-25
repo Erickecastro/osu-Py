@@ -139,7 +139,7 @@ class SpinnerManager:
         if progress >= 1.0:
             note["spinner_goal_reached"] = True
             over = max(0.0, note["spinner_rotation"] - required)
-            bonus_count = int(over / 0.62)
+            bonus_count = int(over)
             if bonus_count > note.get("spinner_bonus_count", 0):
                 note["spinner_bonus_count"] = bonus_count
                 self.scene.score += 1000

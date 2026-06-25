@@ -353,7 +353,12 @@ class Game:
         for event in pygame.event.get():
             if (
                 self.raw_mouse_enabled
-                and event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN)
+                and event.type in (
+                    pygame.KEYDOWN,
+                    pygame.KEYUP,
+                    pygame.MOUSEBUTTONDOWN,
+                    pygame.MOUSEBUTTONUP
+                )
             ):
                 self.sample_mouse_now()
 
