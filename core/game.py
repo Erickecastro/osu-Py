@@ -39,6 +39,10 @@ class Game:
             buffer=MIXER_BUFFER
         )
         pygame.init()
+        try:
+            pygame.joystick.quit()
+        except pygame.error:
+            pass
 
         pygame.mixer.init()
         self._configure_event_filters()
@@ -115,6 +119,27 @@ class Game:
             "WINDOWMINIMIZED",
             "WINDOWMAXIMIZED",
             "WINDOWRESTORED",
+            "JOYAXISMOTION",
+            "JOYBALLMOTION",
+            "JOYHATMOTION",
+            "JOYBUTTONDOWN",
+            "JOYBUTTONUP",
+            "JOYDEVICEADDED",
+            "JOYDEVICEREMOVED",
+            "CONTROLLERAXISMOTION",
+            "CONTROLLERBUTTONDOWN",
+            "CONTROLLERBUTTONUP",
+            "CONTROLLERDEVICEADDED",
+            "CONTROLLERDEVICEREMOVED",
+            "CONTROLLERDEVICEREMAPPED",
+            "FINGERDOWN",
+            "FINGERUP",
+            "FINGERMOTION",
+            "MULTIGESTURE",
+            "DROPFILE",
+            "DROPTEXT",
+            "DROPBEGIN",
+            "DROPCOMPLETE",
         ):
             event_type = getattr(pygame, name, None)
             if event_type is not None:
