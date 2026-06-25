@@ -985,24 +985,19 @@ class GameplayScene(BaseScene):
         if time_until <= 0:
             return 1.0
 
-        approach_len = max(1.0, float(self.approach_time))
-        fade_len = max(
-            1.0,
-            approach_len * self.HITOBJECT_FADE_IN_DURATION_SCALE
-        )
-        approach_progress = 1.0 - self._clamp01(time_until / fade_len)
-        visibility = self._smootherstep(approach_progress)
-
-        multiplier = 0.34 + (0.66 * visibility)
-
         stream_depth = float(note.get("stream_readability_depth", 0.0))
-        if stream_depth > 0:
-            # Future stream/burst objects should be readable but not dominate
-            # the currently hittable object before their own timing window.
-            overlap_dim = min(0.34, stream_depth * 0.075)
-            multiplier *= 1.0 - (overlap_dim * (1.0 - visibility))
+        if stream_depth <= 0:
+            return 1.0
 
-        return max(0.18, min(1.0, multiplier))
+        # The AR-aware fade-in owns object visibility. This multiplier is only
+        # a subtle stream/burst readability bias, so future notes do not become
+        # a dark mass or stay half-transparent after their own fade has ended.
+        approach_len = max(1.0, float(self.approach_time))
+        approach_progress = 1.0 - self._clamp01(time_until / approach_len)
+        future_weight = 1.0 - self._smoothstep(approach_progress)
+        overlap_dim = min(0.14, stream_depth * 0.032) * future_weight
+
+        return max(0.84, min(1.0, 1.0 - overlap_dim))
 
     def _fade_in_progress(self, note):
         start = note.get("start_time", note["time"] - self.approach_time)
