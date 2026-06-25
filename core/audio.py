@@ -4,6 +4,7 @@ import pygame
 
 
 _LOADED_MUSIC_PATH = None
+_LAST_START_OFFSET_MS = 0
 
 SOUND_EFFECT_NAME_PARTS = (
     "hitnormal",
@@ -65,17 +66,23 @@ def _normalise_music_path(music_path):
 
 
 def mark_music_loaded(music_path):
-    global _LOADED_MUSIC_PATH
+    global _LOADED_MUSIC_PATH, _LAST_START_OFFSET_MS
     _LOADED_MUSIC_PATH = _normalise_music_path(music_path)
+    _LAST_START_OFFSET_MS = 0
 
 
 def clear_loaded_music():
-    global _LOADED_MUSIC_PATH
+    global _LOADED_MUSIC_PATH, _LAST_START_OFFSET_MS
     _LOADED_MUSIC_PATH = None
+    _LAST_START_OFFSET_MS = 0
+
+
+def get_last_start_offset_ms():
+    return _LAST_START_OFFSET_MS
 
 
 def preload_music(music_path):
-    global _LOADED_MUSIC_PATH
+    global _LOADED_MUSIC_PATH, _LAST_START_OFFSET_MS
     normalized = _normalise_music_path(music_path)
     if not normalized:
         return False
@@ -87,15 +94,18 @@ def preload_music(music_path):
         pygame.mixer.music.stop()
         pygame.mixer.music.load(normalized)
         _LOADED_MUSIC_PATH = normalized
+        _LAST_START_OFFSET_MS = 0
         return True
     except pygame.error:
         _LOADED_MUSIC_PATH = None
+        _LAST_START_OFFSET_MS = 0
         return False
 
 
 def start_music(music_path, start_ms=0):
-    global _LOADED_MUSIC_PATH
+    global _LOADED_MUSIC_PATH, _LAST_START_OFFSET_MS
     if not music_path:
+        _LAST_START_OFFSET_MS = 0
         return None
 
     try:
@@ -114,8 +124,10 @@ def start_music(music_path, start_ms=0):
         except pygame.error:
             actual_start_ms = 0
             pygame.mixer.music.play()
+        _LAST_START_OFFSET_MS = actual_start_ms
         return pygame.time.get_ticks() - actual_start_ms
     except Exception as exc:
         _LOADED_MUSIC_PATH = None
+        _LAST_START_OFFSET_MS = 0
         print(exc)
         return None
