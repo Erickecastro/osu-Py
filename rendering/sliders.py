@@ -563,35 +563,79 @@ class SliderRenderer:
         pulse_scale = 1.0 + (0.12 * pulse)
         pulse_alpha = int(alpha * (0.72 + (0.28 * pulse)))
 
-        arrow_size = max(
+        base_arrow_size = max(
             18,
             int(self.scene.scaled_radius * 1.53 * pulse_scale)
         )
-        if arrow_size >= 32:
-            arrow_size = max(1, int(round(arrow_size / 2.0)) * 2)
-
-        repeat_index = 1
-        if slider_start_time is not None and span_duration:
-            elapsed = self.scene.current_time - slider_start_time
-            repeat_index = int(max(0.0, elapsed) / max(1.0, span_duration)) + 1
-            if repeat_index < 1 or repeat_index >= repeat_count:
-                return
-
-            checkpoint_time = slider_start_time + (span_duration * repeat_index)
-            time_until_pass = checkpoint_time - self.scene.current_time
-            if time_until_pass <= 0:
-                return
-
-            pass_fade = max(
-                0.0,
-                min(1.0, time_until_pass / max(55.0, span_duration * 0.08))
+        if base_arrow_size >= 32:
+            base_arrow_size = max(
+                1,
+                int(round(base_arrow_size / 2.0)) * 2
             )
-            pulse_alpha = int(pulse_alpha * pass_fade)
-            if pulse_alpha <= 0:
-                return
-        else:
-            repeat_index = max(1, min(repeat_index, repeat_count - 1))
 
+        if slider_start_time is not None and span_duration:
+            if self.scene.current_time < slider_start_time:
+                self._draw_reverse_marker_at_index(
+                    target,
+                    slider_points,
+                    1,
+                    base_arrow_size,
+                    pulse_alpha
+                )
+                return
+
+            elapsed = self.scene.current_time - slider_start_time
+            span = max(1.0, float(span_duration))
+            pass_burst_duration = max(
+                90.0,
+                min(150.0, span * 0.12)
+            )
+            for repeat_index in range(1, repeat_count):
+                checkpoint_time = slider_start_time + (span * repeat_index)
+                time_until_pass = checkpoint_time - self.scene.current_time
+                if time_until_pass > span or time_until_pass < -pass_burst_duration:
+                    continue
+
+                marker_alpha = pulse_alpha
+                marker_size = base_arrow_size
+                if time_until_pass < 0:
+                    pass_progress = self.scene._clamp01(
+                        -time_until_pass / pass_burst_duration
+                    )
+                    eased = self.scene._smoothstep(pass_progress)
+                    marker_size = int(base_arrow_size * (1.0 + 0.32 * eased))
+                    marker_alpha = int(
+                        marker_alpha * ((1.0 - pass_progress) ** 1.35)
+                    )
+
+                if marker_alpha <= 0:
+                    continue
+
+                self._draw_reverse_marker_at_index(
+                    target,
+                    slider_points,
+                    repeat_index,
+                    marker_size,
+                    marker_alpha
+                )
+            return
+
+        self._draw_reverse_marker_at_index(
+            target,
+            slider_points,
+            1,
+            base_arrow_size,
+            pulse_alpha
+        )
+
+    def _draw_reverse_marker_at_index(
+        self,
+        target,
+        slider_points,
+        repeat_index,
+        arrow_size,
+        alpha
+    ):
         if repeat_index % 2 == 1:
             pos = slider_points[-1]
             reference = slider_points[-2]
@@ -617,7 +661,7 @@ class SliderRenderer:
             center,
             arrow_size,
             angle,
-            pulse_alpha
+            alpha
         )
 
     def _draw_reverse_arrow_image(self, target, center, size, angle, alpha):
