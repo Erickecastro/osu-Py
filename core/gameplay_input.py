@@ -43,6 +43,10 @@ class GameplayInputController:
     def _handle_key_up(self, event):
         if event.key in self.HIT_KEYS:
             self.scene.hit_keys_held.discard(event.key)
+            if not self.scene._hit_input_held():
+                self.scene._handle_hit_input_release(
+                    self.scene.event_music_time(event)
+                )
             return True
         return False
 
@@ -59,5 +63,9 @@ class GameplayInputController:
     def _handle_mouse_up(self, event):
         if event.button in self.HIT_MOUSE_BUTTONS:
             self.scene.hit_mouse_buttons_held.discard(event.button)
+            if not self.scene._hit_input_held():
+                self.scene._handle_hit_input_release(
+                    self.scene.event_music_time(event)
+                )
             return True
         return False
