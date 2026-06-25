@@ -7,7 +7,12 @@ from bisect import bisect_left, bisect_right
 import pygame
 
 from scenes.base_scene import BaseScene
-from core.audio import find_audio_file, preload_music, start_music
+from core.audio import (
+    find_audio_file,
+    get_last_start_offset_ms,
+    preload_music,
+    start_music
+)
 from core.assets import asset_path, load_image
 from core.fonts import rounded_font
 from core.gameplay import calculate_accuracy, hit_result_for_delta
@@ -18,6 +23,7 @@ from core.gameplay_notes import (
     clone_notes_with_combo_data,
     prepare_note_lifecycle
 )
+from core.performance import AUDIO_OFFSET_MS
 from core.beatmap_timing import effective_beat_length_at
 from core.gameplay_state import (
     activate_due_notes,
@@ -78,6 +84,9 @@ class GameplayScene(BaseScene):
 
         self.start_time = None
         self.current_time = 0
+        self.music_playback_offset_ms = 0.0
+        self.music_sync_correction_ms = 0.0
+        self.audio_offset_ms = float(AUDIO_OFFSET_MS)
         self.ready_start_time = pygame.time.get_ticks()
         self.pre_music_lead_in_ms = 0
         self.pre_music_started_at = None
@@ -722,8 +731,57 @@ class GameplayScene(BaseScene):
             return self.current_time
         return max(
             -float(self.pre_music_lead_in_ms),
-            float(tick_ms) - float(self.start_time)
+            self._clock_music_time_from_tick(tick_ms)
         )
+
+    def _clock_music_time_from_tick(self, tick_ms):
+        return (
+            float(tick_ms)
+            - float(self.start_time)
+            + self.music_sync_correction_ms
+            + self.audio_offset_ms
+        )
+
+    def _mixer_music_time(self):
+        if not self.music_started:
+            return None
+
+        mixer_pos = pygame.mixer.music.get_pos()
+        if mixer_pos is None or mixer_pos < 0:
+            return None
+
+        return (
+            self.music_playback_offset_ms
+            + float(mixer_pos)
+            + self.audio_offset_ms
+        )
+
+    def _update_music_sync(self, tick_ms=None):
+        if self.start_time is None or not self.music_started:
+            return self.current_time
+
+        if tick_ms is None:
+            tick_ms = pygame.time.get_ticks()
+
+        clock_time = self._clock_music_time_from_tick(tick_ms)
+        mixer_time = self._mixer_music_time()
+        if mixer_time is not None and pygame.mixer.music.get_busy():
+            drift = mixer_time - clock_time
+            if abs(drift) >= 140.0:
+                self.music_sync_correction_ms += drift
+            elif abs(drift) >= 1.5:
+                correction_step = max(
+                    -6.0,
+                    min(6.0, drift * 0.08)
+                )
+                self.music_sync_correction_ms += correction_step
+            clock_time = self._clock_music_time_from_tick(tick_ms)
+
+        self.current_time = max(
+            -float(self.pre_music_lead_in_ms),
+            clock_time
+        )
+        return self.current_time
 
     def _slider_end_time(self, note):
         span_duration = float(note.get("span_duration", 0.0))
@@ -2184,7 +2242,9 @@ class GameplayScene(BaseScene):
             return
 
         self.start_time = new_start
-        self.current_time = pygame.time.get_ticks() - self.start_time
+        self.music_playback_offset_ms = float(get_last_start_offset_ms())
+        self.music_sync_correction_ms = 0.0
+        self._update_music_sync()
         self.next_note_index = 0
         self.active_notes.clear()
         self.intro_skip_used = True
@@ -2204,7 +2264,7 @@ class GameplayScene(BaseScene):
 
     def _sync_music_time_now(self):
         if self.start_time is not None and self.music_started:
-            self.current_time = pygame.time.get_ticks() - self.start_time
+            self._update_music_sync()
 
     def _publish_current_track_state(self):
         self.game.current_menu_music_path = str(self.music_path) if self.music_path else None
@@ -2326,7 +2386,10 @@ class GameplayScene(BaseScene):
             if self.start_time is None:
                 self.start_time = pygame.time.get_ticks()
 
+            self.music_playback_offset_ms = float(get_last_start_offset_ms())
+            self.music_sync_correction_ms = 0.0
             self.music_started = True
+            self._update_music_sync()
             self._publish_current_track_state()
 
         self._warm_slider_cache(max_ms=0.45, max_items=1)
@@ -2334,11 +2397,7 @@ class GameplayScene(BaseScene):
         self._warm_background_surface()
 
         if self.start_time is not None:
-
-            self.current_time = (
-                pygame.time.get_ticks()
-                - self.start_time
-            )
+            self._update_music_sync()
 
         self.target_health = apply_health_drain(
             self.target_health,
