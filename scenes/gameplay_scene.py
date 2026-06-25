@@ -48,6 +48,10 @@ class GameplayScene(BaseScene):
     uses_ui = False
     _sound_cache = {}
 
+    GAMEPLAY_OBJECT_SCALE = 0.90
+    GAMEPLAY_OBJECT_ALPHA_SCALE = 0.86
+    FOLLOWPOINT_THICKNESS_SCALE = 0.85
+
     MAX_SLIDER_SURFACE_SIZE = 4096
     MAX_SLIDER_POINTS = 4000
     DEFAULT_COMBO_COLORS = (
@@ -128,7 +132,8 @@ class GameplayScene(BaseScene):
 
         self.circle_radius = (
             54.4 - (4.48 * self.cs)
-        )
+        ) * self.GAMEPLAY_OBJECT_SCALE
+        self.object_alpha_scale = self.GAMEPLAY_OBJECT_ALPHA_SCALE
 
         if self.ar < 5:
 
@@ -202,8 +207,8 @@ class GameplayScene(BaseScene):
         # Aproximação do comportamento do osu! para visibilidade:
         # fade-in durante o approach e fade-out logo após o hit.
         self.hit_fade_out_time = 460  # ms
-        self.miss_fade_out_time = 260  # ms
-        self.miss_pop_duration = 260  # ms
+        self.miss_fade_out_time = 182  # ms
+        self.miss_pop_duration = 182  # ms
         self.hit_number_fade_out_time = 120  # ms
         self.hit_explosion_duration = 360  # ms
         self.slider_follow_return_grace_ms = 350  # ms
@@ -350,6 +355,117 @@ class GameplayScene(BaseScene):
         return calculate_accuracy(
             self.hit_counts
         )
+
+    def _refresh_playfield_layout(self):
+        self.scale = min(
+            self.game.WIDTH / self.osu_base_width,
+            self.game.HEIGHT / self.osu_base_height
+        )
+        self.offset_x = (
+            self.game.WIDTH
+            - (self.playfield_width * self.scale)
+        ) / 2
+        self.offset_y = (
+            self.game.HEIGHT
+            - (self.playfield_height * self.scale)
+        ) / 2 + (8 * self.scale)
+
+        self.slider_base_radius = int(
+            round(self.circle_radius * self.scale)
+        )
+        if self.slider_base_radius < 8:
+            self.slider_base_radius = 8
+
+        self.slider_path_radius = int(self.slider_base_radius)
+        if self.slider_path_radius < 10:
+            self.slider_path_radius = 10
+
+        self.scaled_radius = int(self.slider_path_radius)
+        self.note_visual_radius = self.scaled_radius * 0.90
+        self.followpoint_visual_radius = self.scaled_radius * 0.82
+        self.slider_head_radius = int(self.scaled_radius)
+        self.slider_follow_radius = self.scaled_radius * 1.89
+        self.safe_margin = (
+            max(
+                self.slider_head_radius,
+                self.slider_path_radius
+            ) + 16
+        )
+        self.usable_width = self.playfield_width * self.scale
+        self.usable_height = self.playfield_height * self.scale
+        self.object_scale = self.scale
+        self.object_offset_x = self.offset_x
+        self.object_offset_y = self.offset_y
+        self.playfield_rect = (
+            self.offset_x,
+            self.offset_y,
+            self.playfield_width * self.scale,
+            self.playfield_height * self.scale
+        )
+        self.overlay_dirty_rect = self._build_overlay_dirty_rect()
+
+    def on_resize(self):
+        self._refresh_playfield_layout()
+        if hasattr(self.game, "enable_raw_mouse"):
+            self.game.enable_raw_mouse(self.game.mouse_pos)
+
+        for cache in (
+            self.circle_surface_cache,
+            self.slider_surface_cache,
+            self.image_surface_cache,
+            self.tinted_surface_cache
+        ):
+            cache.clear()
+
+        for payload in list(self.slider_cache_futures.values()):
+            future = payload[0]
+            try:
+                future.cancel()
+            except Exception:
+                pass
+        self.slider_cache_futures.clear()
+        self.slider_cache_failed.clear()
+        self.next_slider_cache_index = 0
+        self.slider_precache_complete = not self.slider_cache_notes
+        self.slider_cache_cooldown_until = 0
+
+        geometry_keys = (
+            "scaled_pos",
+            "scaled_slider_points",
+            "scaled_slider_cumulative",
+            "scaled_slider_length",
+            "followpoint_connection",
+            "followpoint_state"
+        )
+        for note in self.notes:
+            for key in geometry_keys:
+                note.pop(key, None)
+
+        self._precompute_note_positions()
+        self._apply_stack_offsets()
+        self.followpoint_segment_surface = (
+            self._build_followpoint_segment_surface()
+        )
+        self._reset_followpoint_connections()
+        self._warm_followpoint_connections(max_ms=1, max_items=32)
+        self.sliderball_diameter = self._calculate_sliderball_diameter()
+        self.surface_precache_jobs = self._build_gameplay_surface_precache_jobs()
+        self.surface_precache_index = 0
+        self.surface_precache_complete = not self.surface_precache_jobs
+
+        self.overlay_surface = None
+        self.overlay_surface_size = None
+        self.background_surface = None
+        self.background_surface_size = None
+        self.center_overlay_shade = None
+        self.center_overlay_shade_size = None
+        self.center_overlay_cache.clear()
+        self.skip_button_surface = None
+        self.skip_button_surface_size = None
+        if hasattr(self.slider_renderer, "reverse_arrow_cache"):
+            self.slider_renderer.reverse_arrow_cache.clear()
+        if hasattr(self.spinner_renderer, "cache"):
+            self.spinner_renderer.cache.clear()
 
     def _apply_intro_lead_in(self):
         self.pre_music_lead_in_ms = 0
@@ -552,8 +668,8 @@ class GameplayScene(BaseScene):
         note["hit_result"] = result
         note["hit_time"] = self.current_time
         note["fade_out_start"] = self.current_time
-        note["fade_out_duration"] = 1
-        note["end_time"] = self.current_time
+        note["fade_out_duration"] = 260
+        note["end_time"] = self.current_time + note["fade_out_duration"]
         self.judged_objects += 1
         self.hit_counts[result] += 1
         self._update_health_target(result)
@@ -573,6 +689,7 @@ class GameplayScene(BaseScene):
         self.max_combo = max(self.max_combo, self.combo)
         bonus = note.get("spinner_bonus_count", 0) * 1000
         self.score += result + bonus
+        self._play_hit_sound()
 
     def _hit_result_for_delta(self, delta):
         return hit_result_for_delta(
@@ -629,8 +746,7 @@ class GameplayScene(BaseScene):
 
         if note.get("head_hit"):
             return (
-                not note.get("slider_follow_missed")
-                and self.current_time <= self._slider_end_time(note)
+                self.current_time <= self._slider_end_time(note)
             )
 
         return note.get("head_hit_result") is None
@@ -765,6 +881,12 @@ class GameplayScene(BaseScene):
     def _smoothstep(self, v):
         v = self._clamp01(v)
         return v * v * (3.0 - (2.0 * v))
+
+    def _object_alpha(self, alpha):
+        return max(
+            0,
+            min(255, int(alpha * self.object_alpha_scale))
+        )
 
     def _fade_in_progress(self, note):
         start = note.get("start_time", note["time"] - self.approach_time)
@@ -1228,7 +1350,17 @@ class GameplayScene(BaseScene):
             overlay,
             center,
             diameter=diameter,
-            alpha=alpha
+            alpha=min(
+                255,
+                int(
+                    round(
+                        alpha / max(
+                            0.01,
+                            getattr(self, "object_alpha_scale", 1.0)
+                        )
+                    )
+                )
+            )
         )
         return True
 
@@ -1262,6 +1394,8 @@ class GameplayScene(BaseScene):
 
         note["slider_follow_missed"] = True
         result = 100 if early_release else 0
+        note["slider_break_time"] = self.current_time
+        note["slider_break_result"] = result
         if not early_release:
             self.combo = 0
         self.hit_counts[result] += 1
@@ -1305,8 +1439,8 @@ class GameplayScene(BaseScene):
                 points = self.slider_renderer.build_points(note)
                 note["scaled_slider_points"] = points
             if points:
-                if int(note.get("repeat_count", 1)) % 2 == 0:
-                    return points[0]
+                # Followpoints are a visual guide. In osu! stable they leave
+                # from the visible slider tail, not from the reverse-end state.
                 return points[-1]
         return self._note_screen_pos(note)
 
@@ -1374,7 +1508,13 @@ class GameplayScene(BaseScene):
         if next_note.get("new_combo") or next_note.get("combo_index", 0) <= 1:
             return None
 
-        gap = next_note["time"] - note["time"]
+        is_slider_origin = note["type"] == "slider"
+        origin_time = (
+            self._slider_end_time(note)
+            if is_slider_origin
+            else note["time"]
+        )
+        gap = next_note["time"] - origin_time
         if gap < 80 or gap > 1800:
             return None
 
@@ -1411,25 +1551,14 @@ class GameplayScene(BaseScene):
 
         ux = dx / center_distance
         uy = dy / center_distance
-        start = (
-            start_anchor[0] + ux * self.scaled_radius * 0.92,
-            start_anchor[1] + uy * self.scaled_radius * 0.92
-        )
-        end = (
-            end_anchor[0] - ux * self.scaled_radius * 0.92,
-            end_anchor[1] - uy * self.scaled_radius * 0.92
-        )
-        edge_dx = end[0] - start[0]
-        edge_dy = end[1] - start[1]
-        distance = (edge_dx * edge_dx + edge_dy * edge_dy) ** 0.5
-        if distance < self.scaled_radius * 0.92:
+        if center_distance < self.scaled_radius * 2.72:
             return None
 
         note_start = note.get(
             "start_time",
-            note["time"] - self.approach_time
+            origin_time - self.approach_time
         )
-        note_approach_len = max(1.0, note["time"] - note_start)
+        note_approach_len = max(1.0, origin_time - note_start)
         next_start = next_note.get(
             "start_time",
             next_note["time"] - self.approach_time
@@ -1449,11 +1578,11 @@ class GameplayScene(BaseScene):
             note_start + (note_approach_len * 0.10),
             next_start + (next_approach_len * 0.015)
         )
-        earliest_pre_hit_start = note["time"] - max(
+        earliest_pre_hit_start = origin_time - max(
             210.0,
             min(430.0, gap * 0.92, beat_length * 0.95)
         )
-        latest_pre_hit_start = note["time"] - max(
+        latest_pre_hit_start = origin_time - max(
             90.0,
             min(230.0, gap * 0.58)
         )
@@ -1470,33 +1599,71 @@ class GameplayScene(BaseScene):
                 both_visible_time,
                 note_start
             )
+        if is_slider_origin:
+            pre_origin_lead = min(
+                160.0,
+                max(55.0, gap * 0.18)
+            )
+        else:
+            pre_origin_lead = min(
+                720.0,
+                max(260.0, gap * 0.68, beat_length * 0.58)
+            )
+        desired_start_time = max(
+            both_visible_time,
+            next_start + (next_approach_len * 0.02),
+            origin_time - pre_origin_lead
+        )
+        start_time = min(start_time, desired_start_time)
 
         appear_duration = max(
-            82.0,
+            118.0,
             min(
-                280.0,
-                gap * 0.50,
-                beat_length * 0.48,
-                max(82.0, (next_note["time"] - start_time) * 0.36)
+                360.0,
+                gap * 0.72,
+                beat_length * 0.62,
+                max(118.0, (next_note["time"] - start_time) * 0.54)
             )
         )
         fade_in_duration = max(
-            35.0,
-            min(95.0, appear_duration * 0.34, beat_length * 0.16)
+            38.0,
+            min(110.0, appear_duration * 0.34, beat_length * 0.18)
         )
         fade_out_duration = max(
-            38.0,
-            min(92.0, gap * 0.12, beat_length * 0.12)
+            120.0,
+            min(260.0, gap * 0.26, beat_length * 0.30)
         )
 
         followpoint_radius = self.followpoint_visual_radius
-        segment_width = max(20, int(followpoint_radius * 0.82))
-        spacing = max(9, int(segment_width * 0.50))
+        segment_width = max(28, int(followpoint_radius * 1.75))
+        spacing = max(18, int(segment_width * 0.72))
+        visible_gap = center_distance - (self.scaled_radius * 2.22)
+        if visible_gap < max(segment_width * 1.18, self.scaled_radius * 0.75):
+            return None
+        center_padding = min(
+            self.scaled_radius * 0.38,
+            max(4.0, center_distance * 0.13)
+        )
+        start = (
+            start_anchor[0] + ux * center_padding,
+            start_anchor[1] + uy * center_padding
+        )
+        end = (
+            end_anchor[0] - ux * center_padding,
+            end_anchor[1] - uy * center_padding
+        )
+        edge_dx = end[0] - start[0]
+        edge_dy = end[1] - start[1]
+        distance = (edge_dx * edge_dx + edge_dy * edge_dy) ** 0.5
+        segment_count = int(distance / spacing)
+        minimum_segments = 3
+        if segment_count < minimum_segments:
+            return None
 
         return {
             "target": next_note.get("render_index", index + 1),
             "start_time": start_time,
-            "natural_fade_start": next_note["time"] + 18.0,
+            "natural_fade_start": next_note["time"] + 145.0,
             "fade_out_duration": fade_out_duration,
             "appear_duration": appear_duration,
             "fade_in_duration": fade_in_duration,
@@ -1506,7 +1673,7 @@ class GameplayScene(BaseScene):
             "dy": edge_dy,
             "distance": distance,
             "angle": -math.degrees(math.atan2(uy, ux)),
-            "count": max(1, int(distance / spacing))
+            "count": segment_count
         }
 
     def _note_judged_time(self, note):
@@ -1521,12 +1688,19 @@ class GameplayScene(BaseScene):
 
         frame = self._cropped_alpha_image(frames[-1])
         followpoint_radius = self.followpoint_visual_radius
-        segment_width = max(20, int(followpoint_radius * 0.82))
+        segment_width = max(28, int(followpoint_radius * 1.75))
         return self._scaled_image(
             frame,
             (
                 int(segment_width * 1.17),
-                max(7, int(followpoint_radius * 0.155))
+                max(
+                    5,
+                    int(
+                        followpoint_radius
+                        * 0.155
+                        * self.FOLLOWPOINT_THICKNESS_SCALE
+                    )
+                )
             )
         )
 
@@ -1604,8 +1778,8 @@ class GameplayScene(BaseScene):
                 )
                 fade_out = (1.0 - fade_out_progress) ** 1.65
             alpha = int(
-                255
-                * fade_in
+                230
+                * self._smoothstep(fade_in)
                 * fade_out
             )
             if alpha <= 0:
@@ -1629,7 +1803,7 @@ class GameplayScene(BaseScene):
                     (progress * (count + 7) - point_index + 2)
                     / sequence_smoothing
                 )
-                point_fade = appear
+                point_fade = self._smoothstep(appear)
                 point_alpha = int(alpha * point_fade)
                 if point_alpha <= 0:
                     continue
@@ -2352,7 +2526,6 @@ class GameplayScene(BaseScene):
         if profiler_enabled:
             profiler.start("hitobjects_render")
 
-        self._draw_followpoints(overlay)
         approach_draws = []
 
         for note in self.active_notes:
@@ -2382,17 +2555,26 @@ class GameplayScene(BaseScene):
                 )
             )
 
-            alpha = self._note_alpha(note)
+            alpha = self._object_alpha(self._note_alpha(note))
             alpha = int(alpha * fail_alpha_factor)
             slider_ball_alpha = 0
             slider_track_alpha = alpha
             if note["type"] == "slider":
-                slider_ball_alpha = self._slider_ball_alpha(note)
-                slider_track_alpha = self._slider_track_alpha(note)
+                slider_ball_alpha = self._object_alpha(
+                    self._slider_ball_alpha(note)
+                )
+                slider_track_alpha = self._object_alpha(
+                    self._slider_track_alpha(note)
+                )
+                slider_ball_alpha = int(slider_ball_alpha * fail_alpha_factor)
+                slider_track_alpha = int(slider_track_alpha * fail_alpha_factor)
 
             miss_pop_alpha = 0
             if note.get("hit_result") == 0:
-                miss_pop_alpha = self._miss_pop_alpha(note)
+                miss_pop_alpha = self._object_alpha(
+                    self._miss_pop_alpha(note)
+                )
+                miss_pop_alpha = int(miss_pop_alpha * fail_alpha_factor)
 
             if (
                 alpha <= 0
@@ -2435,7 +2617,8 @@ class GameplayScene(BaseScene):
 
                 hit_result = note.get("hit_result")
                 if hit_result == 0:
-                    pop_alpha = self._miss_pop_alpha(note)
+                    pop_alpha = self._object_alpha(self._miss_pop_alpha(note))
+                    pop_alpha = int(pop_alpha * fail_alpha_factor)
                     self.effects_renderer.draw_miss_pop(
                         overlay,
                         (scaled_x, scaled_y),
@@ -2472,7 +2655,11 @@ class GameplayScene(BaseScene):
 
                 number_alpha = 0
                 if hit_result not in (50, 100):
-                    number_base_alpha = 255 if hit_result == 0 else alpha
+                    number_base_alpha = (
+                        self._object_alpha(255)
+                        if hit_result == 0
+                        else alpha
+                    )
                     number_alpha = self._combo_number_alpha(
                         note,
                         number_base_alpha
@@ -2530,10 +2717,7 @@ class GameplayScene(BaseScene):
                     slider_draw_points,
                     alpha=slider_track_alpha,
                     object_color=note.get("combo_color", (0, 150, 255)),
-                    draw_head_marker=(
-                        note.get("head_hit_result") is None
-                        and self.current_time < note["time"]
-                    ),
+                    draw_head_marker=False,
                     draw_tail_marker=False,
                     cache_key=slider_cache_key,
                     repeat_count=note.get("repeat_count", 1),
@@ -2574,7 +2758,8 @@ class GameplayScene(BaseScene):
                         alpha=head_alpha
                     )
                 elif head_result == 0 and head_alpha > 0:
-                    pop_alpha = self._miss_pop_alpha(note)
+                    pop_alpha = self._object_alpha(self._miss_pop_alpha(note))
+                    pop_alpha = int(pop_alpha * fail_alpha_factor)
                     self.effects_renderer.draw_miss_pop(
                         overlay,
                         slider_head_pos,
@@ -2645,14 +2830,16 @@ class GameplayScene(BaseScene):
                     )
 
                     follow_radius = self.slider_follow_radius
+                    slider_end_time = note["time"] + slider_total_duration
+                    end_tolerance_ms = max(
+                        120,
+                        min(240, span_duration * 0.12)
+                    )
                     show_slider_follow = (
                         note.get("head_hit")
-                        and self.current_time <= note["time"] + slider_total_duration
+                        and self.current_time <= slider_end_time
                     )
-                    if (
-                        show_slider_follow
-                        and not note.get("slider_follow_missed")
-                    ):
+                    if show_slider_follow:
                         mouse_x, mouse_y = self.game.mouse_pos
                         dx = mouse_x - ball_pos[0]
                         dy = mouse_y - ball_pos[1]
@@ -2666,53 +2853,72 @@ class GameplayScene(BaseScene):
                             + slider_total_duration
                             - self.current_time
                         )
-                        end_tolerance_ms = max(
-                            120,
-                            min(240, span_duration * 0.12)
-                        )
                         if outside:
-                            outside_since = note.get(
-                                "slider_follow_outside_since"
-                            )
-                            if outside_since is None:
-                                note["slider_follow_outside_since"] = (
-                                    self.current_time
+                            if not note.get("slider_follow_missed"):
+                                outside_since = note.get(
+                                    "slider_follow_outside_since"
                                 )
-                                note["slider_follow_outside_reason"] = (
-                                    "cursor"
-                                    if cursor_outside
-                                    else "release"
-                                )
-                                outside_elapsed = 0
-                            else:
-                                outside_elapsed = (
-                                    self.current_time - outside_since
-                                )
-                                if cursor_outside:
-                                    note[
-                                        "slider_follow_outside_reason"
-                                    ] = "cursor"
+                                if outside_since is None:
+                                    note["slider_follow_outside_since"] = (
+                                        self.current_time
+                                    )
+                                    note["slider_follow_outside_reason"] = (
+                                        "cursor"
+                                        if cursor_outside
+                                        else "release"
+                                    )
+                                    outside_elapsed = 0
+                                else:
+                                    outside_elapsed = (
+                                        self.current_time - outside_since
+                                    )
+                                    if cursor_outside:
+                                        note[
+                                            "slider_follow_outside_reason"
+                                        ] = "cursor"
 
-                            if (
-                                outside_elapsed
-                                >= self.slider_follow_return_grace_ms
-                            ):
-                                early_release = (
-                                    note.get(
+                                if (
+                                    outside_elapsed
+                                    >= self.slider_follow_return_grace_ms
+                                ):
+                                    outside_reason = note.get(
                                         "slider_follow_outside_reason"
                                     )
-                                    == "release"
-                                )
-                                self._register_slider_follow_miss(
-                                    note,
-                                    ball_pos,
-                                    early_release=early_release
-                                )
-                            elif remaining <= end_tolerance_ms:
-                                note["slider_follow_released_near_end"] = True
+                                    early_release = (
+                                        outside_reason
+                                        == "release"
+                                        and remaining <= end_tolerance_ms
+                                    )
+                                    self._register_slider_follow_miss(
+                                        note,
+                                        ball_pos,
+                                        early_release=early_release
+                                    )
+                                elif remaining <= end_tolerance_ms:
+                                    note["slider_follow_released_near_end"] = True
                         else:
                             note["slider_follow_outside_since"] = None
                             note["slider_follow_outside_reason"] = None
+                    elif (
+                        note.get("head_hit")
+                        and not note.get("slider_follow_missed")
+                        and note.get("slider_follow_outside_since") is not None
+                    ):
+                        outside_since = note.get("slider_follow_outside_since")
+                        outside_reason = note.get("slider_follow_outside_reason")
+                        outside_duration_at_end = max(
+                            0.0,
+                            slider_end_time - outside_since
+                        )
+                        early_release = (
+                            outside_reason == "release"
+                            and outside_duration_at_end <= end_tolerance_ms
+                        )
+                        self._register_slider_follow_miss(
+                            note,
+                            ball_pos,
+                            early_release=early_release
+                        )
 
                     outside_since = note.get("slider_follow_outside_since")
                     follow_alpha = slider_ball_alpha * 0.82
@@ -2765,6 +2971,8 @@ class GameplayScene(BaseScene):
                     outline_width=5,
                     alpha=approach_alpha
                 )
+
+        self._draw_followpoints(overlay)
 
         self.miss_indicators = [
             indicator
@@ -2912,7 +3120,10 @@ class GameplayScene(BaseScene):
         )
         rect.midbottom = (
             self.game.WIDTH // 2,
-            self.game.HEIGHT - 28
+            max(
+                rect.height + 12,
+                int((self.game.HEIGHT - 28) * 0.60)
+            )
         )
         self.skip_button_rect = rect
         if self.skip_button_surface is None or self.skip_button_surface_size != rect.size:
