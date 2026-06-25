@@ -60,7 +60,7 @@ class GameplayScene(BaseScene):
     GAMEPLAY_OBJECT_SCALE = 0.97335
     GAMEPLAY_OBJECT_ALPHA_SCALE = 0.86
     FOLLOWPOINT_THICKNESS_SCALE = 0.85
-    HITOBJECT_FADE_IN_DURATION_SCALE = 0.79
+    HITOBJECT_FADE_IN_DURATION_SCALE = 0.50
 
     MAX_SLIDER_SURFACE_SIZE = 4096
     MAX_SLIDER_POINTS = 4000
@@ -223,8 +223,8 @@ class GameplayScene(BaseScene):
         self.hit_fade_out_time = 380  # ms
         self.miss_fade_out_time = 150  # ms
         self.miss_pop_duration = 150  # ms
-        self.hit_number_fade_out_time = 120  # ms
-        self.hit_explosion_duration = 310  # ms
+        self.hit_number_fade_out_time = 84  # ms
+        self.hit_explosion_duration = 217  # ms
         self.slider_follow_return_grace_ms = 350  # ms
         self.slider_follow_button_grace_ms = 90  # ms
         self.slider_follow_tail_leniency_ms = 520  # ms
@@ -1010,7 +1010,7 @@ class GameplayScene(BaseScene):
         approach_len = max(1, hit_time - start)
         fade_fraction = 0.50 + (self._clamp01(self.ar / 10.0) * 0.30)
         fade_in_len = max(
-            170.0,
+            120.0,
             min(
                 approach_len,
                 approach_len
@@ -1019,8 +1019,13 @@ class GameplayScene(BaseScene):
             )
         )
 
-        return self._smoothstep(
-            (self.current_time - start) / fade_in_len
+        progress = (self.current_time - start) / fade_in_len
+        if progress <= 0:
+            return 0.0
+
+        return min(
+            1.0,
+            0.14 + (0.86 * self._smootherstep(progress))
         )
 
     def _note_alpha(self, note):
@@ -1267,10 +1272,7 @@ class GameplayScene(BaseScene):
                 "novo_sliderballfollow",
                 "sliderballfollow.png"
             ),
-            "sliderscorepoint": self._load_image(
-                "sliderscorepoint.png",
-                "sliderscorepoint"
-            )
+            "sliderscorepoint": self._load_image("sliderscorepoint.png")
         }
 
         images["combo_digits"] = {
@@ -1385,7 +1387,7 @@ class GameplayScene(BaseScene):
         )
 
     def _slider_scorepoint_diameter(self):
-        return max(6, int(round(self.slider_path_radius * 0.34)))
+        return max(6, int(round(self.slider_path_radius * 0.46)))
 
     def _cropped_alpha_image(self, image):
         if image is None:
@@ -1686,6 +1688,9 @@ class GameplayScene(BaseScene):
             note["scaled_slider_length"] = total_length
 
         within = min(slider_total_duration, time_since_hit)
+        repeat_idx = 0
+        t = 1.0
+        forward = True
         if span_duration <= 0:
             ball_dist = total_length
         else:
@@ -1715,7 +1720,12 @@ class GameplayScene(BaseScene):
             "slider_end_time": note["time"] + slider_total_duration,
             "slider_points": slider_points,
             "cumulative": cumulative,
-            "total_length": total_length
+            "total_length": total_length,
+            "span_index": repeat_idx,
+            "span_progress": t,
+            "forward": forward,
+            "time_since_hit": time_since_hit,
+            "within": within
         }
 
     def _slider_scorepoints(self, note):
@@ -1738,6 +1748,9 @@ class GameplayScene(BaseScene):
         span_duration = float(note.get("span_duration", 0.0))
         repeat_count = int(note.get("repeat_count", 1))
         pixel_length = float(note.get("slider_distance", 0.0))
+        slider_multiplier = float(
+            self.beatmap["difficulty"].get("SliderMultiplier", 1.4) or 1.4
+        )
         tick_rate = float(
             self.beatmap["difficulty"].get("SliderTickRate", 1.0) or 1.0
         )
@@ -1750,30 +1763,63 @@ class GameplayScene(BaseScene):
         ):
             return []
 
-        beat_length = effective_beat_length_at(
-            self.timing_points,
-            note["time"]
+        tick_distance = max(
+            1.0,
+            (100.0 * slider_multiplier) / tick_rate
         )
-        tick_interval = max(1.0, beat_length / tick_rate)
-        if tick_interval >= span_duration - 1.0:
+        if tick_distance >= pixel_length - 1.0:
+            return []
+
+        endpoint_margin = max(
+            6.0,
+            min(
+                pixel_length * 0.09,
+                tick_distance * 0.22
+            )
+        )
+        tick_end_distance = pixel_length - endpoint_margin
+        if tick_distance >= tick_end_distance:
             return []
 
         scorepoints = []
+        visual_start = note.get(
+            "start_time",
+            note["time"] - self.approach_time
+        )
         for span_index in range(repeat_count):
             span_start = note["time"] + (span_duration * span_index)
-            tick_time = span_start + tick_interval
-            while tick_time < span_start + span_duration - 1.0:
-                span_progress = (
-                    tick_time - span_start
-                ) / max(1.0, span_duration)
+            distance = tick_distance
+            while distance < tick_end_distance:
+                span_progress = self._clamp01(distance / pixel_length)
+                tick_time = span_start + (span_duration * span_progress)
                 span_progress = self._clamp01(span_progress)
                 path_fraction = (
                     span_progress
                     if span_index % 2 == 0
                     else 1.0 - span_progress
                 )
+                span_visual_start = (
+                    visual_start
+                    if span_index == 0
+                    else span_start + 24.0
+                )
+                appear_lead = min(
+                    700.0,
+                    max(
+                        220.0,
+                        span_duration * 0.67
+                    )
+                )
                 scorepoints.append({
                     "time": tick_time,
+                    "appear_time": max(
+                        span_visual_start + 55.0,
+                        tick_time - appear_lead
+                    ),
+                    "fade_in_duration": max(
+                        20.0,
+                        min(35.0, span_duration * 0.046)
+                    ),
                     "span_index": span_index,
                     "path_fraction": path_fraction,
                     "processed": False,
@@ -1781,7 +1827,7 @@ class GameplayScene(BaseScene):
                     "missed": False,
                     "pos": None
                 })
-                tick_time += tick_interval
+                distance += tick_distance
 
         return scorepoints
 
@@ -1836,7 +1882,6 @@ class GameplayScene(BaseScene):
         self.combo += 1
         self.max_combo = max(self.max_combo, self.combo)
         self.score += 10 + max(0, self.combo - 1)
-        self._play_hit_sound()
 
     def _miss_slider_scorepoint(self, note, scorepoint, pos):
         scorepoint["processed"] = True
@@ -1884,6 +1929,33 @@ class GameplayScene(BaseScene):
 
         note["slider_scorepoint_index"] = index
 
+    def _current_slider_scorepoint_span(self, note):
+        span_duration = float(note.get("span_duration", 0.0))
+        repeat_count = int(note.get("repeat_count", 1))
+        if span_duration <= 0 or repeat_count <= 0:
+            return 0
+
+        elapsed = self.current_time - note["time"]
+        if elapsed <= 0:
+            return 0
+
+        total_duration = float(
+            note.get(
+                "slider_total_duration",
+                span_duration * repeat_count
+            )
+        )
+        if elapsed >= total_duration:
+            return max(0, repeat_count - 1)
+
+        return max(
+            0,
+            min(
+                repeat_count - 1,
+                int(elapsed / span_duration)
+            )
+        )
+
     def _draw_slider_scorepoints(
         self,
         target,
@@ -1909,14 +1981,28 @@ class GameplayScene(BaseScene):
 
         diameter = self._slider_scorepoint_diameter()
         offset_x, offset_y = screen_offset
-        draw_alpha = max(0, min(255, int(alpha * 0.92)))
+        draw_alpha = max(0, min(255, max(180, int(alpha * 1.45))))
+        current_span = self._current_slider_scorepoint_span(note)
 
         for scorepoint in scorepoints:
             if scorepoint.get("processed"):
                 continue
+            if scorepoint.get("span_index", 0) != current_span:
+                continue
+            appear_time = scorepoint.get("appear_time", note["time"])
+            if self.current_time < appear_time:
+                continue
 
             pos = scorepoint.get("pos")
             if pos is None:
+                continue
+
+            point_fade = self._smoothstep(
+                (self.current_time - appear_time)
+                / max(1.0, scorepoint.get("fade_in_duration", 64.0))
+            )
+            point_alpha = int(draw_alpha * point_fade)
+            if point_alpha <= 0:
                 continue
 
             self._draw_image_centered(
@@ -1924,7 +2010,7 @@ class GameplayScene(BaseScene):
                 image,
                 (pos[0] + offset_x, pos[1] + offset_y),
                 diameter=diameter,
-                alpha=draw_alpha
+                alpha=point_alpha
             )
 
     def _update_slider_follow_state(
@@ -2108,7 +2194,7 @@ class GameplayScene(BaseScene):
             else note["time"]
         )
         gap = next_note["time"] - origin_time
-        if gap < 80 or gap > 1800:
+        if gap < 65 or gap > 2600:
             return None
 
         start_anchor = self._note_follow_anchor(note)
@@ -2132,20 +2218,18 @@ class GameplayScene(BaseScene):
         # Streams e objetos muito próximos normalmente não recebem followpoints
         # no osu! stable; eles poluem a leitura e custam draw calls extras.
         close_stream_gap = max(
-            95.0,
-            min(270.0, beat_length * 0.58)
+            85.0,
+            min(190.0, beat_length * 0.42)
         )
-        close_stream_distance = self.scaled_radius * 4.05
+        close_stream_distance = self.scaled_radius * 2.35
         if gap <= close_stream_gap and center_distance < close_stream_distance:
             return None
 
-        if center_distance < self.scaled_radius * 2.55:
+        if center_distance < self.scaled_radius * 1.75:
             return None
 
         ux = dx / center_distance
         uy = dy / center_distance
-        if center_distance < self.scaled_radius * 2.72:
-            return None
 
         note_start = note.get(
             "start_time",
@@ -2160,24 +2244,24 @@ class GameplayScene(BaseScene):
         lead_time = min(
             gap * 0.98,
             max(
-                240.0,
+                420.0,
                 min(
-                    self.approach_time * 0.68,
-                    beat_length * 1.05
+                    self.approach_time * 0.98,
+                    beat_length * 1.58
                 )
             )
         )
         both_visible_time = max(
-            note_start + (note_approach_len * 0.10),
-            next_start + (next_approach_len * 0.015)
+            note_start + (note_approach_len * 0.015),
+            next_start
         )
         earliest_pre_hit_start = origin_time - max(
-            210.0,
-            min(430.0, gap * 0.92, beat_length * 0.95)
+            260.0,
+            min(620.0, gap * 0.98, beat_length * 1.20)
         )
         latest_pre_hit_start = origin_time - max(
-            90.0,
-            min(230.0, gap * 0.58)
+            105.0,
+            min(270.0, gap * 0.68)
         )
         pre_hit_start = max(
             both_visible_time,
@@ -2194,13 +2278,13 @@ class GameplayScene(BaseScene):
             )
         if is_slider_origin:
             pre_origin_lead = min(
-                160.0,
-                max(55.0, gap * 0.18)
+                420.0,
+                max(120.0, gap * 0.46, beat_length * 0.32)
             )
         else:
             pre_origin_lead = min(
-                720.0,
-                max(260.0, gap * 0.68, beat_length * 0.58)
+                920.0,
+                max(340.0, gap * 0.82, beat_length * 0.76)
             )
         desired_start_time = max(
             both_visible_time,
@@ -2230,12 +2314,12 @@ class GameplayScene(BaseScene):
         followpoint_radius = self.followpoint_visual_radius
         segment_width = max(28, int(followpoint_radius * 1.75))
         spacing = max(18, int(segment_width * 0.72))
-        visible_gap = center_distance - (self.scaled_radius * 2.22)
-        if visible_gap < max(segment_width * 1.18, self.scaled_radius * 0.75):
+        visible_gap = center_distance - (self.scaled_radius * 0.82)
+        if visible_gap < max(segment_width * 0.82, self.scaled_radius * 0.55):
             return None
         center_padding = min(
-            self.scaled_radius * 0.38,
-            max(4.0, center_distance * 0.13)
+            self.scaled_radius * 0.16,
+            max(2.0, center_distance * 0.055)
         )
         start = (
             start_anchor[0] + ux * center_padding,
@@ -2249,7 +2333,7 @@ class GameplayScene(BaseScene):
         edge_dy = end[1] - start[1]
         distance = (edge_dx * edge_dx + edge_dy * edge_dy) ** 0.5
         segment_count = int(distance / spacing)
-        minimum_segments = 3
+        minimum_segments = 2
         if segment_count < minimum_segments:
             return None
 

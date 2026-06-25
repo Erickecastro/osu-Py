@@ -593,7 +593,7 @@ class SliderRenderer:
             for repeat_index in range(1, repeat_count):
                 checkpoint_time = slider_start_time + (span * repeat_index)
                 time_until_pass = checkpoint_time - self.scene.current_time
-                if time_until_pass > span or time_until_pass < -pass_burst_duration:
+                if time_until_pass < -pass_burst_duration:
                     continue
 
                 marker_alpha = pulse_alpha
