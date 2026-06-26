@@ -57,6 +57,7 @@ from rendering.spinner import SpinnerRenderer
 
 class GameplayScene(BaseScene):
     draws_own_cursor = True
+    prefer_low_latency_pacing = True
     uses_ui = False
     _sound_cache = {}
 
@@ -2773,9 +2774,15 @@ class GameplayScene(BaseScene):
         if self.slider_precache_complete:
             return
 
+        if self.music_started:
+            collect_ms = min(0.35, max(0.12, max_ms * 0.45))
+            collect_items = 1
+        else:
+            collect_ms = min(1.4, max(0.25, max_ms * 0.55))
+            collect_items = max(1, min(8, max_items // 4))
         self._collect_slider_cache_results(
-            max_ms=min(0.35, max(0.12, max_ms * 0.45)),
-            max_items=1
+            max_ms=collect_ms,
+            max_items=collect_items
         )
 
         now = pygame.time.get_ticks()
@@ -3070,15 +3077,15 @@ class GameplayScene(BaseScene):
                 pygame.time.get_ticks()
                 - self.ready_start_time
             )
-            self._warm_skin_image_cache(max_ms=2, max_items=12)
-            self._warm_gameplay_surface_cache()
+            self._warm_skin_image_cache(max_ms=3, max_items=24)
+            self._warm_gameplay_surface_cache(max_ms=4, max_items=24)
             if ready_elapsed >= 180:
-                self._warm_followpoint_connections()
+                self._warm_followpoint_connections(max_ms=2, max_items=96)
             if ready_elapsed >= 420:
                 self._warm_slider_cache(
-                    max_ms=3,
-                    max_items=16,
-                    horizon_ms=self.approach_time + 5600
+                    max_ms=6,
+                    max_items=32,
+                    horizon_ms=self.approach_time + 9000
                 )
             if ready_elapsed >= 650:
                 self._warm_background_surface()
@@ -3100,14 +3107,14 @@ class GameplayScene(BaseScene):
                     - self.pre_music_started_at
                 )
                 if lead_elapsed < self.pre_music_lead_in_ms:
-                    self._warm_gameplay_surface_cache()
-                    self._warm_skin_image_cache(max_ms=2, max_items=12)
+                    self._warm_gameplay_surface_cache(max_ms=4, max_items=24)
+                    self._warm_skin_image_cache(max_ms=3, max_items=24)
                     self._warm_slider_cache(
-                        max_ms=3,
-                        max_items=16,
-                        horizon_ms=self.approach_time + 5600
+                        max_ms=6,
+                        max_items=32,
+                        horizon_ms=self.approach_time + 9000
                     )
-                    self._warm_followpoint_connections()
+                    self._warm_followpoint_connections(max_ms=2, max_items=96)
                     self.current_time = lead_elapsed - self.pre_music_lead_in_ms
                     if profiler_enabled:
                         profiler.start("hitobjects")
@@ -3142,12 +3149,12 @@ class GameplayScene(BaseScene):
             self._update_music_sync()
 
         self._warm_slider_cache(
-            max_ms=0.65,
+            max_ms=0.45,
             max_items=2,
-            horizon_ms=self.approach_time + 5600
+            horizon_ms=self.approach_time + 7600
         )
-        self._warm_skin_image_cache(max_ms=0.25, max_items=2)
-        self._warm_followpoint_connections(max_ms=0.35, max_items=8)
+        self._warm_skin_image_cache(max_ms=0.12, max_items=1)
+        self._warm_followpoint_connections(max_ms=0.18, max_items=4)
         self._warm_background_surface()
 
         if self.start_time is not None:
