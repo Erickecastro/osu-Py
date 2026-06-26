@@ -1,7 +1,7 @@
 import os
 
 
-TARGET_FPS = int(os.environ.get("PYOSU_TARGET_FPS", "480"))
+TARGET_FPS = int(os.environ.get("PYOSU_TARGET_FPS", "960"))
 USE_BUSY_FRAME_PACER = os.environ.get("PYOSU_BUSY_FRAME_PACER", "0") == "1"
 DEBUG_PERFORMANCE = os.environ.get("PYOSU_DEBUG_PERFORMANCE", "0") == "1"
 MAX_FRAME_DT = 1 / 30
