@@ -320,7 +320,12 @@ class Game:
     # -------------------------
     def run(self):
         while self.running:
-            if USE_BUSY_FRAME_PACER:
+            current_scene = self.scene_manager.current_scene
+            low_latency_pacing = (
+                self.raw_mouse_enabled
+                or getattr(current_scene, "prefer_low_latency_pacing", False)
+            )
+            if USE_BUSY_FRAME_PACER or low_latency_pacing:
                 elapsed_ms = self.clock.tick_busy_loop(self.FPS)
             else:
                 elapsed_ms = self.clock.tick(self.FPS)
@@ -440,6 +445,7 @@ class Game:
     # UPDATE
     # -------------------------
     def update(self, dt):
+        self.sample_mouse_now()
         current_scene = self.scene_manager.current_scene
 
         if getattr(current_scene, "uses_ui", True):
@@ -458,6 +464,7 @@ class Game:
     # RENDER
     # -------------------------
     def render(self):
+        self.sample_mouse_now()
         current_scene = self.scene_manager.current_scene
         if self.fullscreen:
             self._sync_display_size()
