@@ -281,7 +281,7 @@ class MenuSnow:
         self.particles = []
         self.spawn_timer = 0.0
         self.image = None
-        self.max_particles = 22
+        self.max_particles = 27
 
     def load(self):
         self.image = self._load_image()
@@ -292,15 +292,18 @@ class MenuSnow:
 
         self.spawn_timer -= dt
         if self.spawn_timer <= 0.0 and len(self.particles) < self.max_particles:
-            self.spawn_timer = self.random.uniform(0.30, 0.78)
+            self.spawn_timer = self.random.uniform(0.24, 0.63)
             self.particles.append(self._new_particle(width, height))
 
         next_particles = []
         for particle in self.particles:
             particle["age"] += dt
-            particle["x"] += math.sin(particle["age"] * particle["drift_speed"] + particle["phase"]) * particle["drift"] * dt
 
             if not particle["settled"]:
+                particle["x"] += math.sin(
+                    particle["age"] * particle["drift_speed"]
+                    + particle["phase"]
+                ) * particle["drift"] * dt
                 particle["y"] += particle["speed"] * dt
                 particle["rotation"] += particle["spin"] * dt
 
