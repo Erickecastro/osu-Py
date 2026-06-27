@@ -4,6 +4,8 @@ from collections import defaultdict, deque
 
 import pygame
 
+from core.fonts import rounded_font
+
 
 class FrameProfiler:
     REPORT_SECTIONS = (
@@ -117,8 +119,8 @@ class FrameProfiler:
             return
         self._reset_scene_samples(scene_name)
         if self.font is None:
-            self.font = pygame.font.SysFont("consolas", 15)
-            self.small_font = pygame.font.SysFont("consolas", 13)
+            self.font = rounded_font(15)
+            self.small_font = rounded_font(13)
 
         lines = [f"F3 profiler | {scene_name} | FPS {fps:5.1f}"]
         for name in self.REPORT_SECTIONS:
