@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -271,3 +272,35 @@ class LocalScoreManager:
 
     def records_for(self, osu_file):
         return self.scores.get(str(osu_file), [])
+
+    def add_record(self, osu_file, record):
+        key = str(osu_file)
+        payload = dict(record)
+        payload.setdefault("created_at", time.time())
+        payload.setdefault("player", "Guest")
+        records = list(self.scores.get(key, []))
+        records.append(payload)
+        records.sort(
+            key=lambda item: (
+                int(item.get("score", 0)),
+                float(item.get("accuracy", 0.0)),
+                int(item.get("combo", 0))
+            ),
+            reverse=True
+        )
+        self.scores[key] = records[:20]
+        self.save()
+        return payload
+
+    def delete_record(self, osu_file, index):
+        key = str(osu_file)
+        records = list(self.scores.get(key, []))
+        if index < 0 or index >= len(records):
+            return False
+        del records[index]
+        if records:
+            self.scores[key] = records
+        else:
+            self.scores.pop(key, None)
+        self.save()
+        return True
