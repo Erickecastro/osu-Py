@@ -7,9 +7,11 @@ class SceneManager:
 
         self.scene_stack = []
         self.transition_start = 0
-        self.transition_duration = 220
+        self.transition_duration = 260
         self.transition_overlay = None
         self.transition_overlay_size = None
+        self.transition_snapshot = None
+        self.transition_snapshot_size = None
 
     # -------------------------
     # CURRENT SCENE
@@ -30,6 +32,7 @@ class SceneManager:
 
         # remove UI da cena atual
         current = self.current_scene
+        self._capture_transition_snapshot()
 
         if current:
 
@@ -52,6 +55,7 @@ class SceneManager:
             return
 
         # remove cena atual
+        self._capture_transition_snapshot()
         old_scene = self.scene_stack.pop()
 
         # limpa UI da cena removida
@@ -80,6 +84,7 @@ class SceneManager:
     def set_scene(self, scene):
 
         # destrói todas as cenas antigas
+        self._capture_transition_snapshot()
         while len(self.scene_stack) > 0:
 
             old_scene = self.scene_stack.pop()
@@ -130,6 +135,8 @@ class SceneManager:
     def on_resize(self):
         self.transition_overlay = None
         self.transition_overlay_size = None
+        self.transition_snapshot = None
+        self.transition_snapshot_size = None
 
         current = self.current_scene
         for scene in self.scene_stack:
@@ -151,11 +158,25 @@ class SceneManager:
         elapsed = pygame.time.get_ticks() - self.transition_start
         if elapsed >= self.transition_duration:
             self.transition_start = 0
+            self.transition_snapshot = None
+            self.transition_snapshot_size = None
             return
 
         progress = elapsed / self.transition_duration
-        alpha = int((1.0 - progress) * 190)
         size = screen.get_size()
+        eased = 1.0 - pow(1.0 - progress, 3)
+        snapshot_alpha = int((1.0 - eased) * 255)
+        if (
+            self.transition_snapshot is not None
+            and self.transition_snapshot_size == size
+            and snapshot_alpha > 0
+        ):
+            if self.transition_snapshot.get_alpha() != snapshot_alpha:
+                self.transition_snapshot.set_alpha(snapshot_alpha)
+            screen.blit(self.transition_snapshot, (0, 0))
+            return
+
+        alpha = int((1.0 - eased) * 70)
         if self.transition_overlay is None or self.transition_overlay_size != size:
             self.transition_overlay = pygame.Surface(size).convert()
             self.transition_overlay.fill((0, 0, 0))
@@ -164,3 +185,17 @@ class SceneManager:
         if self.transition_overlay.get_alpha() != alpha:
             self.transition_overlay.set_alpha(alpha)
         screen.blit(self.transition_overlay, (0, 0))
+
+    def _capture_transition_snapshot(self):
+        screen = pygame.display.get_surface()
+        if screen is None:
+            self.transition_snapshot = None
+            self.transition_snapshot_size = None
+            return
+
+        try:
+            self.transition_snapshot = screen.copy().convert()
+            self.transition_snapshot_size = screen.get_size()
+        except pygame.error:
+            self.transition_snapshot = None
+            self.transition_snapshot_size = None
