@@ -231,6 +231,8 @@ class SongSelectScene(BaseScene):
         self.carousel = SongCarousel()
         self.selected_index = 0
         self.browse_index = 0
+        self.selected_info = None
+        self.selected_osu_file = None
         self.search_text = ""
         self.search_active = False
         self.sort_mode_index = 0
@@ -298,7 +300,7 @@ class SongSelectScene(BaseScene):
         self.card_height = int(clamp(h * 0.146, 104, 148))
         self.card_center_x = int(w - (self.card_width * 0.39))
         self.card_center_y = int(h * 0.52)
-        self.card_spacing = int(self.card_height * 0.69)
+        self.card_spacing = int(self.card_height * 0.7935)
         self.margin = int(max(18, w * 0.018))
         fallback_button_h = int(clamp(h * 0.064, 50, 64))
         if self.back_button_image is not None:
@@ -389,9 +391,45 @@ class SongSelectScene(BaseScene):
         return max(quantum, int(round(float(value) / quantum)) * quantum)
 
     def selected_group_key(self):
-        if not self.items:
+        info = self._current_info()
+        if info is None:
             return None
-        return self.items[self.selected_index].get("group")
+        for item in self.items:
+            if item["info"].osu_file == info.osu_file:
+                return item.get("group")
+        return None
+
+    def _current_info(self):
+        if self.selected_info is not None:
+            return self.selected_info
+        if self.items:
+            return self.items[self.selected_index]["info"]
+        return None
+
+    def _remember_selected_info(self, info):
+        self.selected_info = info
+        self.selected_osu_file = str(info.osu_file) if info is not None else None
+
+    def _find_index_by_osu_file(self, osu_file):
+        if not osu_file:
+            return None
+        target = str(osu_file)
+        for index, item in enumerate(self.items):
+            if item["type"] != "group" and str(item["info"].osu_file) == target:
+                return index
+        for index, item in enumerate(self.items):
+            if str(item["info"].osu_file) == target:
+                return index
+        return None
+
+    def _first_difficulty_index_for_group(self, group):
+        for index, item in enumerate(self.items):
+            if item.get("group") == group and item["type"] == "difficulty":
+                return index
+        for index, item in enumerate(self.items):
+            if item.get("group") == group:
+                return index
+        return None
 
     def create_ui(self):
         self._layout()
@@ -414,16 +452,11 @@ class SongSelectScene(BaseScene):
         self.card_layer_cache.clear()
 
     def handle_event(self, event):
-        if self.pending_play_info is not None:
-            return
-
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                if self.search_active and self.search_text:
-                    self.search_text = ""
-                    self._apply_filter()
-                    return
-                self.game.scene_manager.pop_scene()
+                self._return_to_main_menu()
+                return
+            if self.pending_play_info is not None:
                 return
             if event.key == pygame.K_f and pygame.key.get_mods() & pygame.KMOD_CTRL:
                 self.search_active = True
@@ -474,6 +507,9 @@ class SongSelectScene(BaseScene):
                     self._apply_filter()
                 return
 
+        if self.pending_play_info is not None and event.type != pygame.MOUSEBUTTONDOWN:
+            return
+
         if event.type == pygame.MOUSEWHEEL:
             self._move_browse(-event.y)
             return
@@ -503,11 +539,16 @@ class SongSelectScene(BaseScene):
                 self.pending_delete_record = None
                 self.delete_prompt_rect = None
             if self.back_button_rect.collidepoint(event.pos):
-                self.game.scene_manager.pop_scene()
+                self._return_to_main_menu()
+                return
+            if self.pending_play_info is not None:
                 return
             for record_index, record_rect, record in list(self.rank_record_rects):
                 if record_rect.collidepoint(event.pos) and self.items:
-                    osu_file = self.items[self.selected_index]["info"].osu_file
+                    current_info = self._current_info()
+                    if current_info is None:
+                        return
+                    osu_file = current_info.osu_file
                     if event.button == 3:
                         self.pending_delete_record = (osu_file, record_index)
                         self.delete_prompt_rect = pygame.Rect(
@@ -521,7 +562,7 @@ class SongSelectScene(BaseScene):
                     self.game.scene_manager.push_scene(
                         ResultScene(
                             self.game,
-                            self.items[self.selected_index]["info"].difficulty_data,
+                            current_info.difficulty_data,
                             record,
                             save_record=False
                         )
@@ -535,7 +576,9 @@ class SongSelectScene(BaseScene):
             if clicked is not None:
                 item = self.items[clicked]
                 if item["type"] == "group" and item["count"] > 1:
-                    self._confirm_selection(clicked, play_preview=False)
+                    if item["group"] in self.expanded_groups:
+                        return
+                    self._confirm_selection(clicked, play_preview=True)
                 elif clicked == self.selected_index:
                     self._play_selected()
                 else:
@@ -544,6 +587,30 @@ class SongSelectScene(BaseScene):
             self.drag_scroll_active = True
             self.drag_scroll_start_y = event.pos[1]
             self.drag_scroll_start_index = self.browse_index
+
+    def _cancel_pending_play(self):
+        if self.pending_play_info is None:
+            return
+        self.pending_play_info = None
+        self.pending_play_elapsed = 0.0
+        try:
+            pygame.mixer.music.set_volume(self.preview_volume)
+        except pygame.error:
+            pass
+
+    def _return_to_main_menu(self):
+        self._cancel_pending_play()
+        self.drag_scroll_active = False
+        self.pending_delete_record = None
+        self.delete_prompt_rect = None
+        manager = self.game.scene_manager
+        if len(getattr(manager, "scene_stack", [])) > 1:
+            manager.pop_scene()
+            return
+
+        from scenes.main_menu_scene import MainMenuScene
+
+        manager.set_scene(MainMenuScene(self.game))
 
     def update(self, dt):
         self.time += min(dt, 1.0 / 20.0)
@@ -560,8 +627,8 @@ class SongSelectScene(BaseScene):
                 self.pending_play_info = None
                 pygame.mixer.music.stop()
                 pygame.mixer.music.set_volume(self.preview_volume)
-                self.game.scene_manager.push_scene(
-                    GameplayScene(self.game, info.difficulty_data)
+                self.game.scene_manager.push_scene_factory(
+                    lambda info=info: GameplayScene(self.game, info.difficulty_data)
                 )
                 return
 
@@ -582,13 +649,13 @@ class SongSelectScene(BaseScene):
 
         self.selected_index = max(0, min(self.selected_index, len(self.items) - 1))
         self.browse_index = max(0, min(self.browse_index, len(self.items) - 1))
-        selected = self.items[self.selected_index]["info"]
+        selected = self._current_info()
         if self.background_load_delay > 0.0:
             self.background_load_delay = max(
                 0.0,
                 self.background_load_delay - dt
             )
-        else:
+        elif selected is not None:
             self._ensure_background(selected)
         self.background_t = min(1.0, self.background_t + dt * 3.0)
         back_hover = 1.0 if self.back_button_rect.collidepoint(self.game.mouse_pos) else 0.0
@@ -635,11 +702,19 @@ class SongSelectScene(BaseScene):
             group = item["group"]
             self.expanded_groups = {group}
             self._rebuild_items()
-            self.selected_index = min(index, len(self.items) - 1)
+            difficulty_index = self._first_difficulty_index_for_group(group)
+            self.selected_index = (
+                difficulty_index
+                if difficulty_index is not None
+                else min(index, len(self.items) - 1)
+            )
             self.browse_index = self.selected_index
+            info = self.items[self.selected_index]["info"]
+            self._remember_selected_info(info)
             self.background_load_delay = 0.04
-            self._ensure_background(self.items[self.selected_index]["info"])
-            self._start_preview_music(self.items[self.selected_index]["info"])
+            self._ensure_background(info)
+            if play_preview:
+                self._start_preview_music(info)
             return
 
         self.selected_index = index
@@ -648,11 +723,13 @@ class SongSelectScene(BaseScene):
             if item["type"] == "difficulty"
             else set()
         )
+        info = self.items[self.selected_index]["info"]
+        self._remember_selected_info(info)
         self.browse_index = self.selected_index
         self.background_load_delay = 0.04
-        self._ensure_background(self.items[self.selected_index]["info"])
+        self._ensure_background(info)
         if play_preview:
-            self._start_preview_music(self.items[self.selected_index]["info"])
+            self._start_preview_music(info)
 
     def _start_preview_music(self, info):
         music_path = find_audio_file(
@@ -718,6 +795,30 @@ class SongSelectScene(BaseScene):
             target = Path(music_path).resolve()
         except (OSError, RuntimeError):
             target = Path(music_path)
+
+        matched_info = None
+        for info in self.infos:
+            candidate = find_audio_file(
+                info.folder_path,
+                info.difficulty_data.get("audio_filename")
+            )
+            if not candidate:
+                continue
+            try:
+                candidate_path = Path(candidate).resolve()
+            except (OSError, RuntimeError):
+                candidate_path = Path(candidate)
+            if candidate_path == target:
+                matched_info = info
+                break
+
+        if matched_info is not None:
+            self.expanded_groups = {matched_info.folder_path}
+            self._rebuild_items()
+            index = self._find_index_by_osu_file(matched_info.osu_file)
+            if index is not None:
+                return index
+
         for index, item in enumerate(self.items):
             info = item["info"]
             candidate = find_audio_file(
@@ -796,8 +897,14 @@ class SongSelectScene(BaseScene):
         }
         reverse = sort_mode in ("BPM", "Stars", "Date")
         self.filtered.sort(key=key_funcs[sort_mode], reverse=reverse)
+        selected_osu_file = self.selected_osu_file
         self._rebuild_items()
-        self.selected_index = int(clamp(self.selected_index, 0, max(0, len(self.items) - 1)))
+        selected_index = self._find_index_by_osu_file(selected_osu_file)
+        if selected_index is not None:
+            self.selected_index = selected_index
+            self.browse_index = selected_index
+        else:
+            self.selected_index = int(clamp(self.selected_index, 0, max(0, len(self.items) - 1)))
         self.browse_index = int(clamp(self.browse_index, 0, max(0, len(self.items) - 1)))
 
     def _rebuild_items(self):
@@ -812,7 +919,7 @@ class SongSelectScene(BaseScene):
         items = []
         for group in order:
             difficulties = sorted(groups[group], key=lambda info: info.stars)
-            representative = difficulties[-1]
+            representative = difficulties[0]
             items.append({
                 "type": "group",
                 "group": group,
@@ -1028,10 +1135,11 @@ class SongSelectScene(BaseScene):
         info_rect = self._info_panel_rect()
         bottom_limit = self.game.HEIGHT - self.bottom_bar_height - 18
         record_count = 0
-        if self.items:
+        info = self._current_info()
+        if info is not None:
             record_count = min(
                 5,
-                len(self.score_manager.records_for(self.items[self.selected_index]["info"].osu_file))
+                len(self.score_manager.records_for(info.osu_file))
             )
         height = (
             int(clamp(54 + max(1, record_count) * 42, 92, 258))
@@ -1051,7 +1159,10 @@ class SongSelectScene(BaseScene):
         if not self.items:
             self._draw_empty(screen)
             return
-        info = self.items[self.selected_index]["info"]
+        info = self._current_info()
+        if info is None:
+            self._draw_empty(screen)
+            return
         rect = self._info_panel_rect()
         title_text = f"{info.artist} - {info.title} [{info.version}]"
         cache_key = (
@@ -1102,8 +1213,9 @@ class SongSelectScene(BaseScene):
         rect = self._rank_panel_rect()
         self.rank_record_rects = []
         records = []
-        if self.items:
-            records = self.score_manager.records_for(self.items[self.selected_index]["info"].osu_file)
+        info = self._current_info()
+        if info is not None:
+            records = self.score_manager.records_for(info.osu_file)
         visible_records = records[:5]
         record_key = tuple(
             (
