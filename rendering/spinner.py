@@ -80,6 +80,30 @@ class SpinnerRenderer:
                 max(6, radius // 28)
             )
 
+        if note.get("spinner_goal_reached"):
+            text = getattr(self.scene, "spinner_pass_text_surface", None)
+            if text is None:
+                text = self.scene.medium_overlay_font.render(
+                    "PASS",
+                    True,
+                    (255, 245, 150)
+                )
+                self.scene.spinner_pass_text_surface = text
+            pass_time = note.get("spinner_pass_time", current)
+            pop = self.scene._clamp01((current - pass_time) / 180.0)
+            settle = self.scene._clamp01((current - pass_time) / 520.0)
+            text_alpha = int(210 * fade_in * fade_out * (1.0 - settle * 0.28))
+            previous_alpha = text.get_alpha()
+            text.set_alpha(max(0, min(255, text_alpha)))
+            text_rect = text.get_rect(
+                center=(
+                    center[0],
+                    center[1] + int(radius * (0.42 - 0.035 * self.scene._ease_out_cubic(pop)))
+                )
+            )
+            target.blit(text, text_rect)
+            text.set_alpha(previous_alpha)
+
     def _draw_image_centered(
         self,
         target,
