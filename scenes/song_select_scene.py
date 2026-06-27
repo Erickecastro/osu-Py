@@ -300,10 +300,14 @@ class SongSelectScene(BaseScene):
         self.card_center_y = int(h * 0.52)
         self.card_spacing = int(self.card_height * 0.69)
         self.margin = int(max(18, w * 0.018))
-        button_h = int(clamp(h * 0.064, 50, 64))
-        bottom_h = button_h * 2
+        fallback_button_h = int(clamp(h * 0.064, 50, 64))
+        if self.back_button_image is not None:
+            back_w, button_h = self.back_button_image.get_size()
+        else:
+            button_h = fallback_button_h
+            back_w = int(clamp(button_h * 3.64, 180, 236))
+        bottom_h = max(fallback_button_h * 2, button_h + fallback_button_h)
         self.bottom_bar_height = bottom_h
-        back_w = int(clamp(button_h * 3.64, 180, 236))
         self.back_button_rect = pygame.Rect(
             0,
             h - bottom_h + ((bottom_h - button_h) // 2),
@@ -1185,16 +1189,17 @@ class SongSelectScene(BaseScene):
             pygame.draw.line(surface, (53, 112, 210, 190), (0, 0), (self.game.WIDTH, 0), 2)
             back = self.back_button_rect.move(0, -y)
             hover = hover_bucket / 10.0
-            draw_rect = back.inflate(int(10 * hover), int(4 * hover))
-            draw_rect.x = back.x
-            draw_rect.bottom = back.bottom
             if self.back_button_image is not None:
-                image = pygame.transform.smoothscale(
-                    self.back_button_image,
-                    draw_rect.size
-                ).convert_alpha()
-                surface.blit(image, draw_rect)
+                image = self.back_button_image
+                if hover > 0.0:
+                    image = image.copy()
+                    boost = int(34 * hover)
+                    image.fill((boost, boost, boost, 0), special_flags=pygame.BLEND_RGB_ADD)
+                surface.blit(image, back)
             else:
+                draw_rect = back.inflate(int(10 * hover), int(4 * hover))
+                draw_rect.x = back.x
+                draw_rect.bottom = back.bottom
                 pygame.draw.rect(
                     surface,
                     (247, 98, 171, 255),
