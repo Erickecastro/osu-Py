@@ -12,6 +12,8 @@ class GameplayHUDRenderer:
         self.health_bar_scaled_cache = {}
         self.hit_error_bar_cache = {}
         self.hit_error_marker_cache = {}
+        self.fade_surface = None
+        self.fade_surface_size = None
 
     def _load_health_bar_image(self):
         return load_image("scorebar-colour.png", "HP")
@@ -45,8 +47,38 @@ class GameplayHUDRenderer:
         hit_error_markers=None,
         hit_window_300=50,
         hit_window_100=100,
-        hit_window_50=150
+        hit_window_50=150,
+        alpha=255
     ):
+        alpha = max(0, min(255, int(alpha)))
+        if alpha <= 0:
+            return
+
+        if alpha < 255:
+            size = screen.get_size()
+            if self.fade_surface is None or self.fade_surface_size != size:
+                self.fade_surface = pygame.Surface(size, pygame.SRCALPHA).convert_alpha()
+                self.fade_surface_size = size
+            hud_surface = self.fade_surface
+            hud_surface.fill((0, 0, 0, 0))
+            self.draw(
+                hud_surface,
+                beatmap,
+                current_time,
+                score,
+                accuracy,
+                combo,
+                health,
+                hit_error_markers,
+                hit_window_300,
+                hit_window_100,
+                hit_window_50,
+                alpha=255
+            )
+            hud_surface.set_alpha(alpha)
+            screen.blit(hud_surface, (0, 0))
+            return
+
         score_text = self.text_surface(
             f"{score:08d}",
             (255, 255, 255)
