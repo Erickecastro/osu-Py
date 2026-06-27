@@ -74,17 +74,6 @@ class SongCard:
         selected_group = scene.selected_group_key()
         same_group = meta and meta.get("group") == selected_group
         is_selected_difficulty = selected and is_difficulty
-        card_alpha = 82
-        tint = None
-        if same_group:
-            card_alpha = 255 if is_group else 248
-            if is_difficulty:
-                tint = (255, 235, 66, 255)
-            if is_selected_difficulty:
-                tint = (255, 250, 118, 255)
-        if selected:
-            card_alpha = 255
-
         layer = scene.card_layer_surface(
             (width, height),
             self.info,
@@ -92,9 +81,7 @@ class SongCard:
             same_group,
             selected,
             is_difficulty,
-            is_selected_difficulty,
-            card_alpha,
-            tint
+            is_selected_difficulty
         )
         alpha = int(self.alpha * 255)
         if layer.get_alpha() != alpha:
@@ -139,9 +126,7 @@ class SongSelectScene(BaseScene):
         same_group,
         selected,
         is_difficulty,
-        is_selected_difficulty,
-        card_alpha,
-        tint
+        is_selected_difficulty
     ):
         key = (
             tuple(size),
@@ -152,9 +137,7 @@ class SongSelectScene(BaseScene):
             bool(same_group),
             bool(selected),
             bool(is_difficulty),
-            bool(is_selected_difficulty),
-            int(card_alpha),
-            tuple(tint) if tint else None
+            bool(is_selected_difficulty)
         )
         cached = self.card_layer_cache.get(key)
         if cached is not None:
@@ -170,82 +153,69 @@ class SongSelectScene(BaseScene):
         base_image = self.card_background_surface(body.size)
         if base_image is None:
             base_image = pygame.Surface(body.size, pygame.SRCALPHA)
-            base_image.fill((72, 92, 160, 255))
-        if tint is not None:
-            base_image.fill(tint, special_flags=pygame.BLEND_RGBA_MULT)
-        if not same_group:
-            base_image.fill((48, 48, 56, 255), special_flags=pygame.BLEND_RGBA_MULT)
-        if selected and not is_difficulty:
-            base_image.fill((150, 170, 255, 255), special_flags=pygame.BLEND_RGBA_ADD)
+            base_image.fill((255, 255, 255, 255))
+
+        is_multi_group_card = (
+            meta
+            and meta.get("type") == "group"
+            and meta.get("count", 1) > 1
+        )
         if is_selected_difficulty:
-            base_image.fill((120, 100, 12, 255), special_flags=pygame.BLEND_RGBA_ADD)
-        base_image.set_alpha(card_alpha)
+            color = (255, 238, 82, 242)
+            add_color = (180, 150, 34, 0)
+        elif is_difficulty:
+            color = (118, 74, 218, 214)
+            add_color = (52, 30, 128, 0)
+        elif same_group or selected:
+            color = (255, 222, 72, 232)
+            add_color = (165, 126, 28, 0)
+        else:
+            color = (42, 43, 50, 148)
+            add_color = (0, 0, 0, 0)
+
+        base_image.fill(color, special_flags=pygame.BLEND_RGBA_MULT)
+        if add_color[:3] != (0, 0, 0):
+            base_image.fill(add_color, special_flags=pygame.BLEND_RGB_ADD)
+        base_image.set_alpha(color[3])
         layer.blit(base_image, body.topleft)
 
-        if is_difficulty:
-            rail_color = (255, 238, 96, 230) if is_selected_difficulty else (175, 170, 92, 155)
-            pygame.draw.rect(
-                layer,
-                rail_color,
-                pygame.Rect(0, 0, max(5, width // 72), height)
-            )
-            notch_x = max(12, int(width * 0.055))
-            pygame.draw.circle(
-                layer,
-                rail_color,
-                (notch_x, height // 2),
-                max(5, height // 15)
-            )
-        elif same_group and meta and meta.get("type") == "group":
-            pygame.draw.rect(
-                layer,
-                (255, 238, 96, 190),
-                pygame.Rect(0, 0, max(5, width // 80), height)
-            )
-            pygame.draw.rect(
-                layer,
-                (255, 238, 96, 115),
-                body.inflate(-2, -2),
-                width=1,
-                border_radius=5
-            )
-
-        if selected:
-            outline_color = (255, 250, 142, 245) if is_difficulty else (235, 245, 255, 230)
-            pygame.draw.rect(
-                layer,
-                outline_color,
-                body.inflate(-2, -2),
-                width=2,
-                border_radius=5
-            )
-
-        title = self.card_title_font.render(info.title, True, (255, 255, 255))
-        artist = self.card_small_font.render(info.artist, True, (230, 230, 240))
-        if meta and meta.get("type") == "group" and meta.get("count", 1) > 1:
-            marker = "EXPANDED" if meta.get("group") in self.expanded_groups else "CLICK TO EXPAND"
-            version_text = f"BEATMAP GROUP  |  {meta['count']} DIFFICULTIES  |  {marker}"
-        else:
-            prefix = "SELECTED DIFFICULTY  |  " if is_selected_difficulty else ("DIFFICULTY  |  " if is_difficulty else "")
-            version_text = f"{prefix}{info.version}  {info.stars:.2f}*"
-        version_color = (255, 250, 145) if same_group else (215, 205, 170)
-        if is_selected_difficulty:
-            version_color = (255, 255, 210)
-        version = self.card_small_font.render(version_text, True, version_color)
-        stats = self.card_tiny_font.render(f"BPM {info.bpm_text}  {info.length_text}", True, (220, 220, 230))
+        title_text = info.version if is_difficulty else info.title
+        text_x = body.left + int(width * (0.13 if is_difficulty else 0.07))
+        text_w = max(60, width - text_x - int(width * 0.08))
+        title = self._fit_text_surface(
+            self.card_title_font,
+            title_text,
+            (255, 255, 255),
+            text_w
+        ).copy()
+        artist_line = f"{info.artist} // {info.creator}"
+        artist = self._fit_text_surface(
+            self.card_small_font,
+            artist_line,
+            (232, 232, 240),
+            text_w
+        ).copy()
         for surf, alpha in (
             (title, 255),
-            (artist, 220),
-            (version, 230),
-            (stats, 180)
+            (artist, 220)
         ):
             surf.set_alpha(alpha)
 
-        text_x = body.left + int(width * (0.14 if is_difficulty else 0.07))
         layer.blit(title, (text_x, body.top + int(height * 0.16)))
         layer.blit(artist, (text_x, body.top + int(height * 0.46)))
-        layer.blit(version, (text_x, body.top + int(height * 0.66)))
-        layer.blit(stats, (text_x, body.top + int(height * 0.82)))
+        show_stars = (
+            (is_difficulty or selected or same_group)
+            and not is_multi_group_card
+        )
+        if show_stars:
+            self._draw_star_rating(
+                layer,
+                info.stars,
+                text_x,
+                int(height * 0.70),
+                int(width * 0.25),
+                230 if same_group or selected or is_selected_difficulty else 170
+            )
 
         self.card_layer_cache[key] = layer
         return layer
@@ -281,35 +251,64 @@ class SongSelectScene(BaseScene):
         self.current_preview_path = None
         self.back_button_rect = pygame.Rect(0, 0, 0, 0)
         self.card_base_image = self._load_card_base_image()
+        self.top_band_image = load_image("songselect-top-band.png")
+        self.back_button_image = load_image("songselect-back-button.png")
+        self.star_image = load_image("star.png")
+        self.rank_images = {
+            "SS": load_image("ranking-X-small.png"),
+            "S": load_image("ranking-S-small.png"),
+            "A": load_image("ranking-a-small.png"),
+            "B": load_image("ranking-b-small.png"),
+            "C": load_image("ranking-c-small.png"),
+            "D": load_image("ranking-d-small.png")
+        }
         self.card_image_cache = {}
         self.card_layer_cache = {}
         self.text_cache = {}
         self.panel_surface_cache = {}
+        self.rank_record_rects = []
+        self.pending_delete_record = None
+        self.delete_prompt_rect = None
+        self.drag_scroll_active = False
+        self.drag_scroll_start_y = 0
+        self.drag_scroll_start_index = 0
         self._layout()
         self._apply_filter()
         initial_index = self._index_for_music_path(self.initial_music_path)
         if not self.initial_music_path:
             initial_index = self._first_playable_index(initial_index)
         self._confirm_selection(initial_index, play_preview=self.initial_music_path is None)
+        if self.initial_music_path and self.items:
+            info = self.items[self.selected_index]["info"]
+            music_path = find_audio_file(
+                info.folder_path,
+                info.difficulty_data.get("audio_filename")
+            )
+            if music_path:
+                self.current_preview_path = str(Path(music_path))
+                self._publish_preview_music(info, self.current_preview_path)
+            self.initial_music_path = None
         pygame.mouse.set_visible(False)
         if hasattr(self.game, "disable_raw_mouse"):
             self.game.disable_raw_mouse()
 
     def _layout(self):
         w, h = self.game.WIDTH, self.game.HEIGHT
-        self.card_width = int(clamp(w * 0.42, 460, 720))
-        self.card_height = int(clamp(h * 0.115, 82, 116))
-        self.card_center_x = int(w - (self.card_width * 0.43))
+        self.card_width = int(clamp(w * 0.53, 584, 914))
+        self.card_height = int(clamp(h * 0.146, 104, 148))
+        self.card_center_x = int(w - (self.card_width * 0.39))
         self.card_center_y = int(h * 0.52)
-        self.card_spacing = int(self.card_height * 0.86)
+        self.card_spacing = int(self.card_height * 0.69)
         self.margin = int(max(18, w * 0.018))
-        bottom_h = int(clamp(h * 0.064, 54, 66))
+        button_h = int(clamp(h * 0.064, 50, 64))
+        bottom_h = button_h * 2
         self.bottom_bar_height = bottom_h
+        back_w = int(clamp(button_h * 3.64, 180, 236))
         self.back_button_rect = pygame.Rect(
-            self.margin,
-            h - bottom_h + 10,
-            int(clamp(w * 0.074, 112, 138)),
-            bottom_h - 20
+            0,
+            h - bottom_h + ((bottom_h - button_h) // 2),
+            back_w,
+            button_h
         )
 
         self.title_font = rounded_font(max(30, h // 24), bold=True)
@@ -319,6 +318,7 @@ class SongSelectScene(BaseScene):
         self.card_title_font = rounded_font(max(18, h // 43), bold=True)
         self.card_small_font = rounded_font(max(14, h // 58), bold=False)
         self.card_tiny_font = rounded_font(max(12, h // 72), bold=False)
+        self.back_hover_t = getattr(self, "back_hover_t", 0.0)
 
     def _load_card_base_image(self):
         return load_image("menu-button-background.png", "songselect_cards")
@@ -335,6 +335,50 @@ class SongSelectScene(BaseScene):
             ).convert_alpha()
             self.card_image_cache[key] = cached
         return cached.copy()
+
+    def _draw_star_rating(self, target, stars, x, y, max_width, alpha=210):
+        if self.star_image is None:
+            text = self.card_tiny_font.render(f"{stars:.2f}*", True, (255, 238, 100))
+            target.blit(text, (x, y))
+            return
+
+        stars = max(0.0, float(stars or 0.0))
+        full_count = min(10, int(stars))
+        has_half = stars - int(stars) > 0.05 and full_count < 10
+        draw_count = full_count + (1 if has_half else 0)
+        if draw_count <= 0:
+            draw_count = 1
+        base_size = max_width / max(1, min(10, draw_count))
+        size = int(clamp(base_size * 1.10, 9, 17))
+        gap = max(2, int(size * 0.18))
+        scaled = self.card_image_cache.get(("star", size))
+        if scaled is None:
+            scaled = pygame.transform.smoothscale(
+                self.star_image,
+                (size, size)
+            ).convert_alpha()
+            self.card_image_cache[("star", size)] = scaled
+
+        cx = int(x)
+        previous_alpha = scaled.get_alpha()
+        scaled.set_alpha(max(0, min(255, int(alpha))))
+        for _ in range(full_count):
+            target.blit(scaled, (cx, int(y)))
+            cx += size + gap
+        if has_half:
+            clip_width = max(1, size // 2)
+            target.blit(
+                scaled,
+                (cx, int(y)),
+                pygame.Rect(0, 0, clip_width, size)
+            )
+            cx += size + gap
+        scaled.set_alpha(previous_alpha)
+
+        if stars > 10.0:
+            plus = self.card_tiny_font.render("+++", True, (255, 238, 100))
+            plus.set_alpha(alpha)
+            target.blit(plus, (cx, int(y - 1)))
 
     def quantize_card_size(self, value, quantum):
         quantum = max(1, int(quantum))
@@ -359,6 +403,11 @@ class SongSelectScene(BaseScene):
         self.card_layer_cache.clear()
         self.text_cache.clear()
         self.panel_surface_cache.clear()
+
+    def on_resume(self):
+        self.score_manager.load()
+        self.panel_surface_cache.clear()
+        self.card_layer_cache.clear()
 
     def handle_event(self, event):
         if self.pending_play_info is not None:
@@ -425,9 +474,56 @@ class SongSelectScene(BaseScene):
             self._move_browse(-event.y)
             return
 
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.drag_scroll_active = False
+            return
+
+        if event.type == pygame.MOUSEMOTION and self.drag_scroll_active:
+            if not self.items:
+                return
+            delta_y = event.pos[1] - self.drag_scroll_start_y
+            target = self.drag_scroll_start_index - int(round(delta_y / max(1, self.card_spacing)))
+            self.browse_index = int(clamp(target, 0, len(self.items) - 1))
+            return
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
+            if event.button == 1 and self.delete_prompt_rect is not None:
+                if self.delete_prompt_rect.collidepoint(event.pos) and self.pending_delete_record:
+                    osu_file, record_index = self.pending_delete_record
+                    if self.score_manager.delete_record(osu_file, record_index):
+                        self.score_manager.load()
+                        self.panel_surface_cache.clear()
+                    self.pending_delete_record = None
+                    self.delete_prompt_rect = None
+                    return
+                self.pending_delete_record = None
+                self.delete_prompt_rect = None
             if self.back_button_rect.collidepoint(event.pos):
                 self.game.scene_manager.pop_scene()
+                return
+            for record_index, record_rect, record in list(self.rank_record_rects):
+                if record_rect.collidepoint(event.pos) and self.items:
+                    osu_file = self.items[self.selected_index]["info"].osu_file
+                    if event.button == 3:
+                        self.pending_delete_record = (osu_file, record_index)
+                        self.delete_prompt_rect = pygame.Rect(
+                            event.pos[0],
+                            event.pos[1],
+                            118,
+                            38
+                        )
+                        return
+                    from scenes.result_scene import ResultScene
+                    self.game.scene_manager.push_scene(
+                        ResultScene(
+                            self.game,
+                            self.items[self.selected_index]["info"].difficulty_data,
+                            record,
+                            save_record=False
+                        )
+                    )
+                    return
+            if event.button != 1:
                 return
             if self._handle_search_click(event.pos):
                 return
@@ -440,6 +536,10 @@ class SongSelectScene(BaseScene):
                     self._play_selected()
                 else:
                     self._confirm_selection(clicked, play_preview=True)
+                return
+            self.drag_scroll_active = True
+            self.drag_scroll_start_y = event.pos[1]
+            self.drag_scroll_start_index = self.browse_index
 
     def update(self, dt):
         self.time += min(dt, 1.0 / 20.0)
@@ -466,6 +566,16 @@ class SongSelectScene(BaseScene):
         if not self.items:
             return
 
+        if self.drag_scroll_active:
+            if not pygame.mouse.get_pressed(3)[0]:
+                self.drag_scroll_active = False
+            else:
+                delta_y = self.game.mouse_pos[1] - self.drag_scroll_start_y
+                target = self.drag_scroll_start_index - int(
+                    round(delta_y / max(1, self.card_spacing))
+                )
+                self.browse_index = int(clamp(target, 0, len(self.items) - 1))
+
         self.selected_index = max(0, min(self.selected_index, len(self.items) - 1))
         self.browse_index = max(0, min(self.browse_index, len(self.items) - 1))
         selected = self.items[self.selected_index]["info"]
@@ -477,6 +587,12 @@ class SongSelectScene(BaseScene):
         else:
             self._ensure_background(selected)
         self.background_t = min(1.0, self.background_t + dt * 3.0)
+        back_hover = 1.0 if self.back_button_rect.collidepoint(self.game.mouse_pos) else 0.0
+        self.back_hover_t = lerp(
+            getattr(self, "back_hover_t", 0.0),
+            back_hover,
+            1.0 - math.exp(-dt * 16.0)
+        )
 
         visible = self._visible_infos()
         self.visible_items = visible
@@ -489,11 +605,13 @@ class SongSelectScene(BaseScene):
 
     def render(self, screen):
         self._draw_background(screen)
+        self._draw_cards(screen)
+        self._draw_top_band(screen)
         self._draw_search_bar(screen)
         self._draw_info_panel(screen)
         self._draw_rank_panel(screen)
-        self._draw_cards(screen)
         self._draw_bottom_bar(screen)
+        self._draw_delete_prompt(screen)
 
     def destroy(self):
         pass
@@ -511,10 +629,7 @@ class SongSelectScene(BaseScene):
 
         if item["type"] == "group" and item["count"] > 1:
             group = item["group"]
-            if group in self.expanded_groups:
-                self.expanded_groups.remove(group)
-            else:
-                self.expanded_groups.add(group)
+            self.expanded_groups = {group}
             self._rebuild_items()
             self.selected_index = min(index, len(self.items) - 1)
             self.browse_index = self.selected_index
@@ -524,6 +639,11 @@ class SongSelectScene(BaseScene):
             return
 
         self.selected_index = index
+        self.expanded_groups = (
+            {item["group"]}
+            if item["type"] == "difficulty"
+            else set()
+        )
         self.browse_index = self.selected_index
         self.background_load_delay = 0.04
         self._ensure_background(self.items[self.selected_index]["info"])
@@ -590,16 +710,25 @@ class SongSelectScene(BaseScene):
     def _index_for_music_path(self, music_path):
         if not music_path or not self.items:
             return 0
-        target = Path(music_path)
+        try:
+            target = Path(music_path).resolve()
+        except (OSError, RuntimeError):
+            target = Path(music_path)
         for index, item in enumerate(self.items):
             info = item["info"]
             candidate = find_audio_file(
                 info.folder_path,
                 info.difficulty_data.get("audio_filename")
             )
-            if candidate and Path(candidate) == target:
+            if not candidate:
+                continue
+            try:
+                candidate_path = Path(candidate).resolve()
+            except (OSError, RuntimeError):
+                candidate_path = Path(candidate)
+            if candidate_path == target:
                 if item["type"] == "group" and item["count"] > 1:
-                    self.expanded_groups.add(item["group"])
+                    self.expanded_groups = {item["group"]}
                     self._rebuild_items()
                     return min(index + 1, len(self.items) - 1)
                 return index
@@ -611,7 +740,7 @@ class SongSelectScene(BaseScene):
         index = int(clamp(index, 0, len(self.items) - 1))
         item = self.items[index]
         if item["type"] == "group" and item["count"] > 1:
-            self.expanded_groups.add(item["group"])
+            self.expanded_groups = {item["group"]}
             self._rebuild_items()
             return min(index + 1, len(self.items) - 1)
         return index
@@ -637,6 +766,8 @@ class SongSelectScene(BaseScene):
         return False
 
     def _card_index_at(self, pos):
+        if pos[1] < self._top_band_height():
+            return None
         for index, _item in enumerate(self.items):
             target = self._target_for_index(index)
             if target[4].collidepoint(pos) and target[3] > 0.35:
@@ -832,6 +963,35 @@ class SongSelectScene(BaseScene):
             self._cache_panel_surface(cache_key, surface)
         screen.blit(surface, rect)
 
+    def _top_band_height(self):
+        return int(clamp(self.game.HEIGHT * 0.24, 160, 210))
+
+    def _draw_top_band(self, screen):
+        height = self._top_band_height()
+        cache_key = ("top_band", self.game.WIDTH, height)
+        surface = self.panel_surface_cache.get(cache_key)
+        if surface is None:
+            if self.top_band_image is not None:
+                surface = pygame.transform.smoothscale(
+                    self.top_band_image,
+                    (self.game.WIDTH, height)
+                ).convert_alpha()
+            else:
+                surface = pygame.Surface(
+                    (self.game.WIDTH, height),
+                    pygame.SRCALPHA
+                ).convert_alpha()
+                surface.fill((5, 10, 18, 236))
+                pygame.draw.line(
+                    surface,
+                    (190, 0, 255, 255),
+                    (0, height - 54),
+                    (self.game.WIDTH, max(18, height // 3)),
+                    2
+                )
+            self._cache_panel_surface(cache_key, surface)
+        screen.blit(surface, (0, 0))
+
     def _search_rect(self):
         width = int(clamp(self.game.WIDTH * 0.34, 360, 560))
         return pygame.Rect(
@@ -843,13 +1003,19 @@ class SongSelectScene(BaseScene):
 
     def _left_panel_width(self):
         card_left = self.card_center_x - int(self.card_width * 0.60)
-        available = card_left - (self.margin * 2)
+        available = card_left - (self._info_panel_x() + self.margin)
         return int(clamp(available, 420, self.game.WIDTH * 0.52))
+
+    def _info_panel_x(self):
+        return max(4, int(self.margin * 0.62))
+
+    def _info_panel_y(self):
+        return max(4, 18 - int(self._top_band_height() * 0.055))
 
     def _info_panel_rect(self):
         return pygame.Rect(
-            self.margin,
-            18,
+            self._info_panel_x(),
+            self._info_panel_y(),
             self._left_panel_width(),
             int(clamp(self.game.HEIGHT * 0.205, 146, 166))
         )
@@ -861,7 +1027,7 @@ class SongSelectScene(BaseScene):
         y = min(info_rect.bottom + 24, bottom_limit - height)
         y = max(info_rect.bottom + 16, y)
         return pygame.Rect(
-            self.margin,
+            self._info_panel_x(),
             y,
             min(info_rect.width, int(clamp(self.game.WIDTH * 0.43, 420, 620))),
             height
@@ -886,10 +1052,6 @@ class SongSelectScene(BaseScene):
         surface = self.panel_surface_cache.get(cache_key)
         if surface is None:
             surface = pygame.Surface(rect.size, pygame.SRCALPHA).convert_alpha()
-            local_rect = surface.get_rect()
-            pygame.draw.rect(surface, (6, 8, 15, 218), local_rect, border_radius=8)
-            pygame.draw.rect(surface, (76, 122, 255, 220), local_rect, 2, border_radius=8)
-            pygame.draw.rect(surface, (255, 255, 255, 18), local_rect.inflate(-6, -6), 1, border_radius=6)
             text_w = max(80, rect.width - 28)
             title = self._fit_text_surface(self.medium_font, title_text, (255, 255, 255), text_w)
             mapper = self._fit_text_surface(self.small_font, f"Mapped by {info.creator}", (230, 235, 245), text_w)
@@ -924,11 +1086,12 @@ class SongSelectScene(BaseScene):
 
     def _draw_rank_panel(self, screen):
         rect = self._rank_panel_rect()
+        self.rank_record_rects = []
         records = []
         if self.items:
             records = self.score_manager.records_for(self.items[self.selected_index]["info"].osu_file)
         record_key = tuple(
-            (record.get("score"), record.get("accuracy"), record.get("combo"))
+            (record.get("score"), record.get("accuracy"), record.get("combo"), record.get("rank"))
             for record in records[:3]
         )
         cache_key = ("rank", rect.size, record_key, id(self.small_font), id(self.tiny_font))
@@ -936,30 +1099,66 @@ class SongSelectScene(BaseScene):
         if surface is None:
             surface = pygame.Surface(rect.size, pygame.SRCALPHA).convert_alpha()
             local_rect = surface.get_rect()
-            pygame.draw.rect(surface, (12, 13, 24, 218), local_rect, border_radius=8)
-            pygame.draw.rect(surface, (76, 122, 255, 205), local_rect, 2, border_radius=8)
-            pygame.draw.rect(surface, (255, 255, 255, 14), local_rect.inflate(-6, -6), 1, border_radius=6)
-            title = self._text_surface(self.small_font, "Local Ranking", (255, 255, 255))
-            surface.blit(title, (14, 12))
+            pygame.draw.rect(surface, (6, 7, 12, 214), local_rect, border_radius=8)
+            header_rect = pygame.Rect(0, 0, rect.width, 38)
+            pygame.draw.rect(surface, (15, 14, 24, 230), header_rect, border_radius=8)
+            pygame.draw.line(surface, (255, 220, 65, 130), (0, 38), (rect.width, 38), 1)
+            title = self._text_surface(self.small_font, "Local Ranking", (255, 245, 205))
+            surface.blit(title, (14, 10))
             if not records:
-                text = self._text_surface(self.tiny_font, "No records set!", (210, 210, 225))
-                surface.blit(text, (14, 44))
+                trophy = self._text_surface(self.medium_font, "T", (255, 255, 255))
+                surface.blit(trophy, (18, 62))
+                text = self._text_surface(self.small_font, "No records set!", (92, 220, 220))
+                surface.blit(text, (58, 66))
             else:
-                row_y = 42
-                for index, record in enumerate(records[:3], start=1):
+                row_y = 50
+                for index, record in enumerate(records[:3]):
                     score = int(record.get("score", 0))
                     accuracy = float(record.get("accuracy", 0.0))
                     combo = int(record.get("combo", 0))
+                    rank = str(record.get("rank", "D")).upper()
+                    row_rect = pygame.Rect(12, row_y, rect.width - 24, 38)
+                    row_color = (235, 232, 210, 182) if index == 0 else (208, 208, 204, 154)
+                    pygame.draw.rect(surface, row_color, row_rect, border_radius=8)
+                    rank_image = self.rank_images.get(rank)
+                    if rank_image is not None:
+                        icon = pygame.transform.smoothscale(rank_image, (30, 30)).convert_alpha()
+                        surface.blit(icon, (22, row_y + 4))
+                    else:
+                        rank_text = self._text_surface(self.small_font, rank, (30, 24, 35))
+                        surface.blit(rank_text, (23, row_y + 8))
                     text = self._fit_text_surface(
                         self.tiny_font,
-                        f"#{index}  {score:08d}  {accuracy:05.2f}%  {combo}x",
-                        (218, 224, 240),
-                        rect.width - 28
+                        f"Score: {score:,} ({combo}x)   {accuracy:05.2f}%",
+                        (22, 22, 28),
+                        rect.width - 78
                     )
-                    surface.blit(text, (14, row_y))
-                    row_y += max(19, text.get_height() + 3)
+                    surface.blit(text, (66, row_y + 11))
+                    row_y += 46
             self._cache_panel_surface(cache_key, surface)
         screen.blit(surface, rect)
+        if records:
+            row_y = rect.y + 50
+            for index, record in enumerate(records[:3]):
+                self.rank_record_rects.append((
+                    index,
+                    pygame.Rect(rect.x + 12, row_y, rect.width - 24, 38),
+                    record
+                ))
+                row_y += 46
+
+    def _draw_delete_prompt(self, screen):
+        if self.delete_prompt_rect is None or self.pending_delete_record is None:
+            return
+
+        rect = self.delete_prompt_rect.copy()
+        rect.right = min(rect.right, self.game.WIDTH - 10)
+        rect.bottom = min(rect.bottom, self.game.HEIGHT - self.bottom_bar_height - 8)
+        self.delete_prompt_rect = rect
+        pygame.draw.rect(screen, (18, 15, 24, 238), rect, border_radius=8)
+        pygame.draw.rect(screen, (255, 82, 112, 230), rect, 2, border_radius=8)
+        text = self._text_surface(self.small_font, "Delete?", (255, 238, 242))
+        screen.blit(text, text.get_rect(center=rect.center))
 
     def _draw_cards(self, screen):
         if not self.items:
@@ -970,27 +1169,42 @@ class SongSelectScene(BaseScene):
             self.carousel.card_for(key, info).draw(
                 screen,
                 self,
-                selected=index == self.browse_index,
+                selected=index == self.selected_index,
                 meta=self.items[index]
             )
 
     def _draw_bottom_bar(self, screen):
         h = self.bottom_bar_height
         y = self.game.HEIGHT - h
-        back_hover = self.back_button_rect.collidepoint(self.game.mouse_pos)
-        cache_key = ("bottom", self.game.WIDTH, h, id(self.medium_font), bool(back_hover))
+        hover_bucket = int(round(self.back_hover_t * 10))
+        cache_key = ("bottom", self.game.WIDTH, h, hover_bucket)
         surface = self.panel_surface_cache.get(cache_key)
         if surface is None:
             surface = pygame.Surface((self.game.WIDTH, h), pygame.SRCALPHA).convert_alpha()
-            pygame.draw.rect(surface, (7, 8, 15, 242), surface.get_rect())
-            pygame.draw.line(surface, (75, 92, 145, 150), (0, 0), (self.game.WIDTH, 0), 1)
+            pygame.draw.rect(surface, (0, 0, 0, 255), surface.get_rect())
+            pygame.draw.line(surface, (53, 112, 210, 190), (0, 0), (self.game.WIDTH, 0), 2)
             back = self.back_button_rect.move(0, -y)
-            back_color = (178, 96, 166, 255) if back_hover else (126, 70, 121, 255)
-            border_color = (255, 245, 255, 255) if back_hover else (218, 196, 225, 210)
-            pygame.draw.rect(surface, back_color, back, border_radius=6)
-            pygame.draw.rect(surface, border_color, back, 1, border_radius=6)
-            label = self._text_surface(self.medium_font, "Back", (255, 255, 255))
-            surface.blit(label, label.get_rect(center=back.center))
+            hover = hover_bucket / 10.0
+            draw_rect = back.inflate(int(10 * hover), int(4 * hover))
+            draw_rect.x = back.x
+            draw_rect.bottom = back.bottom
+            if self.back_button_image is not None:
+                image = pygame.transform.smoothscale(
+                    self.back_button_image,
+                    draw_rect.size
+                ).convert_alpha()
+                surface.blit(image, draw_rect)
+            else:
+                pygame.draw.rect(
+                    surface,
+                    (247, 98, 171, 255),
+                    draw_rect,
+                    border_radius=4
+                )
+                label = self._text_surface(self.medium_font, "back", (255, 255, 255))
+                surface.blit(label, label.get_rect(center=draw_rect.center))
+            guest = self._text_surface(self.tiny_font, "Guest", (235, 240, 255))
+            surface.blit(guest, guest.get_rect(center=(self.game.WIDTH // 2, h // 2)))
             self._cache_panel_surface(cache_key, surface)
         screen.blit(surface, (0, y))
 
