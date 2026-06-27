@@ -1,5 +1,5 @@
 .vscode/
-__pycache__/
+core/__pycache__/
 scenes/__pycache__/
 *.pyc
 *.pyo
