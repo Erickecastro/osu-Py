@@ -24,7 +24,13 @@ class SpinnerScoring:
             0.001,
             (note["spinner_end_time"] - note["spinner_start_time"]) / 1000.0
         )
-        return max(1.5, duration_seconds * 2.85)
+        od = float(note.get("spinner_od", note.get("od", 5.0)) or 5.0)
+        difficulty_factor = 0.88 + (_clamp(od, 0.0, 10.0) * 0.024)
+        return max(1.5, duration_seconds * 2.85 * difficulty_factor)
+
+    def pass_tolerance_rotations(self, note):
+        required = self.required_rotations(note)
+        return max(0.18, min(0.62, required * 0.075))
 
     def result_for_progress(self, progress):
         if progress >= 1.0:
@@ -134,9 +140,17 @@ class SpinnerManager:
         )
 
         required = note["spinner_required_rotations"]
+        pass_tolerance = note.get("spinner_pass_tolerance_rotations", 0.0)
         progress = _clamp(note["spinner_rotation"] / required, 0.0, 1.35)
         note["spinner_progress"] = progress
+        note["spinner_pass_tolerance_progress"] = _clamp(
+            (note["spinner_rotation"] + pass_tolerance) / required,
+            0.0,
+            1.0
+        )
         if progress >= 1.0:
+            if not note.get("spinner_goal_reached"):
+                note["spinner_pass_time"] = current_time
             note["spinner_goal_reached"] = True
             over = max(0.0, note["spinner_rotation"] - required)
             bonus_count = int(over)
@@ -163,7 +177,12 @@ class SpinnerManager:
                 self.effects.update_sounds(note, current_time)
             return
 
-        result = self.scoring.result_for_progress(progress)
+        result_progress = (
+            1.0
+            if note["spinner_rotation"] + pass_tolerance >= required
+            else progress
+        )
+        result = self.scoring.result_for_progress(result_progress)
         self.scene._finish_spinner(note, result)
 
     def _initialize(self, note, mouse_pos):
@@ -175,7 +194,11 @@ class SpinnerManager:
         note["spinner_visual_angle"] = 0.0
         note["spinner_bonus_count"] = 0
         note["spinner_score_bank"] = 0.0
+        note["spinner_od"] = getattr(self.scene, "od", 5.0)
         note["spinner_required_rotations"] = self.scoring.required_rotations(note)
+        note["spinner_pass_tolerance_rotations"] = (
+            self.scoring.pass_tolerance_rotations(note)
+        )
 
         dx = mouse_pos[0] - self.center[0]
         dy = mouse_pos[1] - self.center[1]
