@@ -1027,13 +1027,23 @@ class SongSelectScene(BaseScene):
     def _rank_panel_rect(self):
         info_rect = self._info_panel_rect()
         bottom_limit = self.game.HEIGHT - self.bottom_bar_height - 18
-        height = int(clamp(self.game.HEIGHT * 0.115, 92, 116))
+        record_count = 0
+        if self.items:
+            record_count = min(
+                5,
+                len(self.score_manager.records_for(self.items[self.selected_index]["info"].osu_file))
+            )
+        height = (
+            int(clamp(54 + max(1, record_count) * 42, 92, 258))
+            if record_count
+            else int(clamp(self.game.HEIGHT * 0.105, 84, 104))
+        )
         y = min(info_rect.bottom + 24, bottom_limit - height)
         y = max(info_rect.bottom + 16, y)
         return pygame.Rect(
             self._info_panel_x(),
             y,
-            min(info_rect.width, int(clamp(self.game.WIDTH * 0.43, 420, 620))),
+            min(info_rect.width, int(clamp(self.game.WIDTH * 0.34, 350, 520))),
             height
         )
 
@@ -1094,62 +1104,79 @@ class SongSelectScene(BaseScene):
         records = []
         if self.items:
             records = self.score_manager.records_for(self.items[self.selected_index]["info"].osu_file)
+        visible_records = records[:5]
         record_key = tuple(
-            (record.get("score"), record.get("accuracy"), record.get("combo"), record.get("rank"))
-            for record in records[:3]
+            (
+                record.get("score"),
+                record.get("accuracy"),
+                record.get("combo"),
+                record.get("rank"),
+                record.get("created_at")
+            )
+            for record in visible_records
         )
         cache_key = ("rank", rect.size, record_key, id(self.small_font), id(self.tiny_font))
         surface = self.panel_surface_cache.get(cache_key)
         if surface is None:
             surface = pygame.Surface(rect.size, pygame.SRCALPHA).convert_alpha()
             local_rect = surface.get_rect()
-            pygame.draw.rect(surface, (6, 7, 12, 214), local_rect, border_radius=8)
+            pygame.draw.rect(surface, (6, 8, 13, 218), local_rect, border_radius=8)
             header_rect = pygame.Rect(0, 0, rect.width, 38)
             pygame.draw.rect(surface, (15, 14, 24, 230), header_rect, border_radius=8)
             pygame.draw.line(surface, (255, 220, 65, 130), (0, 38), (rect.width, 38), 1)
             title = self._text_surface(self.small_font, "Local Ranking", (255, 245, 205))
             surface.blit(title, (14, 10))
             if not records:
+                body_y = 38
+                body_h = rect.height - body_y
+                center_y = body_y + body_h // 2
                 trophy = self._text_surface(self.medium_font, "T", (255, 255, 255))
-                surface.blit(trophy, (18, 62))
+                surface.blit(trophy, trophy.get_rect(midleft=(18, center_y)))
                 text = self._text_surface(self.small_font, "No records set!", (92, 220, 220))
-                surface.blit(text, (58, 66))
+                surface.blit(text, text.get_rect(midleft=(58, center_y)))
             else:
-                row_y = 50
-                for index, record in enumerate(records[:3]):
+                row_y = 48
+                for index, record in enumerate(visible_records):
                     score = int(record.get("score", 0))
                     accuracy = float(record.get("accuracy", 0.0))
                     combo = int(record.get("combo", 0))
                     rank = str(record.get("rank", "D")).upper()
-                    row_rect = pygame.Rect(12, row_y, rect.width - 24, 38)
-                    row_color = (235, 232, 210, 182) if index == 0 else (208, 208, 204, 154)
-                    pygame.draw.rect(surface, row_color, row_rect, border_radius=8)
+                    row_rect = pygame.Rect(12, row_y, rect.width - 24, 34)
+                    row_color = (18, 22, 31, 220) if index == 0 else (12, 15, 22, 198)
+                    pygame.draw.rect(surface, row_color, row_rect, border_radius=7)
+                    pygame.draw.line(
+                        surface,
+                        (92, 220, 220, 78 if index == 0 else 42),
+                        (row_rect.left + 8, row_rect.bottom - 1),
+                        (row_rect.right - 8, row_rect.bottom - 1),
+                        1
+                    )
                     rank_image = self.rank_images.get(rank)
                     if rank_image is not None:
-                        icon = pygame.transform.smoothscale(rank_image, (30, 30)).convert_alpha()
-                        surface.blit(icon, (22, row_y + 4))
+                        icon = pygame.transform.smoothscale(rank_image, (28, 28)).convert_alpha()
+                        surface.blit(icon, (22, row_y + 3))
                     else:
-                        rank_text = self._text_surface(self.small_font, rank, (30, 24, 35))
-                        surface.blit(rank_text, (23, row_y + 8))
+                        rank_text = self._text_surface(self.small_font, rank, (255, 245, 205))
+                        surface.blit(rank_text, rank_text.get_rect(center=(36, row_y + 17)))
                     text = self._fit_text_surface(
                         self.tiny_font,
                         f"Score: {score:,} ({combo}x)   {accuracy:05.2f}%",
-                        (22, 22, 28),
+                        (232, 236, 246),
                         rect.width - 78
                     )
-                    surface.blit(text, (66, row_y + 11))
-                    row_y += 46
+                    surface.blit(text, (66, row_y + 9))
+                    row_y += 40
             self._cache_panel_surface(cache_key, surface)
         screen.blit(surface, rect)
         if records:
-            row_y = rect.y + 50
-            for index, record in enumerate(records[:3]):
+            row_y = rect.y + 48
+            for index, record in enumerate(visible_records):
                 self.rank_record_rects.append((
                     index,
-                    pygame.Rect(rect.x + 12, row_y, rect.width - 24, 38),
+                    pygame.Rect(rect.x + 12, row_y, rect.width - 24, 34),
                     record
                 ))
-                row_y += 46
+                row_y += 40
 
     def _draw_delete_prompt(self, screen):
         if self.delete_prompt_rect is None or self.pending_delete_record is None:
