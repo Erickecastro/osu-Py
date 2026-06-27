@@ -228,7 +228,7 @@ class GameplayScene(BaseScene):
         # fade-in durante o approach e fade-out logo após o hit.
         self.hit_fade_out_time = 380  # ms
         self.miss_fade_out_time = 150  # ms
-        self.miss_pop_duration = 150  # ms
+        self.miss_pop_duration = 112  # ms
         self.hit_number_fade_out_time = 84  # ms
         self.hit_explosion_duration = 217  # ms
         self.slider_follow_return_grace_ms = 350  # ms
@@ -330,6 +330,8 @@ class GameplayScene(BaseScene):
         self.circle_number_font = rounded_font(28, bold=True)
         self.effects_renderer = GameplayEffectsRenderer(self)
         self.hud_renderer = GameplayHUDRenderer(self.font)
+        self.hud_start_time = None
+        self.hud_fade_in_duration = 320
         self.skin_images = self._load_skin_images()
         self.followpoint_segment_surface = (
             self._build_followpoint_segment_surface()
@@ -666,11 +668,11 @@ class GameplayScene(BaseScene):
             cache_key = str(path)
             cached = self._sound_cache.get(cache_key)
             if cached is not None:
-                cached.set_volume(0.29)
+                cached.set_volume(0.145)
                 return cached
             try:
                 sound = pygame.mixer.Sound(str(path))
-                sound.set_volume(0.29)
+                sound.set_volume(0.145)
                 self._sound_cache[cache_key] = sound
                 return sound
             except pygame.error:
@@ -3455,6 +3457,15 @@ class GameplayScene(BaseScene):
 
         if self.music_started:
             self._prune_hit_error_markers()
+            if self.hud_start_time is None:
+                self.hud_start_time = self.current_time
+            hud_alpha = int(
+                255
+                * self._ease_out_cubic(
+                    (self.current_time - self.hud_start_time)
+                    / max(1, self.hud_fade_in_duration)
+                )
+            )
             self.hud_renderer.draw(
                 screen,
                 self.beatmap,
@@ -3466,7 +3477,8 @@ class GameplayScene(BaseScene):
                 self.hit_error_markers,
                 self.hit_window_300,
                 self.hit_window_100,
-                self.hit_window_50
+                self.hit_window_50,
+                alpha=hud_alpha
             )
 
         # Camada transparente para permitir alpha real (fade in/out suave).
