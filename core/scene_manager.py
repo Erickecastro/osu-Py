@@ -44,6 +44,18 @@ class SceneManager:
         self.scene_stack.append(scene)
         self._start_transition()
 
+    def push_scene_factory(self, factory):
+        self._capture_transition_snapshot()
+        self._draw_blocking_loading_frame()
+        scene = factory()
+
+        current = self.current_scene
+        if current and hasattr(current, "destroy"):
+            current.destroy()
+
+        self.scene_stack.append(scene)
+        self._start_transition()
+
     # -------------------------
     # POP SCENE
     # -------------------------
@@ -94,6 +106,19 @@ class SceneManager:
                 old_scene.destroy()
 
         # adiciona nova cena
+        self.scene_stack.append(scene)
+        self._start_transition()
+
+    def set_scene_factory(self, factory):
+        self._capture_transition_snapshot()
+        self._draw_blocking_loading_frame()
+        scene = factory()
+
+        while len(self.scene_stack) > 0:
+            old_scene = self.scene_stack.pop()
+            if hasattr(old_scene, "destroy"):
+                old_scene.destroy()
+
         self.scene_stack.append(scene)
         self._start_transition()
 
@@ -150,6 +175,19 @@ class SceneManager:
 
     def _start_transition(self):
         self.transition_start = pygame.time.get_ticks()
+
+    def _draw_blocking_loading_frame(self):
+        screen = pygame.display.get_surface()
+        if screen is None:
+            return
+        try:
+            screen.fill((0, 0, 0))
+            pygame.display.flip()
+            self.transition_snapshot = screen.copy().convert()
+            self.transition_snapshot_size = screen.get_size()
+            pygame.event.pump()
+        except pygame.error:
+            pass
 
     def _draw_transition(self, screen):
         if not self.transition_start:
