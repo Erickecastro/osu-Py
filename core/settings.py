@@ -19,9 +19,31 @@ def clamp_sensitivity(value):
     return max(0.40, min(2.00, value))
 
 
+def clamp_gameplay_dim(value):
+    try:
+        value = int(round(float(value)))
+    except (TypeError, ValueError):
+        value = 94
+    return max(0, min(100, value))
+
+
+def _coerce_key(value, default):
+    try:
+        key = int(value)
+    except (TypeError, ValueError):
+        return int(default)
+    return max(0, key)
+
+
 @dataclass
 class GameSettings:
     mouse_sensitivity: float = 1.0
+    hit_key_1: int = 122  # pygame.K_z
+    hit_key_2: int = 120  # pygame.K_x
+    raw_mouse_enabled: bool = True
+    tablet_input_enabled: bool = False
+    block_mouse_buttons_in_gameplay: bool = False
+    gameplay_dim: int = 94
 
     @classmethod
     def load(cls):
@@ -34,7 +56,15 @@ class GameSettings:
         return cls(
             mouse_sensitivity=clamp_sensitivity(
                 data.get("mouse_sensitivity", 1.0)
-            )
+            ),
+            hit_key_1=_coerce_key(data.get("hit_key_1", 122), 122),
+            hit_key_2=_coerce_key(data.get("hit_key_2", 120), 120),
+            raw_mouse_enabled=bool(data.get("raw_mouse_enabled", True)),
+            tablet_input_enabled=bool(data.get("tablet_input_enabled", False)),
+            block_mouse_buttons_in_gameplay=bool(
+                data.get("block_mouse_buttons_in_gameplay", False)
+            ),
+            gameplay_dim=clamp_gameplay_dim(data.get("gameplay_dim", 94))
         )
 
     def save(self):
@@ -47,7 +77,15 @@ class GameSettings:
                         "mouse_sensitivity": round(
                             clamp_sensitivity(self.mouse_sensitivity),
                             3
-                        )
+                        ),
+                        "hit_key_1": _coerce_key(self.hit_key_1, 122),
+                        "hit_key_2": _coerce_key(self.hit_key_2, 120),
+                        "raw_mouse_enabled": bool(self.raw_mouse_enabled),
+                        "tablet_input_enabled": bool(self.tablet_input_enabled),
+                        "block_mouse_buttons_in_gameplay": bool(
+                            self.block_mouse_buttons_in_gameplay
+                        ),
+                        "gameplay_dim": clamp_gameplay_dim(self.gameplay_dim)
                     },
                     indent=2
                 ),

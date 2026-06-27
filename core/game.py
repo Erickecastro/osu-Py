@@ -17,7 +17,7 @@ from core.performance import (
 )
 from core.profiler import FrameProfiler
 from core.scene_manager import SceneManager
-from core.settings import GameSettings, clamp_sensitivity
+from core.settings import GameSettings, clamp_gameplay_dim, clamp_sensitivity
 from rendering.cursor import CursorRenderer
 from scenes.main_menu_scene import MainMenuScene
 
@@ -69,6 +69,16 @@ class Game:
         self.raw_mouse_sensitivity = clamp_sensitivity(
             self.settings.mouse_sensitivity or RAW_MOUSE_SENSITIVITY
         )
+        self.raw_mouse_preferred = bool(self.settings.raw_mouse_enabled)
+        self.tablet_input_enabled = bool(self.settings.tablet_input_enabled)
+        self.block_mouse_buttons_in_gameplay = bool(
+            self.settings.block_mouse_buttons_in_gameplay
+        )
+        self.hit_keys = (
+            int(self.settings.hit_key_1),
+            int(self.settings.hit_key_2)
+        )
+        self.gameplay_dim = clamp_gameplay_dim(self.settings.gameplay_dim)
         self.cursor_renderer = CursorRenderer()
         pygame.mouse.set_visible(False)
         pygame.event.set_blocked(pygame.MOUSEMOTION)
@@ -233,6 +243,10 @@ class Game:
             pos = self.mouse_pos
 
         self.mouse_pos = self._clamp_mouse_pos(pos)
+        if self.tablet_input_enabled or not self.raw_mouse_preferred:
+            self.disable_raw_mouse(recenter=False)
+            return
+
         pygame.event.set_grab(True)
 
         if hasattr(pygame.mouse, "set_relative_mode"):
@@ -272,7 +286,7 @@ class Game:
         self.mouse_pos = pygame.mouse.get_pos()
         return self.mouse_pos
 
-    def disable_raw_mouse(self):
+    def disable_raw_mouse(self, recenter=True):
         pygame.event.set_blocked(pygame.MOUSEMOTION)
         self.mouse_motion_blocked = True
 
@@ -285,13 +299,14 @@ class Game:
         pygame.event.set_grab(False)
         self.raw_mouse_enabled = False
 
-        try:
-            pygame.mouse.set_pos(
-                int(self.mouse_pos[0]),
-                int(self.mouse_pos[1])
-            )
-        except pygame.error:
-            pass
+        if recenter:
+            try:
+                pygame.mouse.set_pos(
+                    int(self.mouse_pos[0]),
+                    int(self.mouse_pos[1])
+                )
+            except pygame.error:
+                pass
 
     def _clamp_mouse_pos(self, pos):
         return (
@@ -313,6 +328,44 @@ class Game:
     def set_mouse_sensitivity(self, value):
         self.raw_mouse_sensitivity = clamp_sensitivity(value)
         self.settings.mouse_sensitivity = self.raw_mouse_sensitivity
+        self.settings.save()
+
+    def set_hit_key(self, slot, key):
+        key = int(key)
+        if slot == 1:
+            self.settings.hit_key_1 = key
+        else:
+            self.settings.hit_key_2 = key
+        self.hit_keys = (
+            int(self.settings.hit_key_1),
+            int(self.settings.hit_key_2)
+        )
+        self.settings.save()
+
+    def set_raw_mouse_enabled(self, enabled):
+        self.raw_mouse_preferred = bool(enabled)
+        self.settings.raw_mouse_enabled = self.raw_mouse_preferred
+        self.settings.save()
+        if not self.raw_mouse_preferred or self.tablet_input_enabled:
+            self.disable_raw_mouse(recenter=False)
+
+    def set_tablet_input_enabled(self, enabled):
+        self.tablet_input_enabled = bool(enabled)
+        self.settings.tablet_input_enabled = self.tablet_input_enabled
+        self.settings.save()
+        if self.tablet_input_enabled:
+            self.disable_raw_mouse(recenter=False)
+
+    def set_block_mouse_buttons_in_gameplay(self, enabled):
+        self.block_mouse_buttons_in_gameplay = bool(enabled)
+        self.settings.block_mouse_buttons_in_gameplay = (
+            self.block_mouse_buttons_in_gameplay
+        )
+        self.settings.save()
+
+    def set_gameplay_dim(self, value):
+        self.gameplay_dim = clamp_gameplay_dim(value)
+        self.settings.gameplay_dim = self.gameplay_dim
         self.settings.save()
 
     # -------------------------
@@ -370,7 +423,10 @@ class Game:
     def events(self):
         current_scene = self.scene_manager.current_scene
         uses_ui = getattr(current_scene, "uses_ui", True)
-        wants_motion_events = uses_ui and not self.raw_mouse_enabled
+        wants_motion_events = (
+            (uses_ui or self.tablet_input_enabled)
+            and not self.raw_mouse_enabled
+        )
         if wants_motion_events and self.mouse_motion_blocked:
             pygame.event.set_allowed(pygame.MOUSEMOTION)
             self.mouse_motion_blocked = False
