@@ -39,6 +39,23 @@ def lerp_color(start, end, amount):
     )
 
 
+def tint_surface_from_alpha(source, size, color, alpha=255):
+    width, height = max(1, int(size[0])), max(1, int(size[1]))
+    scaled = pygame.transform.smoothscale(source, (width, height)).convert_alpha()
+    tinted = pygame.Surface((width, height), pygame.SRCALPHA).convert_alpha()
+    tinted.fill((color[0], color[1], color[2], max(0, min(255, int(alpha)))))
+    try:
+        source_alpha = pygame.surfarray.array_alpha(scaled)
+        target_alpha = pygame.surfarray.pixels_alpha(tinted)
+        if alpha < 255:
+            source_alpha = (source_alpha * (alpha / 255.0)).astype(source_alpha.dtype)
+        target_alpha[:, :] = source_alpha
+        del target_alpha
+    except (ImportError, pygame.error, ValueError, TypeError, AttributeError):
+        tinted.blit(scaled, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    return tinted
+
+
 class MenuOption:
     NORMAL_COLOR = (95, 70, 220)
     HOVER_COLOR = (235, 105, 170)
@@ -54,6 +71,7 @@ class MenuOption:
         self._surface_cache = {}
         self._text_cache = {}
         self._pattern_cache = {}
+        self._button_source = None
 
     def set_layout(self, left_x, y, width, height, delay, width_factor=1.0):
         self.width_factor = width_factor
@@ -114,7 +132,7 @@ class MenuOption:
         )
         text_alpha = 255
         cache_key = (
-            "solid-v3",
+            "asset-v1",
             rect.width,
             rect.height,
             self.label,
@@ -132,61 +150,24 @@ class MenuOption:
             )
             return
 
-        pad_x = max(14, int(rect.height * 0.46))
-        pad_y = max(8, int(rect.height * 0.34))
+        pad_x = max(4, int(rect.height * 0.08))
+        pad_y = max(3, int(rect.height * 0.08))
         layer_size = (rect.width + (pad_x * 2), rect.height + (pad_y * 2))
         layer = pygame.Surface(layer_size, pygame.SRCALPHA).convert_alpha()
         layer.fill((0, 0, 0, 0))
         body = pygame.Rect(pad_x, pad_y, rect.width, rect.height)
-        body_radius = body.height // 2
-        base_color = lerp_color(self.NORMAL_COLOR, self.HOVER_COLOR, hover_style)
-        shadow_alpha = int(48 + 22 * hover_style)
-        glow_alpha = int(20 + 42 * hover_style)
 
-        shadow = body.move(4, 4)
-        pygame.draw.rect(
-            layer,
-            (0, 0, 0, shadow_alpha),
-            shadow,
-            border_radius=body_radius
-        )
-        if hover > 0.01:
-            for extra, factor in ((10, 0.22), (5, 0.35)):
-                glow_rect = body.inflate(extra, int(extra * 0.72))
-                pygame.draw.rect(
-                    layer,
-                    (255, 160, 220, int(glow_alpha * factor)),
-                    glow_rect,
-                    border_radius=glow_rect.height // 2
-                )
-
-        pygame.draw.rect(
-            layer,
-            (*base_color, 255),
-            body,
-            border_radius=body_radius
-        )
-
-        detail_layer = pygame.Surface(layer_size, pygame.SRCALPHA).convert_alpha()
-        detail_layer.fill((0, 0, 0, 0))
-        inner_glow = body.inflate(
-            -max(2, int(body.height * 0.10)),
-            -max(2, int(body.height * 0.18))
-        )
-        pygame.draw.rect(
-            detail_layer,
-            (255, 255, 255, int(8 + 18 * hover_style)),
-            inner_glow,
-            border_radius=max(1, inner_glow.height // 2)
-        )
-        pygame.draw.rect(
-            detail_layer,
-            (255, 255, 255, int(28 + 34 * hover_style)),
-            body.inflate(-2, -2),
-            width=1,
-            border_radius=max(1, body_radius - 1)
-        )
-        layer.blit(detail_layer, (0, 0))
+        source = self._main_button_source()
+        if source is not None:
+            button = self._menu_button_surface(source, body.size, hover_style)
+            layer.blit(button, body)
+        else:
+            pygame.draw.rect(
+                layer,
+                (*lerp_color(self.NORMAL_COLOR, self.HOVER_COLOR, hover_style), 255),
+                body,
+                border_radius=body.height // 2
+            )
 
         available_width = max(24, body.width - int(body.height * 1.28))
         text = self._text_surface(font, available_width)
@@ -207,6 +188,71 @@ class MenuOption:
         if layer.get_alpha() != render_alpha:
             layer.set_alpha(render_alpha)
         surface.blit(layer, (rect.x - pad_x, rect.y - pad_y))
+
+    def _main_button_source(self):
+        if self._button_source is None:
+            self._button_source = load_image("main-menu-buttons.png")
+        return self._button_source
+
+    def _menu_button_surface(self, source, size, hover_style):
+        key = (
+            "menu_button",
+            int(size[0]),
+            int(size[1]),
+            int(round(hover_style * 24))
+        )
+        cached = self._surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        button = self._nine_slice_button(source, size)
+        if hover_style > 0.001:
+            purple = tint_surface_from_alpha(
+                button,
+                button.get_size(),
+                (126, 88, 238),
+                int(145 * hover_style)
+            )
+            button.blit(purple, (0, 0))
+
+            shine = pygame.Surface(button.get_size(), pygame.SRCALPHA).convert_alpha()
+            shine.fill((190, 166, 255, int(10 * hover_style)))
+            button.blit(shine, (0, 0))
+
+        if len(self._surface_cache) > 72:
+            self._surface_cache.clear()
+        self._surface_cache[key] = button
+        return button
+
+    def _nine_slice_button(self, source, size):
+        width, height = max(1, int(size[0])), max(1, int(size[1]))
+        src_w, src_h = source.get_size()
+        if src_w <= 2 or src_h <= 2:
+            return pygame.transform.smoothscale(source, (width, height)).convert_alpha()
+
+        cap_src = min(src_w // 2, max(1, src_h // 2))
+        cap_dst = min(width // 2, max(1, int(height * cap_src / src_h)))
+        center_dst_w = max(0, width - (cap_dst * 2))
+
+        left_src = pygame.Rect(0, 0, cap_src, src_h)
+        right_src = pygame.Rect(src_w - cap_src, 0, cap_src, src_h)
+        center_src = pygame.Rect(cap_src, 0, max(1, src_w - cap_src * 2), src_h)
+
+        output = pygame.Surface((width, height), pygame.SRCALPHA).convert_alpha()
+        output.blit(
+            pygame.transform.smoothscale(source.subsurface(left_src), (cap_dst, height)),
+            (0, 0)
+        )
+        if center_dst_w > 0:
+            output.blit(
+                pygame.transform.smoothscale(source.subsurface(center_src), (center_dst_w, height)),
+                (cap_dst, 0)
+            )
+        output.blit(
+            pygame.transform.smoothscale(source.subsurface(right_src), (cap_dst, height)),
+            (width - cap_dst, 0)
+        )
+        return output
 
     def _text_surface(self, font, available_width):
         key = (self.label, id(font), font.get_height(), int(available_width))
@@ -672,7 +718,10 @@ class MainMenuScene(BaseScene):
         self.menu_open = False
         self.settings_open = False
         self.settings_slider_rect = pygame.Rect(0, 0, 0, 0)
-        self.settings_dragging = False
+        self.settings_dragging = None
+        self.settings_panel_t = 0.0
+        self.settings_controls = {}
+        self.settings_rebind_slot = None
         self.menu_t = 0.0
         self.light_overlay = False
         self.music_started = False
@@ -695,15 +744,24 @@ class MainMenuScene(BaseScene):
         self.layout_size = None
         self.footer_cache = {}
         self.settings_panel_cache = {}
+        self.settings_key_button_cache = {}
+        self.settings_key_button_source = load_image("button.png")
+        self.intro_elapsed = 0.0
+        self.intro_duration = 0.82
+        self.intro_overlay = None
+        self.intro_overlay_size = None
+        self.menu_music_target_volume = 0.42
         self.exit_requested = False
         self.exit_elapsed = 0.0
         self.exit_duration = 1.15
         self.exit_music_volume = 1.0
         self.exit_overlay = None
         self.exit_overlay_size = None
+        self.exit_snapshot = None
+        self.exit_snapshot_size = None
 
         self.circle = PulseCircle(self.title)
-        self.visualizer = CircularMenuVisualizer(bar_count=88)
+        self.visualizer = CircularMenuVisualizer(bar_count=128)
         self.snow = MenuSnow(self.assets_dir)
         self.snow.load()
         self.options = [
@@ -763,7 +821,7 @@ class MainMenuScene(BaseScene):
         logo_overlap = int(max(
             int(option_height * 1.08),
             int(self.circle.base_radius * 0.18)
-        ) * 1.24)
+        ) * 1.55)
         left_x = open_circle_right - logo_overlap
         left_x = min(left_x, width - option_width - 24)
         start_y = self.circle.center[1] - int(spacing * (len(self.options) - 1) * 0.5)
@@ -811,6 +869,7 @@ class MainMenuScene(BaseScene):
         self.fallback_orbit_size = None
         self.overlay_cache.clear()
         self.settings_panel_cache.clear()
+        self.settings_key_button_cache.clear()
         for option in self.options:
             option._surface_cache.clear()
             option._text_cache.clear()
@@ -820,9 +879,18 @@ class MainMenuScene(BaseScene):
             return
 
         if event.type == pygame.KEYDOWN:
+            if self.settings_rebind_slot is not None:
+                if event.key == pygame.K_ESCAPE:
+                    self.settings_rebind_slot = None
+                else:
+                    self.game.set_hit_key(self.settings_rebind_slot, event.key)
+                    self.settings_rebind_slot = None
+                    self.settings_panel_cache.clear()
+                return
             if event.key == pygame.K_ESCAPE and self.settings_open:
                 self.settings_open = False
-                self.settings_dragging = False
+                self.settings_dragging = None
+                self.settings_rebind_slot = None
                 return
             if event.key == pygame.K_ESCAPE and self.menu_open:
                 self.menu_open = False
@@ -846,18 +914,51 @@ class MainMenuScene(BaseScene):
 
         if self.settings_open:
             if event.type == pygame.MOUSEWHEEL:
-                self._adjust_mouse_sensitivity(event.y * 0.05)
+                if self.settings_controls.get("mouse_sensitivity", pygame.Rect(0, 0, 0, 0)).collidepoint(self.game.mouse_pos):
+                    self._adjust_mouse_sensitivity(event.y * 0.05)
+                elif self.settings_controls.get("gameplay_dim", pygame.Rect(0, 0, 0, 0)).collidepoint(self.game.mouse_pos):
+                    self._adjust_gameplay_dim(event.y * 3)
                 return
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                if self.settings_slider_rect.collidepoint(event.pos):
-                    self.settings_dragging = True
+                if self.settings_controls.get("mouse_sensitivity", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                    self.settings_dragging = "mouse_sensitivity"
                     self._set_mouse_sensitivity_from_pos(event.pos[0])
+                    return
+                if self.settings_controls.get("gameplay_dim", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                    self.settings_dragging = "gameplay_dim"
+                    self._set_gameplay_dim_from_pos(event.pos[0])
+                    return
+                if self.settings_controls.get("hit_key_1", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                    self.settings_rebind_slot = 1
+                    self.settings_panel_cache.clear()
+                    return
+                if self.settings_controls.get("hit_key_2", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                    self.settings_rebind_slot = 2
+                    self.settings_panel_cache.clear()
+                    return
+                if self.settings_controls.get("raw_mouse", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                    self.game.set_raw_mouse_enabled(not self.game.raw_mouse_preferred)
+                    self.settings_panel_cache.clear()
+                    return
+                if self.settings_controls.get("tablet_input", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                    self.game.set_tablet_input_enabled(not self.game.tablet_input_enabled)
+                    self.settings_panel_cache.clear()
+                    return
+                if self.settings_controls.get("block_mouse_buttons", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                    self.game.set_block_mouse_buttons_in_gameplay(
+                        not self.game.block_mouse_buttons_in_gameplay
+                    )
+                    self.settings_panel_cache.clear()
+                    return
                 return
             if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                self.settings_dragging = False
+                self.settings_dragging = None
                 return
             if event.type == pygame.MOUSEMOTION and self.settings_dragging:
-                self._set_mouse_sensitivity_from_pos(event.pos[0])
+                if self.settings_dragging == "mouse_sensitivity":
+                    self._set_mouse_sensitivity_from_pos(event.pos[0])
+                elif self.settings_dragging == "gameplay_dim":
+                    self._set_gameplay_dim_from_pos(event.pos[0])
                 return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -892,6 +993,18 @@ class MainMenuScene(BaseScene):
                 except pygame.error:
                     pass
                 self.game.running = False
+        elif self.intro_elapsed < self.intro_duration:
+            self.intro_elapsed = min(
+                self.intro_duration,
+                self.intro_elapsed + dt
+            )
+            progress = clamp(self.intro_elapsed / max(0.01, self.intro_duration), 0.0, 1.0)
+            eased = progress * progress * (3.0 - (2.0 * progress))
+            if self.music_started and not self.music_paused:
+                try:
+                    pygame.mixer.music.set_volume(self.menu_music_target_volume * eased)
+                except pygame.error:
+                    pass
 
         mouse_pos = self.game.mouse_pos
         if self.time_seconds >= 0.08:
@@ -923,8 +1036,16 @@ class MainMenuScene(BaseScene):
             1.0 if self.menu_open else 0.0,
             1.0 - math.exp(-dt * 10.0)
         )
-        if self.settings_dragging:
+        if self.settings_dragging == "mouse_sensitivity":
             self._set_mouse_sensitivity_from_pos(mouse_pos[0])
+        elif self.settings_dragging == "gameplay_dim":
+            self._set_gameplay_dim_from_pos(mouse_pos[0])
+
+        self.settings_panel_t = lerp(
+            self.settings_panel_t,
+            1.0 if self.settings_open else 0.0,
+            1.0 - math.exp(-dt * 12.0)
+        )
 
         self.circle.update(
             dt,
@@ -987,8 +1108,10 @@ class MainMenuScene(BaseScene):
         self.circle.center = original_center
 
         self._draw_footer(screen)
-        if self.settings_open:
+        if self.settings_open or self.settings_panel_t > 0.01:
             self._draw_settings_panel(screen)
+        if self.intro_elapsed < self.intro_duration:
+            self._draw_intro_fade(screen)
         if self.exit_requested:
             self._draw_exit_fade(screen)
 
@@ -1011,8 +1134,8 @@ class MainMenuScene(BaseScene):
     def _open_song_select(self):
         self.keep_music_on_destroy = True
         self._publish_current_music_state()
-        self.game.scene_manager.push_scene(
-            SongSelectScene(
+        self.game.scene_manager.push_scene_factory(
+            lambda: SongSelectScene(
                 self.game,
                 initial_music_path=str(self.music_path) if self.music_path else None
             )
@@ -1027,14 +1150,28 @@ class MainMenuScene(BaseScene):
         self.game.set_mouse_sensitivity(
             self.game.raw_mouse_sensitivity + amount
         )
+        self.settings_panel_cache.clear()
 
     def _set_mouse_sensitivity_from_pos(self, x):
-        rect = self.settings_slider_rect
+        rect = self.settings_controls.get("mouse_sensitivity", self.settings_slider_rect)
         if rect.width <= 0:
             return
         t = clamp((x - rect.left) / rect.width, 0.0, 1.0)
         value = 0.40 + (t * (2.00 - 0.40))
         self.game.set_mouse_sensitivity(round(value, 2))
+        self.settings_panel_cache.clear()
+
+    def _adjust_gameplay_dim(self, amount):
+        self.game.set_gameplay_dim(self.game.gameplay_dim + amount)
+        self.settings_panel_cache.clear()
+
+    def _set_gameplay_dim_from_pos(self, x):
+        rect = self.settings_controls.get("gameplay_dim", pygame.Rect(0, 0, 0, 0))
+        if rect.width <= 0:
+            return
+        t = clamp((x - rect.left) / rect.width, 0.0, 1.0)
+        self.game.set_gameplay_dim(round(t * 100))
+        self.settings_panel_cache.clear()
 
     def _exit_game(self):
         if self.exit_requested:
@@ -1042,6 +1179,14 @@ class MainMenuScene(BaseScene):
         self.exit_requested = True
         self.exit_elapsed = 0.0
         self.exit_music_volume = 1.0
+        display = pygame.display.get_surface()
+        if display is not None:
+            try:
+                self.exit_snapshot = display.copy().convert()
+                self.exit_snapshot_size = display.get_size()
+            except pygame.error:
+                self.exit_snapshot = None
+                self.exit_snapshot_size = None
         try:
             self.exit_music_volume = pygame.mixer.music.get_volume()
         except pygame.error:
@@ -1204,7 +1349,12 @@ class MainMenuScene(BaseScene):
         try:
             pygame.mixer.music.load(str(self.music_path))
             mark_music_loaded(self.music_path)
-            pygame.mixer.music.set_volume(0.42)
+            start_volume = (
+                0.0
+                if self.intro_elapsed < self.intro_duration
+                else self.menu_music_target_volume
+            )
+            pygame.mixer.music.set_volume(start_volume)
             pygame.mixer.music.play()
             self.music_started = True
             self.music_paused = False
@@ -1214,6 +1364,20 @@ class MainMenuScene(BaseScene):
         except pygame.error:
             self.music_started = False
             self.music_paused = False
+
+    def _draw_intro_fade(self, screen):
+        size = screen.get_size()
+        if self.intro_overlay is None or self.intro_overlay_size != size:
+            self.intro_overlay = pygame.Surface(size).convert()
+            self.intro_overlay.fill((0, 0, 0))
+            self.intro_overlay_size = size
+
+        progress = clamp(self.intro_elapsed / max(0.01, self.intro_duration), 0.0, 1.0)
+        eased = progress * progress * (3.0 - (2.0 * progress))
+        alpha = int(255 * (1.0 - eased))
+        if self.intro_overlay.get_alpha() != alpha:
+            self.intro_overlay.set_alpha(alpha)
+        screen.blit(self.intro_overlay, (0, 0))
 
     def _ensure_visualizer_analysis(self, force=False):
         if not self.music_path:
@@ -1470,88 +1634,207 @@ class MainMenuScene(BaseScene):
         screen.blit(signature, (18, 18))
 
     def _draw_settings_panel(self, screen):
-        width = int(clamp(screen.get_width() * 0.34, 360, 520))
-        height = int(clamp(screen.get_height() * 0.20, 150, 210))
-        panel = pygame.Rect(0, 0, width, height)
-        panel.center = (
-            int(screen.get_width() * 0.62),
-            int(screen.get_height() * 0.50)
-        )
-
-        value = self.game.raw_mouse_sensitivity
-        cache_key = (
-            panel.size,
-            round(value, 2),
-            id(self.option_font),
-            id(self.footer_font)
-        )
-        cached = self.settings_panel_cache.get(cache_key)
-        if cached is not None:
-            surface, slider = cached
-            self.settings_slider_rect = slider.move(panel.topleft)
-            screen.blit(surface, panel)
+        progress = ease_out_cubic(self.settings_panel_t)
+        if progress <= 0.01:
+            self.settings_controls.clear()
             return
 
-        surface = pygame.Surface(panel.size, pygame.SRCALPHA)
+        screen_w, screen_h = screen.get_size()
+        width = int(clamp(screen_w * 0.36, 390, 560))
+        visible_width = max(1, int(width * progress))
+        panel = pygame.Rect(0, 0, visible_width, screen_h)
+        self.settings_controls.clear()
+
+        surface = pygame.Surface(panel.size, pygame.SRCALPHA).convert_alpha()
+        surface.fill((3, 3, 8, 240))
         pygame.draw.rect(
             surface,
-            (18, 16, 34, 224),
-            surface.get_rect(),
-            border_radius=14
+            (10, 9, 18, 234),
+            surface.get_rect().inflate(-2, -2),
+            border_radius=0
         )
-        pygame.draw.rect(
+        pygame.draw.line(
             surface,
-            (142, 118, 255, 190),
-            surface.get_rect(),
-            2,
-            border_radius=14
+            (235, 105, 170, 222),
+            (visible_width - 1, 0),
+            (visible_width - 1, screen_h),
+            2
         )
 
-        title = self.option_font.render("Settings", True, (255, 255, 255))
-        label = self.footer_font.render("Mouse sensitivity", True, (230, 232, 250))
-        value_text = self.footer_font.render(f"{value:.2f}x", True, (255, 244, 160))
-        hint = self.footer_font.render("Left/Right, wheel, or drag", True, (190, 190, 210))
+        content_alpha = int(255 * clamp((progress - 0.25) / 0.75, 0.0, 1.0))
+        if content_alpha > 0:
+            x = 28
+            y = 34
+            title = self.option_font.render("Settings", True, (255, 255, 255))
+            title.set_alpha(content_alpha)
+            surface.blit(title, (x, y))
+            y += max(48, title.get_height() + 22)
 
-        surface.blit(title, (24, 18))
-        surface.blit(label, (24, 62))
-        surface.blit(value_text, (width - value_text.get_width() - 24, 62))
+            y = self._draw_settings_section(surface, "Input", x, y, content_alpha)
+            y = self._draw_settings_slider(
+                surface,
+                "mouse_sensitivity",
+                "Mouse sensitivity",
+                f"{self.game.raw_mouse_sensitivity:.2f}x",
+                clamp((self.game.raw_mouse_sensitivity - 0.40) / 1.60, 0.0, 1.0),
+                x,
+                y,
+                visible_width,
+                content_alpha
+            )
+            y = self._draw_settings_keys(surface, x, y, visible_width, content_alpha)
+            y = self._draw_settings_toggle(
+                surface,
+                "raw_mouse",
+                "Raw mouse input",
+                self.game.raw_mouse_preferred,
+                x,
+                y,
+                visible_width,
+                content_alpha
+            )
+            y = self._draw_settings_toggle(
+                surface,
+                "tablet_input",
+                "Tablet absolute input",
+                self.game.tablet_input_enabled,
+                x,
+                y,
+                visible_width,
+                content_alpha
+            )
 
-        slider = pygame.Rect(24, 102, width - 48, 12)
-        pygame.draw.rect(
-            surface,
-            (58, 54, 82, 255),
-            slider,
-            border_radius=slider.height // 2
-        )
-        t = clamp((value - 0.40) / 1.60, 0.0, 1.0)
-        fill_rect = slider.copy()
-        fill_rect.width = int(slider.width * t)
-        pygame.draw.rect(
-            surface,
-            (152, 112, 255, 255),
-            fill_rect,
-            border_radius=slider.height // 2
-        )
-        knob_x = slider.left + int(slider.width * t)
-        pygame.draw.circle(
-            surface,
-            (255, 255, 255, 255),
-            (knob_x, slider.centery),
-            10
-        )
-        pygame.draw.circle(
-            surface,
-            (124, 94, 235, 255),
-            (knob_x, slider.centery),
-            5
-        )
-        surface.blit(hint, (24, height - hint.get_height() - 18))
+            y += 8
+            y = self._draw_settings_section(surface, "Gameplay", x, y, content_alpha)
+            y = self._draw_settings_slider(
+                surface,
+                "gameplay_dim",
+                "Background dim",
+                f"{self.game.gameplay_dim:d}%",
+                clamp(self.game.gameplay_dim / 100.0, 0.0, 1.0),
+                x,
+                y,
+                visible_width,
+                content_alpha
+            )
+            y = self._draw_settings_toggle(
+                surface,
+                "block_mouse_buttons",
+                "Block mouse hit buttons",
+                self.game.block_mouse_buttons_in_gameplay,
+                x,
+                y,
+                visible_width,
+                content_alpha
+            )
+            hint_lines = (
+                "Tablet mode uses absolute cursor position.",
+                "Mouse sensitivity only affects raw mouse mode.",
+                "Click a key button, then press the new hit key."
+            )
+            for line in hint_lines:
+                hint = self.footer_font.render(line, True, (186, 188, 210))
+                hint.set_alpha(int(content_alpha * 0.78))
+                surface.blit(hint, (x, y + 8))
+                y += hint.get_height() + 7
 
-        self.settings_slider_rect = slider.move(panel.topleft)
-        if len(self.settings_panel_cache) > 12:
-            self.settings_panel_cache.clear()
-        self.settings_panel_cache[cache_key] = (surface, slider.copy())
         screen.blit(surface, panel)
+
+    def _draw_settings_section(self, surface, label, x, y, alpha):
+        text = self.footer_font.render(label.upper(), True, (255, 215, 238))
+        text.set_alpha(alpha)
+        surface.blit(text, (x, y))
+        pygame.draw.line(
+            surface,
+            (255, 105, 170, int(alpha * 0.46)),
+            (x, y + text.get_height() + 5),
+            (surface.get_width() - 28, y + text.get_height() + 5),
+            1
+        )
+        return y + text.get_height() + 22
+
+    def _draw_settings_slider(self, surface, key, label, value_text, t, x, y, panel_width, alpha):
+        label_surface = self.footer_font.render(label, True, (238, 240, 255))
+        label_surface.set_alpha(alpha)
+        value_surface = self.footer_font.render(value_text, True, (255, 232, 145))
+        value_surface.set_alpha(alpha)
+        surface.blit(label_surface, (x, y))
+        surface.blit(value_surface, (panel_width - value_surface.get_width() - 28, y))
+
+        slider = pygame.Rect(x, y + label_surface.get_height() + 13, panel_width - x - 32, 12)
+        pygame.draw.rect(surface, (54, 50, 77, int(alpha * 0.95)), slider, border_radius=slider.height // 2)
+        fill = slider.copy()
+        fill.width = max(slider.height, int(slider.width * t))
+        pygame.draw.rect(surface, (226, 94, 166, alpha), fill, border_radius=fill.height // 2)
+        knob_x = slider.left + int(slider.width * t)
+        pygame.draw.circle(surface, (255, 255, 255, alpha), (knob_x, slider.centery), 9)
+        pygame.draw.circle(surface, (122, 92, 238, alpha), (knob_x, slider.centery), 4)
+        self.settings_controls[key] = slider
+        if key == "mouse_sensitivity":
+            self.settings_slider_rect = slider
+        return slider.bottom + 24
+
+    def _draw_settings_keys(self, surface, x, y, panel_width, alpha):
+        label = self.footer_font.render("Hit keys", True, (238, 240, 255))
+        label.set_alpha(alpha)
+        surface.blit(label, (x, y))
+
+        button_w = int(clamp((panel_width - x - 58) * 0.36, 96, 132))
+        button_h = int(clamp(button_w * 0.35, 28, 34))
+        gap = 14
+        top = y + label.get_height() + 10
+        keys = (
+            ("hit_key_1", 1, self.game.hit_keys[0]),
+            ("hit_key_2", 2, self.game.hit_keys[1])
+        )
+        for index, (control, slot, key_value) in enumerate(keys):
+            rect = pygame.Rect(x + index * (button_w + gap), top, button_w, button_h)
+            active = self.settings_rebind_slot == slot
+            color = (224, 88, 166) if active else (62, 83, 210)
+            button = self._settings_key_button_surface(rect.size, color, alpha)
+            surface.blit(button, rect)
+            name = "press..." if active else pygame.key.name(key_value).upper()
+            text = self.footer_font.render(name, True, (255, 255, 255))
+            text.set_alpha(alpha)
+            surface.blit(text, text.get_rect(center=rect.center))
+            self.settings_controls[control] = rect
+        return top + button_h + 24
+
+    def _settings_key_button_surface(self, size, color, alpha):
+        source = self.settings_key_button_source
+        key = ("key_button", int(size[0]), int(size[1]), tuple(color), int(alpha))
+        cached = self.settings_key_button_cache.get(key)
+        if cached is not None:
+            return cached
+
+        if source is not None:
+            surface = tint_surface_from_alpha(source, size, color, alpha)
+        else:
+            surface = pygame.Surface(size, pygame.SRCALPHA).convert_alpha()
+            pygame.draw.rect(
+                surface,
+                (*color, int(alpha)),
+                surface.get_rect(),
+                border_radius=max(1, int(size[1]) // 2)
+            )
+        if len(self.settings_key_button_cache) > 24:
+            self.settings_key_button_cache.clear()
+        self.settings_key_button_cache[key] = surface
+        return surface
+
+    def _draw_settings_toggle(self, surface, key, label, enabled, x, y, panel_width, alpha):
+        rect = pygame.Rect(x, y, panel_width - x - 32, 38)
+        pygame.draw.rect(surface, (30, 28, 48, int(alpha * 0.88)), rect, border_radius=rect.height // 2)
+        knob_area = pygame.Rect(rect.right - 72, rect.y + 7, 54, 24)
+        fill = (230, 102, 170) if enabled else (74, 72, 94)
+        pygame.draw.rect(surface, (*fill, alpha), knob_area, border_radius=knob_area.height // 2)
+        knob_x = knob_area.right - 12 if enabled else knob_area.left + 12
+        pygame.draw.circle(surface, (255, 255, 255, alpha), (knob_x, knob_area.centery), 9)
+        text = self.footer_font.render(label, True, (238, 240, 255))
+        text.set_alpha(alpha)
+        surface.blit(text, (rect.x + 16, rect.centery - text.get_height() // 2))
+        self.settings_controls[key] = rect
+        return rect.bottom + 14
 
     def _footer_surface(self, text, alpha):
         key = (text, int(alpha), id(self.footer_font))
