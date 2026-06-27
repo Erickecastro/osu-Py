@@ -127,7 +127,14 @@ class GameplayScene(BaseScene):
         self.background_source = None
         self.background_surface = None
         self.background_surface_size = None
-        self.background_dim_alpha = 240
+        self.background_dim_alpha = int(
+            255
+            * max(
+                0,
+                min(100, getattr(self.game, "gameplay_dim", 94))
+            )
+            / 100
+        )
 
         self.cs = self.beatmap[
             "difficulty"
@@ -303,6 +310,14 @@ class GameplayScene(BaseScene):
             self.timing_points,
             self.slider_multiplier
         )
+        self.first_object_visual_time = min(
+            (
+                note.get("start_time", note["time"] - self.approach_time)
+                for note in self.notes
+                if note["type"] != "spinner"
+            ),
+            default=0
+        )
 
         self.slider_renderer = SliderRenderer(self)
         self.slider_cache_notes = [
@@ -331,8 +346,10 @@ class GameplayScene(BaseScene):
         self.effects_renderer = GameplayEffectsRenderer(self)
         self.hud_renderer = GameplayHUDRenderer(self.font)
         self.hud_start_time = None
-        self.hud_fade_in_duration = 320
+        self.hud_fade_in_duration = 140
         self.skin_images = self._load_skin_images()
+        self.button_image = self._load_image("button.png")
+        self.button_surface_cache = {}
         self.followpoint_segment_surface = (
             self._build_followpoint_segment_surface()
         )
@@ -383,6 +400,40 @@ class GameplayScene(BaseScene):
         self.small_overlay_font = rounded_font(18, bold=False)
         self.spinner_manager = SpinnerManager(self)
         self.spinner_renderer = SpinnerRenderer(self)
+
+    def _tinted_button_image(self, tint_color, size, hover=0.0):
+        image = self.button_image
+        if image is None:
+            return None
+
+        size = (
+            max(1, int(round(size[0]))),
+            max(1, int(round(size[1])))
+        )
+        hover_bucket = int(round(max(0.0, min(1.0, hover)) * 8))
+        tint_key = None if tint_color is None else tuple(tint_color[:3])
+        key = ("overlay_button", id(image), tint_key, size, hover_bucket)
+        cached = self.button_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        source = pygame.transform.smoothscale(image, size).convert_alpha()
+        if tint_color is None:
+            surface = source
+        else:
+            surface = pygame.Surface(size, pygame.SRCALPHA).convert_alpha()
+            hover_amount = hover_bucket / 8.0
+            color = tuple(
+                int(channel + (255 - channel) * 0.13 * hover_amount)
+                for channel in tint_color[:3]
+            )
+            for y in range(size[1]):
+                for x in range(size[0]):
+                    alpha = source.get_at((x, y)).a
+                    if alpha:
+                        surface.set_at((x, y), (*color, alpha))
+        self.button_surface_cache[key] = surface
+        return surface
 
     def _boost_hitcircle_alpha(self, alpha):
         return max(0, min(255, int(alpha * self.HITCIRCLE_ALPHA_BOOST)))
@@ -529,6 +580,7 @@ class GameplayScene(BaseScene):
         self.center_overlay_cache.clear()
         self.skip_button_surface = None
         self.skip_button_surface_size = None
+        self.button_surface_cache.clear()
         if hasattr(self.slider_renderer, "reverse_arrow_cache"):
             self.slider_renderer.reverse_arrow_cache.clear()
         if hasattr(self.spinner_renderer, "cache"):
@@ -1645,13 +1697,17 @@ class GameplayScene(BaseScene):
     def _poll_hit_input_state(self):
         try:
             keys = pygame.key.get_pressed()
-            for key in GameplayInputController.HIT_KEYS:
+            for key in getattr(self.game, "hit_keys", GameplayInputController.HIT_KEYS):
                 if keys[key]:
                     self.hit_keys_held.add(key)
                 else:
                     self.hit_keys_held.discard(key)
         except (pygame.error, IndexError):
             pass
+
+        if getattr(self.game, "block_mouse_buttons_in_gameplay", False):
+            self.hit_mouse_buttons_held.clear()
+            return
 
         try:
             buttons = pygame.mouse.get_pressed(3)
@@ -2397,9 +2453,13 @@ class GameplayScene(BaseScene):
             min(260.0, gap * 0.26, beat_length * 0.30)
         )
 
-        followpoint_radius = self.followpoint_visual_radius
-        segment_width = max(28, int(followpoint_radius * 1.75))
-        spacing = max(18, int(segment_width * 0.72))
+        segment_surface = self.followpoint_segment_surface
+        segment_width = (
+            segment_surface.get_width()
+            if segment_surface is not None
+            else max(22, int(self.followpoint_visual_radius * 1.2))
+        )
+        spacing = max(10, int(segment_width * 0.58))
         visible_gap = center_distance - (self.scaled_radius * 0.82)
         if visible_gap < max(segment_width * 0.82, self.scaled_radius * 0.55):
             return None
@@ -2450,22 +2510,9 @@ class GameplayScene(BaseScene):
             return None
 
         frame = self._cropped_alpha_image(frames[-1])
-        followpoint_radius = self.followpoint_visual_radius
-        segment_width = max(28, int(followpoint_radius * 1.75))
-        return self._scaled_image(
-            frame,
-            (
-                int(segment_width * 1.17),
-                max(
-                    5,
-                    int(
-                        followpoint_radius
-                        * 0.155
-                        * self.FOLLOWPOINT_THICKNESS_SCALE
-                    )
-                )
-            )
-        )
+        if frame is None:
+            return None
+        return frame.copy().convert_alpha()
 
     def _draw_followpoints(self, target):
         scaled = self.followpoint_segment_surface
@@ -2539,9 +2586,9 @@ class GameplayScene(BaseScene):
                 fade_out_progress = self._clamp01(
                     (self.current_time - fade_start) / fade_out_duration
                 )
-                fade_out = (1.0 - fade_out_progress) ** 1.65
+                fade_out = self._smoothstep(1.0 - fade_out_progress)
             alpha = int(
-                230
+                210
                 * self._smoothstep(fade_in)
                 * fade_out
             )
@@ -2560,13 +2607,16 @@ class GameplayScene(BaseScene):
             dy = connection["dy"]
             count = connection["count"]
             sequence_smoothing = connection["sequence_smoothing"]
+            reveal_head = progress * (count + 7)
             for point_index in range(1, count + 1):
                 t = point_index / (count + 1)
                 appear = self._clamp01(
-                    (progress * (count + 7) - point_index + 2)
+                    (reveal_head - point_index + 2)
                     / sequence_smoothing
                 )
-                point_fade = self._smoothstep(appear)
+                if appear <= 0.0:
+                    continue
+                point_fade = 0.72 + (self._smoothstep(appear) * 0.28)
                 point_alpha = int(alpha * point_fade)
                 if point_alpha <= 0:
                     continue
@@ -3066,19 +3116,17 @@ class GameplayScene(BaseScene):
         if self.completed:
             return
         self.completed = True
-        if self.music_started:
-            try:
-                pygame.mixer.music.fadeout(260)
-            except pygame.error:
-                pygame.mixer.music.stop()
         from scenes.result_scene import ResultScene
-        self.game.scene_manager.push_scene(
-            ResultScene(self.game, self.beatmap, self._result_payload())
+        payload = self._result_payload()
+        self.game.scene_manager.push_scene_factory(
+            lambda: ResultScene(self.game, self.beatmap, payload)
         )
 
     def _retry_gameplay(self):
-        self.game.scene_manager.set_scene(
-            GameplayScene(self.game, self.beatmap)
+        pygame.mixer.music.stop()
+        self.music_started = False
+        self.game.scene_manager.set_scene_factory(
+            lambda: GameplayScene(self.game, self.beatmap)
         )
 
     def _quit_to_song_select(self):
@@ -3086,7 +3134,7 @@ class GameplayScene(BaseScene):
             self.game.scene_manager.pop_scene()
             return
         from scenes.song_select_scene import SongSelectScene
-        self.game.scene_manager.set_scene(SongSelectScene(self.game))
+        self.game.scene_manager.set_scene_factory(lambda: SongSelectScene(self.game))
 
     def _sync_music_time_now(self):
         if self.start_time is not None and self.music_started:
@@ -3468,6 +3516,8 @@ class GameplayScene(BaseScene):
                     / max(1, self.hud_fade_in_duration)
                 )
             )
+            if self.current_time >= self.first_object_visual_time - 80:
+                hud_alpha = 255
             self.hud_renderer.draw(
                 screen,
                 self.beatmap,
@@ -3878,8 +3928,6 @@ class GameplayScene(BaseScene):
                             alpha=slider_ball_alpha
                         )
 
-        self._draw_followpoints(overlay)
-
         for center, approach_radius, approach_alpha, approach_color in approach_draws:
             if not self._draw_approach_skin(
                 overlay,
@@ -3896,6 +3944,8 @@ class GameplayScene(BaseScene):
                     outline_width=5,
                     alpha=approach_alpha
                 )
+
+        self._draw_followpoints(overlay)
 
         self.miss_indicators = [
             indicator
@@ -4079,8 +4129,13 @@ class GameplayScene(BaseScene):
         else:
             buttons = ()
 
-        for action, rect in self._center_overlay_button_rects(buttons):
-            if rect.collidepoint(pos):
+        hitboxes = (
+            self.center_overlay_buttons
+            if self.center_overlay_buttons
+            else self._center_overlay_button_rects(buttons)
+        )
+        for action, rect in hitboxes:
+            if rect.inflate(18, 12).collidepoint(pos):
                 if action == "resume":
                     self._toggle_pause()
                 elif action == "retry":
@@ -4093,9 +4148,13 @@ class GameplayScene(BaseScene):
     def _center_overlay_button_rects(self, buttons):
         center_x = self.game.WIDTH // 2
         center_y = self.game.HEIGHT // 2
-        button_w = int(min(self.game.WIDTH * 0.20, 230))
-        button_h = int(max(44, min(56, self.game.HEIGHT * 0.065)))
-        gap = int(max(12, button_h * 0.30))
+        button_h = int(max(48, min(66, self.game.HEIGHT * 0.072)))
+        if self.button_image is not None:
+            aspect = self.button_image.get_width() / max(1, self.button_image.get_height())
+            button_w = int(round(button_h * aspect))
+        else:
+            button_w = int(max(250, min(self.game.WIDTH * 0.24, 360)))
+        gap = int(max(14, button_h * 0.34))
         x = center_x - button_w // 2
         y = center_y - 12
         rects = []
@@ -4148,41 +4207,40 @@ class GameplayScene(BaseScene):
         self.center_overlay_buttons = []
         mouse_pos = self.game.mouse_pos
         layout = self._center_overlay_button_rects(buttons)
+        button_colors = {
+            "resume": (255, 112, 34),
+            "retry": (222, 112, 34),
+            "quit": (218, 58, 66)
+        }
         for action, rect in layout:
             label = dict(buttons).get(action, action.title())
             hover_target = 1.0 if rect.collidepoint(mouse_pos) else 0.0
             current_hover = self.center_overlay_button_hover.get(action, 0.0)
             hover = current_hover + (hover_target - current_hover) * 0.34
             self.center_overlay_button_hover[action] = hover
-            draw_rect = rect.inflate(int(22 * hover), int(6 * hover))
+            if self.button_image is not None:
+                hover_h = rect.height + int(2 * hover)
+                aspect = self.button_image.get_width() / max(1, self.button_image.get_height())
+                draw_rect = pygame.Rect(0, 0, int(round(hover_h * aspect)), hover_h)
+                draw_rect.center = rect.center
+            else:
+                draw_rect = rect.inflate(int(22 * hover), int(6 * hover))
             self.center_overlay_buttons.append((action, draw_rect))
-            shadow_rect = draw_rect.move(int(8 + 4 * hover), int(8 + 2 * hover))
-            pygame.draw.rect(
-                screen,
-                (0, 0, 0, 150),
-                shadow_rect,
-                border_radius=shadow_rect.height // 2
+            button_surface = self._tinted_button_image(
+                button_colors.get(action, accent),
+                draw_rect.size,
+                hover
             )
-            fill = int(242 + 13 * hover)
-            pygame.draw.rect(
-                screen,
-                (fill, fill, fill, int(238 + 17 * hover)),
-                draw_rect,
-                border_radius=draw_rect.height // 2
-            )
-            pygame.draw.rect(
-                screen,
-                (70, 70, 76, int(155 + 45 * hover)),
-                draw_rect,
-                1,
-                border_radius=draw_rect.height // 2
-            )
-            label_color = (
-                int(58 + accent[0] * 0.12 * hover),
-                int(58 + accent[1] * 0.12 * hover),
-                int(64 + accent[2] * 0.10 * hover)
-            )
-            label_surface = self.medium_overlay_font.render(label, True, label_color)
+            if button_surface is not None:
+                screen.blit(button_surface, draw_rect)
+            else:
+                pygame.draw.rect(
+                    screen,
+                    button_colors.get(action, accent),
+                    draw_rect,
+                    border_radius=draw_rect.height // 2
+                )
+            label_surface = self.medium_overlay_font.render(label, True, (255, 255, 255))
             screen.blit(label_surface, label_surface.get_rect(center=draw_rect.center))
 
     def _draw_pause_overlay(self, screen):
@@ -4237,7 +4295,7 @@ class GameplayScene(BaseScene):
             self.slider_cache_futures.clear()
 
         if self.completed:
-            pygame.mixer.music.stop()
+            self._publish_current_track_state()
         elif self.music_started and not self.failed:
             if self.paused:
                 pygame.mixer.music.unpause()
