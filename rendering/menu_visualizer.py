@@ -58,7 +58,7 @@ class CircularMenuVisualizer:
                 self.alpha_bias.append(0.90 + (value - 0.88) * 0.84)
         self.region_targets = [0.0] * bar_count
         self.max_length_scale = 0.904
-        self.bar_width = 16.2
+        self.bar_width = 14.6
         self.minimum_level_base = 0.08
         self.minimum_alpha = 0
         self.attack_amount = 0.85
@@ -392,7 +392,7 @@ class CircularMenuVisualizer:
                 + (low * 0.14 * (wave ** 1.6))
                 + (contrast * (0.24 + (rms * 0.22) + (beat_pulse * 0.10)))
                 + (detail_wave * contrast * 0.08)
-                + (sweep * (0.052 + beat_pulse * 0.122 + rms * 0.054)),
+                + (sweep * (0.070 + beat_pulse * 0.152 + rms * 0.064)),
                 0.0,
                 1.0
             )
@@ -409,7 +409,7 @@ class CircularMenuVisualizer:
             ) * self.audible_level * calm_visibility
             target = max(minimum * self.length_bias[index], band)
             target *= 0.82 + (beat_pulse * 0.20) + (fft_pulse * 0.12) + (self.kiai_level * 0.14)
-            target *= 1.0 + (sweep * (0.31 + beat_pulse * 0.18))
+            target *= 1.0 + (sweep * (0.42 + beat_pulse * 0.22))
             target *= 0.90 + ((self.length_bias[index] - 1.0) * 0.18)
             target *= 0.84 + (self.activity_bias[index] * 0.22)
             target *= 1.0 + (contrast * 0.42) + (self.band_transients[index] * 0.30)
@@ -549,11 +549,11 @@ class CircularMenuVisualizer:
         transient = self.band_transients[index]
         length = max(4.0, max_length * (level ** 1.16) * self.length_bias[index])
         length *= 1.0 + (transient * 0.22)
-        length *= 1.0 + (sweep * (0.30 + beat * 0.14))
+        length *= 1.0 + (sweep * (0.43 + beat * 0.18))
         start_radius = inner_radius
         end_radius = logo_radius + max(5.0, length)
         base_arc_spacing = (math.tau * start_radius) / max(1, self.bar_count)
-        base_gap = max(1.0, base_arc_spacing * 0.08)
+        base_gap = max(1.2, base_arc_spacing * 0.10)
         width = int(math.floor(_clamp(
             self.bar_width,
             2.0,
@@ -563,14 +563,14 @@ class CircularMenuVisualizer:
             0.22
             + (level * 0.18)
             + (transient * 0.20)
-            + (sweep * (0.58 + beat * 0.20))
+            + (sweep * (0.72 + beat * 0.24))
             + (self.kiai_level * 0.08),
             0.0,
             1.0
         )
         base_gray = int(_clamp(156 + (bar_light * 74), 130, 236))
         base_alpha = int(_clamp(
-            (44 + (self.audible_level * 10) + (beat * 4) + (sweep * 24))
+            (44 + (self.audible_level * 10) + (beat * 4) + (sweep * 32))
             * (0.58 + (self.alpha_bias[index] * 0.36)),
             18,
             82
