@@ -57,12 +57,12 @@ class CircularMenuVisualizer:
                 self.activity_bias.append(1.06 + (value - 0.88) * 1.25)
                 self.alpha_bias.append(0.90 + (value - 0.88) * 0.84)
         self.region_targets = [0.0] * bar_count
-        self.max_length_scale = 0.904
-        self.bar_width = 14.6
-        self.minimum_level_base = 0.08
+        self.max_length_scale = 0.68
+        self.bar_width = 7.2
+        self.minimum_level_base = 0.16
         self.minimum_alpha = 0
         self.attack_amount = 0.85
-        self.release_amount = 0.075
+        self.release_amount = 0.085
         self.sweep_position = 0.0
 
         self.center = (0, 0)
@@ -82,7 +82,7 @@ class CircularMenuVisualizer:
         self._layer_radius = 0
         self._layer_shrink_elapsed = 0.0
         self._redraw_elapsed = 1.0
-        self.render_interval = 1.0 / 60.0
+        self.render_interval = 1.0 / 120.0
         self._analysis_lock = threading.Lock()
         self._analysis_thread = None
         self._analysis_thread_key = None
@@ -385,6 +385,16 @@ class CircularMenuVisualizer:
             ) * 0.5
             sweep_distance = abs(((position - self.sweep_position + 0.5) % 1.0) - 0.5) * 2.0
             sweep = max(0.0, 1.0 - (sweep_distance / 0.30)) ** 2.2
+            peak_drive = _clamp(max(timing_beat, rms, self.beat_level), 0.0, 1.0)
+            frenzy_gate = _clamp((peak_drive - 0.52) / 0.48, 0.0, 1.0)
+            travelling_peak = max(
+                0.0,
+                math.sin(
+                    (position * math.tau * 13.0)
+                    - (self.sweep_position * math.tau * 7.0)
+                    + (self.alpha_variation[index] * math.tau)
+                )
+            ) ** 5.0
             band = _clamp(
                 (value * 0.86)
                 + (mid * 0.16)
@@ -392,7 +402,8 @@ class CircularMenuVisualizer:
                 + (low * 0.14 * (wave ** 1.6))
                 + (contrast * (0.24 + (rms * 0.22) + (beat_pulse * 0.10)))
                 + (detail_wave * contrast * 0.08)
-                + (sweep * (0.070 + beat_pulse * 0.152 + rms * 0.064)),
+                + (sweep * (0.070 + beat_pulse * 0.152 + rms * 0.064))
+                + (travelling_peak * frenzy_gate * 0.20),
                 0.0,
                 1.0
             )
@@ -413,6 +424,11 @@ class CircularMenuVisualizer:
             target *= 0.90 + ((self.length_bias[index] - 1.0) * 0.18)
             target *= 0.84 + (self.activity_bias[index] * 0.22)
             target *= 1.0 + (contrast * 0.42) + (self.band_transients[index] * 0.30)
+            target *= 1.0 + (
+                travelling_peak
+                * frenzy_gate
+                * (0.72 + self.alpha_variation[index] * 0.34)
+            )
             peak_drive = _clamp(max(beat_pulse, fft_pulse, rms), 0.0, 1.0)
             dynamic_rank = _clamp(
                 (float(value) * 0.44)
@@ -428,10 +444,10 @@ class CircularMenuVisualizer:
             self.dynamic_caps[index] = _clamp(
                 0.18
                 + (dynamic_rank * 0.62)
-                + (peak_drive * 0.08)
+                + (frenzy_gate * 0.10)
                 + (self.kiai_level * 0.04),
                 0.16,
-                0.92
+                0.96
             )
             target *= self.audible_level
             raw_targets[index] = _clamp(target, 0.0, 1.0)
@@ -490,7 +506,7 @@ class CircularMenuVisualizer:
         inner_radius = logo_radius - max(6.0, self.radius * 0.052)
         max_length = (
             self.radius
-            * (0.28 + energy * 1.28 + beat * 0.70 + self.kiai_level * 0.28)
+            * (0.36 + energy * 1.02 + beat * 0.48 + self.kiai_level * 0.16)
             * self.max_length_scale
         )
         target_layer_radius = int(math.ceil((logo_radius + max_length + self.bar_width + 6) / 32.0) * 32)
@@ -524,6 +540,14 @@ class CircularMenuVisualizer:
         self._layer_radius = layer_radius
         self._redraw_elapsed = 0.0
         local_center = (layer_radius, layer_radius)
+        drop_glow = _clamp(
+            ((energy * 0.78) + (beat * 0.52) + (self.kiai_level * 0.34) - 0.62)
+            / 0.42,
+            0.0,
+            1.0
+        )
+        if drop_glow > 0.02:
+            self._draw_base_glow(layer, local_center, logo_radius, drop_glow)
 
         for index, level in enumerate(self.levels):
             self._draw_bar(
@@ -538,8 +562,22 @@ class CircularMenuVisualizer:
             )
         surface.blit(layer, (center[0] - layer_radius, center[1] - layer_radius))
 
+    def _draw_base_glow(self, layer, local_center, logo_radius, glow):
+        alpha = int(82 * _clamp(glow, 0.0, 1.0))
+        if alpha <= 0:
+            return
+        base_radius = int(round(logo_radius))
+        for offset, scale in ((0, 1.0), (4, 0.62), (9, 0.34)):
+            pygame.draw.circle(
+                layer,
+                (255, 255, 255, int(alpha * scale)),
+                local_center,
+                base_radius + offset,
+                max(2, int(self.radius * (0.012 + offset * 0.001)))
+            )
+
     def _draw_bar(self, layer, local_center, index, level, inner_radius, logo_radius, max_length, beat):
-        if level <= 0.0035 or self.audible_level <= 0.004:
+        if level <= 0.0018 or self.audible_level <= 0.002:
             return
 
         ux, uy = self.units[index]
@@ -547,33 +585,28 @@ class CircularMenuVisualizer:
         sweep_distance = abs(((position - self.sweep_position + 0.5) % 1.0) - 0.5) * 2.0
         sweep = max(0.0, 1.0 - (sweep_distance / 0.24)) ** 2.0
         transient = self.band_transients[index]
-        length = max(4.0, max_length * (level ** 1.16) * self.length_bias[index])
-        length *= 1.0 + (transient * 0.22)
-        length *= 1.0 + (sweep * (0.43 + beat * 0.18))
+        length = max(10.0, max_length * (level ** 1.02) * self.length_bias[index])
+        length *= 1.0 + (transient * 0.10)
+        length *= 1.0 + (sweep * (0.18 + beat * 0.08))
         start_radius = inner_radius
         end_radius = logo_radius + max(5.0, length)
-        base_arc_spacing = (math.tau * start_radius) / max(1, self.bar_count)
-        base_gap = max(1.2, base_arc_spacing * 0.10)
-        width = int(math.floor(_clamp(
-            self.bar_width,
-            2.0,
-            max(2.0, base_arc_spacing - base_gap)
-        )))
-        bar_light = _clamp(
-            0.22
-            + (level * 0.18)
-            + (transient * 0.20)
-            + (sweep * (0.72 + beat * 0.24))
-            + (self.kiai_level * 0.08),
+        width = max(2, int(round(self.bar_width)))
+        brightness = _clamp(
+            0.42
+            + (self.audible_level * 0.22)
+            + (beat * 0.13)
+            + (self.kiai_level * 0.10),
             0.0,
             1.0
         )
-        base_gray = int(_clamp(156 + (bar_light * 74), 130, 236))
+        base_gray = int(_clamp(166 + (brightness * 38), 160, 214))
         base_alpha = int(_clamp(
-            (44 + (self.audible_level * 10) + (beat * 4) + (sweep * 32))
-            * (0.58 + (self.alpha_bias[index] * 0.36)),
-            18,
-            82
+            102
+            + (self.audible_level * 32)
+            + (beat * 16)
+            + (self.kiai_level * 14),
+            70,
+            174
         ))
         line_color = (
             base_gray,
@@ -592,56 +625,31 @@ class CircularMenuVisualizer:
             width
         )
 
-        peak = self.band_alpha[index]
-        if peak <= 0.105:
-            return
-
-        moving_slot = ((index * 47) + int(self.sweep_position * 100.0)) % 100
-        highlight_chance = 15.0 + (peak * 13.0) + (beat * 4.0) + (sweep * 3.0) + (self.kiai_level * 4.0)
-        if moving_slot > highlight_chance:
-            return
-
-        highlight_ratio = _clamp(0.10 + (peak * 0.075) + (beat * 0.018), 0.10, 0.20)
-        highlight_length = max(3.0, length * highlight_ratio)
-        highlight_start_radius = max(start_radius + 2.0, end_radius - highlight_length)
-        highlight_alpha = int(_clamp(
-            (peak * 166 + beat * 10 + sweep * 8) * self.alpha_variation[index],
-            0,
-            176
-        ))
-        if highlight_alpha <= 4:
-            return
-
-        highlight_width = max(1, width - 2)
-        self._draw_radial_rect(
-            layer,
-            (255, 255, 255, highlight_alpha),
-            local_center,
-            ux,
-            uy,
-            highlight_start_radius,
-            end_radius,
-            highlight_width
-        )
-
     def _draw_radial_rect(self, layer, color, local_center, ux, uy, start_radius, end_radius, width):
-        half = max(0.5, width * 0.5)
+        line_width = max(1.0, float(width))
+        half = line_width * 0.5
         px = -uy * half
         py = ux * half
-        sx = local_center[0] + ux * start_radius
-        sy = local_center[1] + uy * start_radius
-        ex = local_center[0] + ux * end_radius
-        ey = local_center[1] + uy * end_radius
-        pygame.draw.polygon(
-            layer,
-            color,
-            (
-                (int(round(sx + px)), int(round(sy + py))),
-                (int(round(ex + px)), int(round(ey + py))),
-                (int(round(ex - px)), int(round(ey - py))),
-                (int(round(sx - px)), int(round(sy - py)))
-            )
+        start_x = local_center[0] + ux * start_radius
+        start_y = local_center[1] + uy * start_radius
+        end_x = local_center[0] + ux * end_radius
+        end_y = local_center[1] + uy * end_radius
+        points = (
+            (int(round(start_x + px)), int(round(start_y + py))),
+            (int(round(end_x + px)), int(round(end_y + py))),
+            (int(round(end_x - px)), int(round(end_y - py))),
+            (int(round(start_x - px)), int(round(start_y - py))),
         )
+        pygame.draw.polygon(layer, color, points)
+        if line_width > 2.0 and color[3] > 18:
+            edge_color = (
+                color[0],
+                color[1],
+                color[2],
+                max(1, int(color[3] * 0.18))
+            )
+            pygame.draw.aaline(layer, edge_color, points[0], points[1])
+            pygame.draw.aaline(layer, edge_color, points[3], points[2])
 
     def _analysis_at(self, current_time_ms):
         if self.analysis is None or len(self.analysis) == 0:
