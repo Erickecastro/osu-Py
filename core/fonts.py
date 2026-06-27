@@ -4,12 +4,15 @@ import pygame
 
 
 ROUNDED_FONT_CANDIDATES = (
+    "Nunito",
+    "Quicksand",
+    "VAG Rounded",
     "Arial Rounded MT Bold",
+    "Segoe UI Rounded",
     "Segoe UI Semibold",
     "Segoe UI",
-    "Trebuchet MS",
-    "Verdana",
-    "Arial",
+    "Cascadia Code",
+    "Cascadia Mono",
 )
 
 
@@ -21,4 +24,4 @@ def rounded_font(size, bold=False, italic=False):
         if path:
             return pygame.font.Font(path, size)
 
-    return pygame.font.SysFont("arial", size, bold=bold, italic=italic)
+    return pygame.font.SysFont("segoe ui", size, bold=bold, italic=italic)
