@@ -1541,10 +1541,12 @@ class GameplayScene(BaseScene):
         )
         return True
 
-    def _draw_approach_skin(self, target, center, radius, alpha=255):
+    def _draw_approach_skin(self, target, center, radius, alpha=255, color=None):
         image = self.skin_images.get("approach")
         if image is None:
             return False
+        if color is not None:
+            image = self._tinted_image(image, color)
 
         return self._draw_image_centered(
             target,
@@ -3590,7 +3592,8 @@ class GameplayScene(BaseScene):
                 approach_draws.append((
                     (scaled_x, scaled_y),
                     approach_radius,
-                    approach_alpha
+                    approach_alpha,
+                    note.get("combo_color", (255, 255, 255))
                 ))
 
             if note["type"] == "circle":
@@ -3877,18 +3880,19 @@ class GameplayScene(BaseScene):
 
         self._draw_followpoints(overlay)
 
-        for center, approach_radius, approach_alpha in approach_draws:
+        for center, approach_radius, approach_alpha, approach_color in approach_draws:
             if not self._draw_approach_skin(
                 overlay,
                 center,
                 approach_radius,
-                alpha=approach_alpha
+                alpha=approach_alpha,
+                color=approach_color
             ):
                 self._draw_aa_circle(
                     overlay,
                     center,
                     approach_radius,
-                    outline_color=(255, 255, 255),
+                    outline_color=approach_color,
                     outline_width=5,
                     alpha=approach_alpha
                 )
