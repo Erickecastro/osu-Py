@@ -695,6 +695,12 @@ class MainMenuScene(BaseScene):
         self.layout_size = None
         self.footer_cache = {}
         self.settings_panel_cache = {}
+        self.exit_requested = False
+        self.exit_elapsed = 0.0
+        self.exit_duration = 1.15
+        self.exit_music_volume = 1.0
+        self.exit_overlay = None
+        self.exit_overlay_size = None
 
         self.circle = PulseCircle(self.title)
         self.visualizer = CircularMenuVisualizer(bar_count=88)
@@ -810,6 +816,9 @@ class MainMenuScene(BaseScene):
             option._text_cache.clear()
 
     def handle_event(self, event):
+        if self.exit_requested:
+            return
+
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE and self.settings_open:
                 self.settings_open = False
@@ -866,6 +875,24 @@ class MainMenuScene(BaseScene):
     def update(self, dt):
         dt = min(dt, 1.0 / 20.0)
         self.time_seconds += dt
+        if self.exit_requested:
+            self.exit_elapsed = min(
+                self.exit_duration,
+                self.exit_elapsed + dt
+            )
+            progress = clamp(self.exit_elapsed / max(0.01, self.exit_duration), 0.0, 1.0)
+            eased = progress * progress * (3.0 - (2.0 * progress))
+            try:
+                pygame.mixer.music.set_volume(self.exit_music_volume * (1.0 - eased))
+            except pygame.error:
+                pass
+            if progress >= 1.0:
+                try:
+                    pygame.mixer.music.stop()
+                except pygame.error:
+                    pass
+                self.game.running = False
+
         mouse_pos = self.game.mouse_pos
         if self.time_seconds >= 0.08:
             self._warm_background()
@@ -915,7 +942,8 @@ class MainMenuScene(BaseScene):
         self.snow.update(dt, self.game.WIDTH, self.game.HEIGHT)
         if profiler_enabled:
             profiler.start("audio")
-        self._advance_finished_menu_track()
+        if not self.exit_requested:
+            self._advance_finished_menu_track()
         if profiler_enabled:
             profiler.end("audio")
 
@@ -961,6 +989,8 @@ class MainMenuScene(BaseScene):
         self._draw_footer(screen)
         if self.settings_open:
             self._draw_settings_panel(screen)
+        if self.exit_requested:
+            self._draw_exit_fade(screen)
 
     def destroy(self):
         if self.music_started and not self.keep_music_on_destroy:
@@ -1007,7 +1037,29 @@ class MainMenuScene(BaseScene):
         self.game.set_mouse_sensitivity(round(value, 2))
 
     def _exit_game(self):
-        self.game.running = False
+        if self.exit_requested:
+            return
+        self.exit_requested = True
+        self.exit_elapsed = 0.0
+        self.exit_music_volume = 1.0
+        try:
+            self.exit_music_volume = pygame.mixer.music.get_volume()
+        except pygame.error:
+            pass
+
+    def _draw_exit_fade(self, screen):
+        size = screen.get_size()
+        if self.exit_overlay is None or self.exit_overlay_size != size:
+            self.exit_overlay = pygame.Surface(size).convert()
+            self.exit_overlay.fill((0, 0, 0))
+            self.exit_overlay_size = size
+
+        progress = clamp(self.exit_elapsed / max(0.01, self.exit_duration), 0.0, 1.0)
+        eased = progress * progress * (3.0 - (2.0 * progress))
+        alpha = int(255 * eased)
+        if self.exit_overlay.get_alpha() != alpha:
+            self.exit_overlay.set_alpha(alpha)
+        screen.blit(self.exit_overlay, (0, 0))
 
     def _toggle_menu_music_pause(self):
         if not self.music_tracks:
