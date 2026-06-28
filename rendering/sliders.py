@@ -1,5 +1,9 @@
+import hashlib
 import math
+import os
+import threading
 from bisect import bisect_right
+from collections import OrderedDict
 
 import pygame
 
@@ -10,6 +14,53 @@ try:
     import numpy as np
 except ModuleNotFoundError:
     np = None
+
+
+_TRACK_PIXEL_CACHE_LOCK = threading.Lock()
+_TRACK_PIXEL_CACHE = OrderedDict()
+_TRACK_PIXEL_CACHE_LIMIT = max(
+    0,
+    int(os.environ.get("PYOSU_SLIDER_PIXEL_CACHE", "96") or 0)
+)
+
+
+def _track_pixel_cache_key(size, points, outline_radius, body_radius):
+    if not _TRACK_PIXEL_CACHE_LIMIT:
+        return None
+
+    digest = hashlib.blake2b(digest_size=16)
+    digest.update(int(size[0]).to_bytes(4, "little", signed=False))
+    digest.update(int(size[1]).to_bytes(4, "little", signed=False))
+    digest.update(int(round(outline_radius * 16)).to_bytes(4, "little", signed=True))
+    digest.update(int(round(body_radius * 16)).to_bytes(4, "little", signed=True))
+    digest.update(len(points).to_bytes(4, "little", signed=False))
+    for x, y in points:
+        digest.update(int(round(float(x) * 16)).to_bytes(4, "little", signed=True))
+        digest.update(int(round(float(y) * 16)).to_bytes(4, "little", signed=True))
+    return digest.digest()
+
+
+def _get_track_pixel_cache(key):
+    if key is None:
+        return None
+
+    with _TRACK_PIXEL_CACHE_LOCK:
+        cached = _TRACK_PIXEL_CACHE.get(key)
+        if cached is None:
+            return None
+        _TRACK_PIXEL_CACHE.move_to_end(key)
+        return cached
+
+
+def _store_track_pixel_cache(key, pixels):
+    if key is None or pixels is None:
+        return
+
+    with _TRACK_PIXEL_CACHE_LOCK:
+        _TRACK_PIXEL_CACHE[key] = pixels
+        _TRACK_PIXEL_CACHE.move_to_end(key)
+        while len(_TRACK_PIXEL_CACHE) > _TRACK_PIXEL_CACHE_LIMIT:
+            _TRACK_PIXEL_CACHE.popitem(last=False)
 
 
 def _point_line_distance(point, start, end):
@@ -122,6 +173,16 @@ def render_track_surface_pixels(size, points, outline_radius, body_radius):
     if len(points) < 2 or width <= 0 or height <= 0:
         return None
 
+    cache_key = _track_pixel_cache_key(
+        size,
+        points,
+        outline_radius,
+        body_radius
+    )
+    cached = _get_track_pixel_cache(cache_key)
+    if cached is not None:
+        return cached
+
     render_points = _simplify_points(
         list(points),
         tolerance=0.18
@@ -197,7 +258,9 @@ def render_track_surface_pixels(size, points, outline_radius, body_radius):
         edge_alpha
     ) * coverage * outer_aa
     final_alpha = np.clip(final_alpha, 0.0, 255.0).astype(np.uint8)
-    return luma, final_alpha
+    pixels = (luma, final_alpha)
+    _store_track_pixel_cache(cache_key, pixels)
+    return pixels
 
 
 def surface_from_track_pixels(size, pixels):
