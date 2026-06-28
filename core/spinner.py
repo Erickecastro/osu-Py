@@ -161,8 +161,7 @@ class SpinnerManager:
                     bonus_count,
                     self.center
                 )
-                self.scene.combo += 1
-                self.scene.max_combo = max(self.scene.max_combo, self.scene.combo)
+                self.scene._advance_combo()
 
         if current_time < end:
             score_bank = note.get("spinner_score_bank", 0.0)
