@@ -1,19 +1,21 @@
 # osu-Py
 
-osu-Py is a fan-made rhythm game inspired by osu!, written in Python with pygame-ce. Its goal is to load local beatmaps in the `.osu` format, play the referenced audio, and render a playable experience with hit circles, sliders, spinners, HUD, a custom cursor, song selection, and difficulty metadata parsing.
+osu-Py is a fan-made rhythm game inspired by osu!, written in Python with pygame-ce. Its goal is to load local osu! beatmaps, play the referenced audio, and render a playable experience with hit circles, sliders, spinners, HUD, a custom cursor, song selection, local scores, and difficulty metadata parsing.
 
 The project is experimental and educational. The core gameplay is already functional, but the project does not aim for full parity with official osu!.
 
 ## Current Features
 
 - Automatic beatmap loading from `songs/`.
+- `.osz` import from drag-and-drop, the `imports/` folder, or files placed next to the executable.
+- Duplicate import protection using beatmap set IDs and `.osu` file hashes.
 - Parser support for the main `.osu` sections: `General`, `Metadata`, `Difficulty`, `TimingPoints`, `Colours`, `Events`, and `HitObjects`.
-- Gameplay support for hit circles, sliders, reverse arrows, slider ball/follow circle, and spinners.
+- Gameplay support for hit circles, sliders, slider ticks/scorepoints, reverse arrows, slider ball/follow circle, and spinners.
 - Hit judgment using `300`, `100`, `50`, and miss windows.
-- Score, combo, accuracy, health bar, hit error bar, and hit/miss visual effects.
-- Custom cursor with relative/raw mouse support during gameplay.
-- Animated main menu with background music, circular visualizer, track switching, and mouse sensitivity settings.
-- Song selection screen with search, sorting, beatmap-set grouping, audio preview, and information panels.
+- Score, combo, accuracy, health bar, hit error bar, pause/lose/result screens, and hit/miss visual effects.
+- Custom cursor with relative/raw mouse support, tablet absolute-input mode, configurable hit keys, and optional mouse-button blocking during gameplay.
+- Animated main menu with background music, circular FFT/BPM visualizer, track switching, settings, and smooth exit fade.
+- Song selection screen with search, sorting, beatmap-set grouping, audio preview, information panels, local ranking, result viewing, score deletion, and beatmap deletion.
 - Background and asset loading from beatmap folders.
 - Basic skin system based on files in `assets/skins/default/`.
 - Built-in profiler for FPS, frame time, and subsystem timing investigation.
@@ -68,17 +70,20 @@ py -3.12 main.py
 - `Left`/`Right` or `A`/`D`: change menu music.
 - `Space`: pause/resume menu music.
 - `Esc`: close the menu or settings panel.
-- Mouse wheel/drag in the settings panel: adjust mouse sensitivity.
+- Settings panel: mouse sensitivity, hit keys, raw mouse input, tablet absolute input, gameplay dim, and mouse hit-button blocking.
 
 ### Song Selection
 
 - `Up`/`Down` or mouse wheel: navigate.
-- Click a group: expand/collapse difficulties.
-- Click the selected difficulty or press `Enter`: start gameplay.
+- Click a group: expand difficulties and select the easiest difficulty first.
+- Click a selected beatmap/difficulty again or press `Enter`: start gameplay.
+- Right-click a beatmap card: request permanent deletion with confirmation.
 - `Ctrl + F` or direct typing: enable search.
 - `Backspace`: remove search characters.
 - `Tab`: cycle sorting mode.
-- `Esc`: return to the main menu.
+- `Esc`: clear search first; when search is empty, return to the main menu.
+- Left-click a local score: view its result screen.
+- Right-click a local score: request score deletion with confirmation.
 
 ### Gameplay
 
@@ -88,7 +93,9 @@ py -3.12 main.py
 
 ## Beatmaps
 
-Place beatmaps next to the executable or in the project `songs/` folder. The loader searches, in order:
+During development, place extracted beatmaps in the project `songs/` folder. For packaged builds, place beatmaps in the user data `songs/` folder or import `.osz` files through the game.
+
+The loader searches, in order:
 
 1. `PYOSU_SONGS_DIR` when set.
 2. `songs/` beside the executable.
@@ -132,9 +139,11 @@ Important assets include the cursor, hit circles, approach circle, combo numbers
 
 ## Settings and Local Data
 
-- Mouse sensitivity: saved to `%APPDATA%/PyOsu/settings.json` on Windows.
-- Local ranking: the song selection screen reads `scores/local_scores.json` when it exists. Saving new scores is still in progress.
-- Large beatmap and asset files remain local under `songs/` and `assets/`.
+- Settings are saved to `%LOCALAPPDATA%/PyOsu/settings.json` on Windows when available, falling back to `%APPDATA%/PyOsu/settings.json` or `settings.json` in development.
+- Local scores are saved in `scores/local_scores.json` and shown on the song selection screen.
+- Beatmaps are runtime/user data under `songs/` and new beatmap files are ignored by git.
+- Imported `.osz` files are runtime/user data under `imports/` and new import files are ignored by git.
+- Assets under `assets/` are source-controlled because they define the default skin and UI.
 
 ## Environment Variables
 
@@ -172,16 +181,38 @@ On Linux or macOS, use `:` instead of `;` in `--add-data` (for example: `--add-d
 
 The command above embeds everything under `assets/` into the executable. At runtime, PyInstaller extracts those files to a temporary folder and the game resolves them through `resource_path()` in `core/utils.py`.
 
-Place beatmaps next to the executable, not inside it:
+After the build finishes, the executable is written to `dist/main.exe`. Rename it if you prefer (for example, `PyOsu.exe`).
+
+Place user beatmaps next to the executable or import them through the game. Do not bundle user beatmaps inside the `.exe`:
 
 ```text
 PyOsu.exe
 assets/          (embedded in the .exe)
-songs/           (external, same folder as the .exe)
+songs/           (external user beatmaps)
+imports/         (optional .osz drop folder)
 scores/          (optional, created at runtime)
 ```
 
-After the build finishes, the executable is written to `dist/main.exe`. Rename it if you prefer (for example, `PyOsu.exe`).
+## Importing Beatmaps
+
+The game supports `.osz` packages:
+
+- Drag an `.osz` file into the game window.
+- Put `.osz` files in `imports/` before starting the game.
+- Put `.osz` files next to the executable in packaged builds.
+
+Imported beatmaps are extracted into the runtime `songs/` folder. Successfully processed `.osz` files from `imports/` are moved to `imports/imported/`.
+
+Duplicate protection checks official beatmap set IDs when available and falls back to `.osu` content hashes. This prevents importing the same beatmap more than once even when the `.osz` file name changes.
+
+Real beatmap folders and imported `.osz` files are intentionally ignored by git. Keep only `songs/.gitkeep` and `imports/.gitkeep` in source control.
+
+If a local clone already tracks beatmap folders, remove them from the git index before publishing while keeping the files on disk:
+
+```bash
+git rm --cached -r songs
+git add songs/.gitkeep
+```
 
 ## Architecture
 
@@ -189,10 +220,11 @@ After the build finishes, the executable is written to `dist/main.exe`. Rename i
 main.py                  Application entry point
 core/
   game.py                Main loop, window, global events, cursor, and scenes
-  utils.py               resource_path() and application_path() for PyInstaller
+  utils.py               resource_path(), app/user data paths, and PyInstaller helpers
   assets.py              Asset lookup, caching, and startup preload
   scene_manager.py       Scene stack and transitions
   beatmap_loader.py      Beatmap discovery and loading
+  osz_importer.py        .osz import, safe extraction, and duplicate detection
   osu_sections.py        .osu section parser
   osu_hitobjects.py      Hit object parser
   slider_paths.py        Slider path geometry generation
@@ -204,8 +236,9 @@ core/
   settings.py            Local settings persistence
 scenes/
   main_menu_scene.py     Custom main menu
-  song_select_scene.py   Beatmap selection, search, sorting, and preview
+  song_select_scene.py   Beatmap selection, search, sorting, preview, local ranking, and deletion
   gameplay_scene.py      Gameplay scene and object lifecycle
+  result_scene.py        Result summary, rank display, retry, and quit actions
   base_scene.py          Common scene interface
 rendering/
   cursor.py              Custom cursor
@@ -233,7 +266,7 @@ songs/                   Local beatmaps
 
 The project uses several strategies to reduce stutter:
 
-- fixed frame pacing with `pygame.time.Clock()` (default `240` FPS, configurable);
+- configurable frame pacing with `pygame.time.Clock()` and optional busy-loop pacing;
 - frame `dt` clamping;
 - low mixer buffer;
 - startup preload of shared UI assets in `core/assets.py`;
@@ -258,9 +291,9 @@ py -3.12 main.py
 
 ## Known Limitations
 
-- `.osu` compatibility currently covers only what the gameplay needs.
+- `.osu` compatibility currently covers the gameplay systems implemented by the project.
 - `.osb` storyboards may exist in beatmap folders, but there is no complete storyboard system yet.
-- Local ranking is read by the UI, but saving new scores is not finalized.
+- Online osu! services, login, multiplayer, and official score submission are not implemented.
 - The project does not implement every official osu! mode, rule, mod, or online system.
 - Some skin/beatmap PNGs may emit `libpng warning: iCCP: known incorrect sRGB profile`; this usually does not affect gameplay.
 
