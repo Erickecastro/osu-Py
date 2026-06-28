@@ -589,17 +589,25 @@ class Game:
         self.sample_mouse_now()
         current_scene = self.scene_manager.current_scene
 
-        if getattr(current_scene, "uses_ui", True):
-            self.ui_manager.update(dt)
-
         profiler_enabled = self.profiler.enabled
+        if getattr(current_scene, "uses_ui", True):
+            if profiler_enabled:
+                self.profiler.start("ui_update")
+            self.ui_manager.update(dt)
+            if profiler_enabled:
+                self.profiler.end("ui_update")
+
         if profiler_enabled:
             self.profiler.start("scene_manager_update")
         self.scene_manager.update(dt)
         if profiler_enabled:
             self.profiler.end("scene_manager_update")
         if not getattr(current_scene, "draws_own_cursor", False):
+            if profiler_enabled:
+                self.profiler.start("cursor_update")
             self.cursor_renderer.update(dt, self.mouse_pos)
+            if profiler_enabled:
+                self.profiler.end("cursor_update")
 
     # -------------------------
     # RENDER
@@ -643,7 +651,11 @@ class Game:
 
         if not getattr(current_scene, "draws_own_cursor", False):
             self.sample_mouse_now()
+            if profiler_enabled:
+                self.profiler.start("cursor_draw")
             self.cursor_renderer.draw(self.screen, self.mouse_pos)
+            if profiler_enabled:
+                self.profiler.end("cursor_draw")
 
         if profiler_enabled:
             self.profiler.start("flip")
