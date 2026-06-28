@@ -1,0 +1,82 @@
+import unittest
+
+from core.beatmap_timing import (
+    effective_beat_length_at,
+    slider_span_duration,
+    slider_velocity_multiplier_at,
+)
+from core.spinner import SpinnerScoring
+from scenes.gameplay_scene import GameplayScene
+
+
+class TimingAndObjectTests(unittest.TestCase):
+    def test_inherited_timing_controls_slider_velocity(self):
+        timing_points = [
+            {"time": 0.0, "ms_per_beat": 500.0, "uninherited": 1, "effects": 0},
+            {"time": 1000.0, "ms_per_beat": -50.0, "uninherited": 0, "effects": 0},
+        ]
+
+        self.assertEqual(effective_beat_length_at(timing_points, 500), 500.0)
+        self.assertEqual(slider_velocity_multiplier_at(timing_points, 1500), 2.0)
+        self.assertEqual(effective_beat_length_at(timing_points, 1500), 250.0)
+        self.assertAlmostEqual(
+            slider_span_duration(timing_points, 1.4, 1500, 280.0),
+            500.0,
+        )
+
+    def test_slider_scorepoints_follow_tick_rate_and_repeats(self):
+        scene = object.__new__(GameplayScene)
+        scene.beatmap = {
+            "difficulty": {
+                "SliderMultiplier": 1.4,
+                "SliderTickRate": 1.0,
+            }
+        }
+        scene.timing_points = [
+            {"time": 0.0, "ms_per_beat": 500.0, "uninherited": 1, "effects": 0}
+        ]
+        scene.approach_time = 600.0
+        scene.ar = 9.0
+        scene.HITOBJECT_FADE_IN_DURATION_SCALE = GameplayScene.HITOBJECT_FADE_IN_DURATION_SCALE
+        scene._clamp01 = GameplayScene._clamp01.__get__(scene, GameplayScene)
+
+        note = {
+            "type": "slider",
+            "time": 1000.0,
+            "start_time": 400.0,
+            "span_duration": 1000.0,
+            "repeat_count": 2,
+            "slider_distance": 420.0,
+        }
+        scorepoints = scene._build_slider_scorepoints(note)
+
+        self.assertEqual(len(scorepoints), 4)
+        self.assertEqual([point["span_index"] for point in scorepoints], [0, 0, 1, 1])
+        self.assertTrue(all(0.0 < point["path_fraction"] < 1.0 for point in scorepoints))
+        self.assertEqual(scorepoints, sorted(scorepoints, key=lambda item: item["time"]))
+
+    def test_spinner_pass_tolerance_distinguishes_near_pass_and_miss(self):
+        scoring = SpinnerScoring()
+        note = {
+            "spinner_start_time": 0,
+            "spinner_end_time": 3000,
+            "od": 5.0,
+        }
+        required = scoring.required_rotations(note)
+        tolerance = scoring.pass_tolerance_rotations(note)
+
+        self.assertGreater(required, 1.5)
+        self.assertGreater(tolerance, 0.0)
+        self.assertEqual(scoring.result_for_progress(1.0), 300)
+        self.assertEqual(scoring.result_for_progress(0.79), 100)
+        self.assertEqual(scoring.result_for_progress(0.49), 50)
+        self.assertEqual(scoring.result_for_progress(0.30), 0)
+
+        near_pass_progress = (required - (tolerance * 0.5)) / required
+        clear_miss_progress = (required - (tolerance * 1.5)) / required
+        self.assertGreater(near_pass_progress, clear_miss_progress)
+        self.assertLess(near_pass_progress, 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

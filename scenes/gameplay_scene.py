@@ -15,7 +15,7 @@ from core.audio import (
 )
 from core.assets import asset_path, load_image
 from core.fonts import rounded_font
-from core.gameplay import calculate_accuracy, hit_result_for_delta
+from core.gameplay import hit_result_for_delta
 from core.health import apply_health_drain, apply_health_result
 from core.hit_detection import find_best_hit_object
 from core.gameplay_input import GameplayInputController
@@ -27,6 +27,7 @@ from core.performance import (
     AUDIO_OFFSET_MS,
     HIT_ERROR_DISPLAY_OFFSET_MS
 )
+from core.scoring import ScoreLedger
 from core.beatmap_timing import (
     effective_beat_length_at,
     slider_velocity_multiplier_at
@@ -118,6 +119,7 @@ class GameplayScene(BaseScene):
         self.next_note_index = 0
         self.circle_surface_cache = {}
         self.slider_surface_cache = {}
+        self.slider_reveal_cache_keys = set()
         self.image_surface_cache = {}
         self.tinted_surface_cache = {}
         self.overlay_surface = None
@@ -297,8 +299,10 @@ class GameplayScene(BaseScene):
             50: 0,
             0: 0
         }
+        self.score_ledger = ScoreLedger(self.hit_counts)
         self.judged_objects = 0
         self.judgable_objects = len(self.notes)
+        self.last_music_sync_check_ms = 0
         self._apply_intro_lead_in()
 
         # Pré-computa o intervalo de visibilidade de cada objeto.
@@ -330,7 +334,7 @@ class GameplayScene(BaseScene):
         self.slider_precache_complete = not self.slider_cache_notes
         self.slider_cache_executor = (
             ThreadPoolExecutor(
-                max_workers=1,
+                max_workers=2,
                 thread_name_prefix="pyosu-slider-cache"
             )
             if can_render_track_pixels()
@@ -338,6 +342,10 @@ class GameplayScene(BaseScene):
         )
         self.slider_cache_futures = {}
         self.slider_cache_failed = set()
+        self.slider_geometry_notes = self.slider_cache_notes
+        self.next_slider_geometry_index = 0
+        self.slider_geometry_complete = not self.slider_geometry_notes
+        self.slider_reveal_prewarm_cursor = 0
 
         self.circle_number_font = rounded_font(32, bold=True)
 
@@ -439,24 +447,46 @@ class GameplayScene(BaseScene):
         return max(0, min(255, int(alpha * self.HITCIRCLE_ALPHA_BOOST)))
 
     def _accuracy(self):
-        return calculate_accuracy(
-            self.hit_counts
-        )
+        return self.score_ledger.accuracy()
 
     def _rank_grade(self):
-        accuracy = self._accuracy()
-        misses = int(self.hit_counts.get(0, 0))
-        if misses == 0 and accuracy >= 100.0:
-            return "SS"
-        if misses == 0 and accuracy >= 95.0:
-            return "S"
-        if accuracy >= 90.0:
-            return "A"
-        if accuracy >= 80.0:
-            return "B"
-        if accuracy >= 70.0:
-            return "C"
-        return "D"
+        return self.score_ledger.rank()
+
+    def _sync_score_fields(self):
+        self.score = self.score_ledger.score
+        self.combo = self.score_ledger.combo
+        self.max_combo = self.score_ledger.max_combo
+
+    def _register_judgement(
+        self,
+        result,
+        *,
+        visible=True,
+        max_result=300,
+        statistic=None
+    ):
+        self.score_ledger.add_judgement(
+            result,
+            visible=visible,
+            max_result=max_result,
+            statistic=statistic
+        )
+
+    def _break_combo(self):
+        self.score_ledger.break_combo()
+        self._sync_score_fields()
+
+    def _add_combo_score(self, base_score, *, combo_weight=25, combo_bonus=True):
+        self.score_ledger.add_combo_score(
+            base_score,
+            combo_weight=combo_weight,
+            combo_bonus=combo_bonus
+        )
+        self._sync_score_fields()
+
+    def _add_raw_score(self, amount):
+        self.score_ledger.add_raw_score(amount)
+        self._sync_score_fields()
 
     def _result_payload(self):
         return {
@@ -467,7 +497,21 @@ class GameplayScene(BaseScene):
             "hit_300": int(self.hit_counts.get(300, 0)),
             "hit_100": int(self.hit_counts.get(100, 0)),
             "hit_50": int(self.hit_counts.get(50, 0)),
-            "misses": int(self.hit_counts.get(0, 0))
+            "misses": int(self.hit_counts.get(0, 0)),
+            "accuracy_events": int(self.score_ledger.judgement_events),
+            "accuracy_misses": int(self.score_ledger.miss_events),
+            "slider_ticks_hit": int(
+                self.score_ledger.statistics.get("slider_tick_hit", 0)
+            ),
+            "slider_ticks_missed": int(
+                self.score_ledger.statistics.get("slider_tick_miss", 0)
+            ),
+            "slider_checkpoints": int(
+                self.score_ledger.statistics.get("slider_checkpoint_hit", 0)
+            ),
+            "spinner_bonuses": int(
+                self.score_ledger.statistics.get("spinner_bonus", 0)
+            )
         }
 
     def _refresh_playfield_layout(self):
@@ -539,15 +583,23 @@ class GameplayScene(BaseScene):
                 pass
         self.slider_cache_futures.clear()
         self.slider_cache_failed.clear()
+        self.slider_reveal_cache_keys.clear()
         self.next_slider_cache_index = 0
         self.slider_precache_complete = not self.slider_cache_notes
         self.slider_cache_cooldown_until = 0
+        self.next_slider_geometry_index = 0
+        self.slider_geometry_complete = not self.slider_geometry_notes
+        self.slider_reveal_prewarm_cursor = 0
 
         geometry_keys = (
             "scaled_pos",
             "scaled_slider_points",
             "scaled_slider_cumulative",
             "scaled_slider_length",
+            "slider_reveal_cache_keys",
+            "slider_reveal_cache_cleared",
+            "slider_reveal_prewarm_bucket",
+            "slider_scorepoint_geometry_key",
             "followpoint_connection",
             "followpoint_state"
         )
@@ -625,7 +677,15 @@ class GameplayScene(BaseScene):
         note["hit_result"] = result
         note["hit_time"] = self.current_time
         self.judged_objects += 1
-        self.hit_counts[result] += 1
+        self._register_judgement(
+            result,
+            visible=True,
+            statistic=(
+                "slider_head"
+                if note["type"] == "slider"
+                else "hitcircle"
+            )
+        )
         self._update_health_target(result)
         if result > 0:
             self._play_hit_sound()
@@ -661,7 +721,7 @@ class GameplayScene(BaseScene):
                 )
             else:
                 note["end_time"] = miss_pop_end
-            self.combo = 0
+            self._break_combo()
             return
 
         if note["type"] == "circle":
@@ -671,12 +731,11 @@ class GameplayScene(BaseScene):
 
         self._advance_combo()
 
-        combo_bonus = max(0, self.combo - 1) * result // 25
-        self.score += result + combo_bonus
+        self._add_combo_score(result, combo_weight=25)
 
     def _advance_combo(self):
-        self.combo += 1
-        self.max_combo = max(self.max_combo, self.combo)
+        self.score_ledger.advance_combo()
+        self._sync_score_fields()
 
     def _add_hit_result_indicator(self, note, result):
         self.hit_result_indicators.append({
@@ -797,11 +856,15 @@ class GameplayScene(BaseScene):
         note["fade_out_duration"] = 260
         note["end_time"] = self.current_time + note["fade_out_duration"]
         self.judged_objects += 1
-        self.hit_counts[result] += 1
+        self._register_judgement(
+            result,
+            visible=True,
+            statistic="spinner"
+        )
         self._update_health_target(result)
 
         if result == 0:
-            self.combo = 0
+            self._break_combo()
             self._add_miss_indicator(
                 (
                     self.game.WIDTH // 2,
@@ -812,9 +875,15 @@ class GameplayScene(BaseScene):
             return
 
         self._advance_combo()
-        bonus = note.get("spinner_bonus_count", 0) * 1000
-        self.score += result + bonus
+        self._add_combo_score(result, combo_weight=25)
         self._play_hit_sound()
+
+    def _add_spinner_bonus_score(self, bonus_count):
+        self._add_raw_score(1000)
+        self._advance_combo()
+        self.score_ledger.statistics["spinner_bonus"] = (
+            self.score_ledger.statistics.get("spinner_bonus", 0) + 1
+        )
 
     def _hit_result_for_delta(self, delta):
         return hit_result_for_delta(
@@ -880,21 +949,30 @@ class GameplayScene(BaseScene):
 
         clock_time = self._clock_music_time_from_tick(tick_ms)
         mixer_time = self._mixer_music_time()
-        if mixer_time is not None and pygame.mixer.music.get_busy():
+        should_check_mixer = (
+            mixer_time is not None
+            and pygame.mixer.music.get_busy()
+            and (
+                self.last_music_sync_check_ms <= 0
+                or tick_ms - self.last_music_sync_check_ms >= 72
+            )
+        )
+        if should_check_mixer:
+            self.last_music_sync_check_ms = tick_ms
             drift = mixer_time - clock_time
             abs_drift = abs(drift)
-            if abs_drift >= 42.0:
+            if abs_drift >= 56.0:
                 self.music_sync_correction_ms += drift
             elif abs_drift >= 10.0:
                 correction_step = max(
-                    -18.0,
-                    min(18.0, drift * 0.42)
+                    -12.0,
+                    min(12.0, drift * 0.28)
                 )
                 self.music_sync_correction_ms += correction_step
-            elif abs_drift >= 1.5:
+            elif abs_drift >= 2.5:
                 correction_step = max(
-                    -6.0,
-                    min(6.0, drift * 0.12)
+                    -3.5,
+                    min(3.5, drift * 0.08)
                 )
                 self.music_sync_correction_ms += correction_step
             clock_time = self._clock_music_time_from_tick(tick_ms)
@@ -1621,7 +1699,13 @@ class GameplayScene(BaseScene):
             "start_time": self.current_time
         })
 
-    def _register_slider_follow_miss(self, note, pos, early_release=False):
+    def _register_slider_follow_miss(
+        self,
+        note,
+        pos,
+        early_release=False,
+        register_judgement=True
+    ):
         if note.get("slider_follow_missed"):
             return
 
@@ -1629,9 +1713,17 @@ class GameplayScene(BaseScene):
         result = 100 if early_release else 0
         note["slider_break_time"] = self.current_time
         note["slider_break_result"] = result
-        self.combo = 0
-        self.hit_counts[result] += 1
-        self.judged_objects += 1
+        self._break_combo()
+        if register_judgement:
+            self._register_judgement(
+                result,
+                visible=True,
+                statistic=(
+                    "slider_release_break"
+                    if early_release
+                    else "slider_follow_break"
+                )
+            )
         self._update_health_target(result)
         if early_release:
             self._add_hit_result_indicator(note, 100)
@@ -1748,8 +1840,13 @@ class GameplayScene(BaseScene):
                 break
 
             self._play_hit_sound()
+            self._register_judgement(
+                300,
+                visible=False,
+                statistic="slider_checkpoint_hit"
+            )
             self._advance_combo()
-            self.score += 30 + max(0, self.combo - 1)
+            self._add_combo_score(30, combo_weight=30)
             next_index += 1
 
         note["slider_hit_sound_index"] = next_index
@@ -2016,8 +2113,16 @@ class GameplayScene(BaseScene):
             (self.current_time - visual_start) / reveal_duration
         )
 
-    def _revealed_slider_points(self, note, slider_points, cumulative, total_length):
-        reveal = self._slider_path_reveal_progress(note)
+    def _revealed_slider_points(
+        self,
+        note,
+        slider_points,
+        cumulative,
+        total_length,
+        reveal=None
+    ):
+        if reveal is None:
+            reveal = self._slider_path_reveal_progress(note)
         if reveal >= 0.995 or total_length <= 0 or len(slider_points) < 2:
             return slider_points, 1.0
 
@@ -2049,17 +2154,28 @@ class GameplayScene(BaseScene):
         scorepoint["processed"] = True
         scorepoint["collected"] = True
         scorepoint["processed_time"] = self.current_time
+        self._register_judgement(
+            300,
+            visible=False,
+            statistic="slider_tick_hit"
+        )
         self._advance_combo()
-        self.score += 10 + max(0, self.combo - 1)
+        self._add_combo_score(10, combo_weight=10)
 
     def _miss_slider_scorepoint(self, note, scorepoint, pos):
         scorepoint["processed"] = True
         scorepoint["missed"] = True
         scorepoint["processed_time"] = self.current_time
+        self._register_judgement(
+            0,
+            visible=False,
+            statistic="slider_tick_miss"
+        )
         self._register_slider_follow_miss(
             note,
             pos,
-            early_release=False
+            early_release=False,
+            register_judgement=False
         )
 
     def _update_slider_scorepoints(self, note, state=None):
@@ -2830,11 +2946,79 @@ class GameplayScene(BaseScene):
             if profiler_enabled:
                 profiler.end("surface_warm")
 
-    def _schedule_slider_cache_job(self, note):
+    def _prepare_slider_geometry(self, note, *, include_scorepoints=True):
+        if note.get("type") != "slider":
+            return True
+
+        slider_points = note.get("scaled_slider_points")
+        if slider_points is None:
+            slider_points = self.slider_renderer.build_points(note)
+            note["scaled_slider_points"] = slider_points
+
+        if len(slider_points) < 2:
+            return True
+
+        cumulative = note.get("scaled_slider_cumulative")
+        total_length = note.get("scaled_slider_length")
+        if cumulative is None or total_length is None:
+            cumulative, total_length = self.slider_renderer.path_metrics(
+                slider_points
+            )
+            note["scaled_slider_cumulative"] = cumulative
+            note["scaled_slider_length"] = total_length
+
+        if include_scorepoints:
+            self._slider_scorepoints(note)
+
+        return True
+
+    def _warm_slider_geometry_cache(
+        self,
+        max_ms=1.0,
+        max_items=8,
+        horizon_ms=None
+    ):
+        if self.slider_geometry_complete:
+            return
+
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("slider_geometry_warm")
+
+        start = time.perf_counter()
+        count = 0
+        total = len(self.slider_geometry_notes)
+        if horizon_ms is None:
+            horizon_time = float("inf")
+        else:
+            horizon_time = self.current_time + float(horizon_ms)
+            if not self.music_started:
+                horizon_time = max(horizon_time, float(horizon_ms))
+
+        try:
+            while self.next_slider_geometry_index < total:
+                note = self.slider_geometry_notes[self.next_slider_geometry_index]
+                if note["time"] > horizon_time:
+                    break
+
+                self.next_slider_geometry_index += 1
+                self._prepare_slider_geometry(note)
+                count += 1
+                elapsed_ms = (time.perf_counter() - start) * 1000.0
+                if count >= max_items or elapsed_ms >= max_ms:
+                    break
+
+            self.slider_geometry_complete = (
+                self.next_slider_geometry_index >= total
+            )
+        finally:
+            if profiler_enabled:
+                profiler.end("slider_geometry_warm")
+
+    def _schedule_slider_surface_job(self, cache_key, slider_points):
         if self.slider_cache_executor is None:
             return False
-
-        cache_key = note.get("render_index")
         if cache_key is None:
             return False
         if (
@@ -2844,14 +3028,9 @@ class GameplayScene(BaseScene):
         ):
             return True
 
-        slider_points = note.get("scaled_slider_points")
-        if slider_points is None:
-            slider_points = self.slider_renderer.build_points(note)
-            note["scaled_slider_points"] = slider_points
-
-        cumulative, total_length = self.slider_renderer.path_metrics(slider_points)
-        note["scaled_slider_cumulative"] = cumulative
-        note["scaled_slider_length"] = total_length
+        if not slider_points:
+            self.slider_cache_failed.add(cache_key)
+            return True
 
         geometry = self.slider_renderer._surface_geometry(slider_points)
         if geometry is None:
@@ -2878,6 +3057,15 @@ class GameplayScene(BaseScene):
         )
         return True
 
+    def _schedule_slider_cache_job(self, note):
+        cache_key = note.get("render_index")
+        if cache_key is None:
+            return False
+
+        self._prepare_slider_geometry(note)
+        slider_points = note.get("scaled_slider_points")
+        return self._schedule_slider_surface_job(cache_key, slider_points)
+
     def _collect_slider_cache_results(self, max_ms=0.75, max_items=2):
         if not self.slider_cache_futures:
             return
@@ -2893,6 +3081,14 @@ class GameplayScene(BaseScene):
             for cache_key, payload in list(self.slider_cache_futures.items()):
                 future, size, surface_pos = payload
                 if not future.done():
+                    continue
+                if (
+                    isinstance(cache_key, tuple)
+                    and cache_key[:1] == ("reveal",)
+                    and cache_key not in self.slider_reveal_cache_keys
+                ):
+                    self.slider_cache_futures.pop(cache_key, None)
+                    installed += 1
                     continue
 
                 try:
@@ -2922,16 +3118,162 @@ class GameplayScene(BaseScene):
             and not self.slider_cache_futures
         )
 
+    def _slider_cache_ready(self, note):
+        cache_key = note.get("render_index")
+        if cache_key is None:
+            return True
+        if cache_key in self.slider_surface_cache:
+            return True
+
+        payload = self.slider_cache_futures.get(cache_key)
+        if payload is not None:
+            future = payload[0]
+            if future.done():
+                self._collect_slider_cache_results(max_ms=1.2, max_items=4)
+                return cache_key in self.slider_surface_cache
+            return False
+
+        if cache_key in self.slider_cache_failed:
+            return True
+        return False
+
+    def _critical_slider_cache_ready(self, horizon_ms):
+        if not self.slider_cache_notes:
+            return True
+
+        horizon_time = max(0.0, float(horizon_ms))
+        for note in self.slider_cache_notes:
+            if note["time"] > horizon_time:
+                break
+            if not self._slider_cache_ready(note):
+                return False
+        return True
+
+    def _clear_slider_reveal_cache_for(self, note):
+        keys = note.pop("slider_reveal_cache_keys", None)
+        if not keys:
+            return
+        for key in keys:
+            self.slider_surface_cache.pop(key, None)
+            self.slider_reveal_cache_keys.discard(key)
+        note["slider_reveal_cache_cleared"] = True
+
+    def _warm_slider_reveal_cache(
+        self,
+        max_ms=0.35,
+        max_items=1,
+        horizon_ms=None
+    ):
+        if self.slider_cache_executor is None or not self.slider_cache_notes:
+            return
+
+        self._collect_slider_cache_results(
+            max_ms=min(0.16, max(0.05, max_ms * 0.35)),
+            max_items=1
+        )
+
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("slider_reveal_warm")
+
+        start = time.perf_counter()
+        count = 0
+        total = len(self.slider_cache_notes)
+        if horizon_ms is None:
+            horizon_time = self.current_time + self.approach_time + 3600
+        else:
+            horizon_time = self.current_time + float(horizon_ms)
+            if not self.music_started:
+                horizon_time = max(horizon_time, float(horizon_ms))
+
+        try:
+            if self.slider_reveal_prewarm_cursor >= total:
+                self.slider_reveal_prewarm_cursor = 0
+
+            index = self.slider_reveal_prewarm_cursor
+            scanned = 0
+            while scanned < total and count < max_items:
+                note = self.slider_cache_notes[index]
+                index = (index + 1) % total
+                scanned += 1
+
+                visual_start = note.get(
+                    "start_time",
+                    note["time"] - self.approach_time
+                )
+                if visual_start > horizon_time:
+                    if index == 0:
+                        break
+                    continue
+                if self.current_time > note["time"] + 250:
+                    continue
+
+                self._prepare_slider_geometry(note)
+                slider_points = note.get("scaled_slider_points")
+                cumulative = note.get("scaled_slider_cumulative")
+                total_length = note.get("scaled_slider_length")
+                base_cache_key = note.get("render_index")
+                if (
+                    not slider_points
+                    or cumulative is None
+                    or total_length is None
+                    or base_cache_key is None
+                ):
+                    continue
+
+                bucket = int(note.get("slider_reveal_prewarm_bucket", 1))
+                if bucket >= 10:
+                    continue
+
+                reveal_key = ("reveal", base_cache_key, bucket)
+                note["slider_reveal_prewarm_bucket"] = bucket + 1
+                if (
+                    reveal_key in self.slider_surface_cache
+                    or reveal_key in self.slider_cache_futures
+                    or reveal_key in self.slider_cache_failed
+                ):
+                    continue
+
+                revealed_points, _ = self._revealed_slider_points(
+                    note,
+                    slider_points,
+                    cumulative,
+                    total_length,
+                    reveal=bucket / 10.0
+                )
+                scheduled = self._schedule_slider_surface_job(
+                    reveal_key,
+                    revealed_points
+                )
+                if not scheduled:
+                    continue
+
+                note.setdefault(
+                    "slider_reveal_cache_keys",
+                    set()
+                ).add(reveal_key)
+                self.slider_reveal_cache_keys.add(reveal_key)
+                count += 1
+                elapsed_ms = (time.perf_counter() - start) * 1000.0
+                if elapsed_ms >= max_ms:
+                    break
+
+            self.slider_reveal_prewarm_cursor = index
+        finally:
+            if profiler_enabled:
+                profiler.end("slider_reveal_warm")
+
     def _warm_slider_cache(self, max_ms=1, max_items=1, horizon_ms=None):
         if self.slider_precache_complete:
             return
 
         if self.music_started:
-            collect_ms = min(0.35, max(0.12, max_ms * 0.45))
+            collect_ms = min(0.22, max(0.08, max_ms * 0.38))
             collect_items = 1
         else:
-            collect_ms = min(1.4, max(0.25, max_ms * 0.55))
-            collect_items = max(1, min(8, max_items // 4))
+            collect_ms = min(2.4, max(0.35, max_ms * 0.68))
+            collect_items = max(1, min(14, max_items // 3))
         self._collect_slider_cache_results(
             max_ms=collect_ms,
             max_items=collect_items
@@ -3264,10 +3606,25 @@ class GameplayScene(BaseScene):
             self._warm_gameplay_surface_cache(max_ms=4, max_items=24)
             if ready_elapsed >= 180:
                 self._warm_followpoint_connections(max_ms=2, max_items=96)
+                self._warm_slider_geometry_cache(
+                    max_ms=2.4,
+                    max_items=96,
+                    horizon_ms=self.approach_time + 14000
+                )
             if ready_elapsed >= 420:
+                self._warm_slider_geometry_cache(
+                    max_ms=3.5,
+                    max_items=160,
+                    horizon_ms=None
+                )
                 self._warm_slider_cache(
                     max_ms=6,
                     max_items=32,
+                    horizon_ms=self.approach_time + 9000
+                )
+                self._warm_slider_reveal_cache(
+                    max_ms=1.5,
+                    max_items=10,
                     horizon_ms=self.approach_time + 9000
                 )
             if ready_elapsed >= 650:
@@ -3281,6 +3638,36 @@ class GameplayScene(BaseScene):
             if ready_elapsed < total_intro_delay:
                 return
 
+            critical_slider_horizon = max(
+                5200,
+                int(self.approach_time + 7200)
+            )
+            extra_slider_warm_budget = 1250
+            if (
+                ready_elapsed < total_intro_delay + extra_slider_warm_budget
+                and not self._critical_slider_cache_ready(
+                    critical_slider_horizon
+                )
+            ):
+                self._warm_slider_geometry_cache(
+                    max_ms=5,
+                    max_items=220,
+                    horizon_ms=critical_slider_horizon
+                )
+                self._warm_slider_cache(
+                    max_ms=10,
+                    max_items=96,
+                    horizon_ms=critical_slider_horizon
+                )
+                self._warm_slider_reveal_cache(
+                    max_ms=2.2,
+                    max_items=16,
+                    horizon_ms=critical_slider_horizon
+                )
+                self._warm_skin_image_cache(max_ms=2, max_items=16)
+                self._warm_followpoint_connections(max_ms=1, max_items=64)
+                return
+
             if self.pre_music_lead_in_ms > 0:
                 if self.pre_music_started_at is None:
                     self.pre_music_started_at = pygame.time.get_ticks()
@@ -3292,10 +3679,20 @@ class GameplayScene(BaseScene):
                 if lead_elapsed < self.pre_music_lead_in_ms:
                     self._warm_gameplay_surface_cache(max_ms=4, max_items=24)
                     self._warm_skin_image_cache(max_ms=3, max_items=24)
+                    self._warm_slider_geometry_cache(
+                        max_ms=4,
+                        max_items=180,
+                        horizon_ms=None
+                    )
                     self._warm_slider_cache(
-                        max_ms=6,
-                        max_items=32,
-                        horizon_ms=self.approach_time + 9000
+                        max_ms=8,
+                        max_items=48,
+                        horizon_ms=self.approach_time + 11000
+                    )
+                    self._warm_slider_reveal_cache(
+                        max_ms=1.8,
+                        max_items=12,
+                        horizon_ms=self.approach_time + 11000
                     )
                     self._warm_followpoint_connections(max_ms=2, max_items=96)
                     self.current_time = lead_elapsed - self.pre_music_lead_in_ms
@@ -3331,10 +3728,20 @@ class GameplayScene(BaseScene):
         if self.start_time is not None:
             self._update_music_sync()
 
+        self._warm_slider_geometry_cache(
+            max_ms=0.12,
+            max_items=4,
+            horizon_ms=self.approach_time + 10000
+        )
         self._warm_slider_cache(
-            max_ms=0.45,
+            max_ms=0.42,
             max_items=2,
-            horizon_ms=self.approach_time + 7600
+            horizon_ms=self.approach_time + 6400
+        )
+        self._warm_slider_reveal_cache(
+            max_ms=0.18,
+            max_items=1,
+            horizon_ms=self.approach_time + 3200
         )
         self._warm_skin_image_cache(max_ms=0.12, max_items=1)
         self._warm_followpoint_connections(max_ms=0.18, max_items=4)
@@ -3799,15 +4206,41 @@ class GameplayScene(BaseScene):
                     note["scaled_slider_length"] = total_length
 
                 if not self.failed:
-                    revealed_points, reveal_progress = self._revealed_slider_points(
-                        note,
-                        render_slider_points,
-                        cumulative,
-                        total_length
-                    )
-                    if reveal_progress < 1.0:
+                    raw_reveal_progress = self._slider_path_reveal_progress(note)
+                    if raw_reveal_progress < 0.995:
+                        reveal_bucket_count = 10
+                        reveal_bucket = max(
+                            1,
+                            min(
+                                reveal_bucket_count - 1,
+                                int(math.ceil(raw_reveal_progress * reveal_bucket_count))
+                            )
+                        )
+                        bucketed_reveal = reveal_bucket / reveal_bucket_count
+                        revealed_points, reveal_progress = self._revealed_slider_points(
+                            note,
+                            render_slider_points,
+                            cumulative,
+                            total_length,
+                            reveal=bucketed_reveal
+                        )
                         slider_draw_points = revealed_points
-                        slider_cache_key = None
+                        base_cache_key = note.get("render_index")
+                        if base_cache_key is not None and not (shake_x or shake_y):
+                            slider_cache_key = (
+                                "reveal",
+                                base_cache_key,
+                                reveal_bucket
+                            )
+                            note.setdefault(
+                                "slider_reveal_cache_keys",
+                                set()
+                            ).add(slider_cache_key)
+                            self.slider_reveal_cache_keys.add(slider_cache_key)
+                        else:
+                            slider_cache_key = None
+                    elif not note.get("slider_reveal_cache_cleared"):
+                        self._clear_slider_reveal_cache_for(note)
 
                 if profiler_enabled:
                     slider_start = time.perf_counter()

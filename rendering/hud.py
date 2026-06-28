@@ -7,6 +7,8 @@ class GameplayHUDRenderer:
     def __init__(self, font):
         self.font = font
         self.text_cache = {}
+        self.text_cache_limit = 384
+        self.dynamic_text_cache = {}
         self.health_bar_cache = {}
         self.health_bar_image = self._load_health_bar_image()
         self.health_bar_scaled_cache = {}
@@ -24,7 +26,7 @@ class GameplayHUDRenderer:
         if cached is not None:
             return cached
 
-        if len(self.text_cache) > 96:
+        if len(self.text_cache) > self.text_cache_limit:
             self.text_cache.clear()
 
         surface = self.font.render(
@@ -33,6 +35,19 @@ class GameplayHUDRenderer:
             color
         )
         self.text_cache[key] = surface
+        return surface
+
+    def dynamic_text_surface(self, slot, text, color=(255, 255, 255)):
+        key = (text, tuple(color))
+        cached_key, cached_surface = self.dynamic_text_cache.get(
+            slot,
+            (None, None)
+        )
+        if cached_key == key and cached_surface is not None:
+            return cached_surface
+
+        surface = self.font.render(text, True, color)
+        self.dynamic_text_cache[slot] = (key, surface)
         return surface
 
     def draw(
@@ -79,15 +94,18 @@ class GameplayHUDRenderer:
             screen.blit(hud_surface, (0, 0))
             return
 
-        score_text = self.text_surface(
+        score_text = self.dynamic_text_surface(
+            "score",
             f"{score:08d}",
             (255, 255, 255)
         )
-        accuracy_text = self.text_surface(
+        accuracy_text = self.dynamic_text_surface(
+            "accuracy",
             f"{accuracy:05.2f}%",
             (255, 255, 255)
         )
-        combo_text = self.text_surface(
+        combo_text = self.dynamic_text_surface(
+            "combo",
             f"{combo}x",
             (255, 255, 255)
         )

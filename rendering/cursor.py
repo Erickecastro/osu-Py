@@ -7,29 +7,34 @@ class CursorRenderer:
     def __init__(
         self,
         cursor_scale=0.92,
-        trail_scale=1.16
+        trail_scale=1.16,
+        user_scale=1.0
     ):
         self.pos = pygame.mouse.get_pos()
         self.last_emit_pos = self.pos
         self.emit_timer = 0.0
         self.trail = []
         self.scaled_image_cache = {}
+        self.cursor_base_scale = float(cursor_scale)
+        self.trail_base_scale = float(trail_scale)
+        self.user_scale = max(0.50, min(2.00, float(user_scale or 1.0)))
 
         self.trail_duration = 0.285
         self.trail_emit_interval = 0.012
         self.trail_min_distance = 2.0
         self.trail_max_points = 8
 
-        self.cursor_image = self._load_asset(
-            "cursor.png",
-            cursor_scale
-        )
+        self.cursor_image = self._load_asset("cursor.png")
         if self.cursor_image is not None:
             self.cursor_image.set_alpha(250)
-        self.trail_image = self._load_asset(
-            "cursortrail.png",
-            trail_scale
-        )
+        self.trail_image = self._load_asset("cursortrail.png")
+
+    def set_user_scale(self, value):
+        value = max(0.50, min(2.00, float(value or 1.0)))
+        if abs(value - self.user_scale) < 0.001:
+            return
+        self.user_scale = value
+        self.scaled_image_cache.clear()
 
     def update(self, dt, pos):
         self.pos = pos
@@ -81,31 +86,21 @@ class CursorRenderer:
                 self.trail_image,
                 entry_pos,
                 alpha=alpha,
-                scale=scale
+                scale=self.trail_base_scale * self.user_scale * scale
             )
 
         self._blit_centered(
             screen,
             self.cursor_image,
             self.pos,
-            alpha=None
+            alpha=None,
+            scale=self.cursor_base_scale * self.user_scale
         )
 
-    def _load_asset(self, filename, scale=1.0):
+    def _load_asset(self, filename):
         image = load_image(filename, "cursor")
         if image is None:
             return None
-
-        if scale != 1.0:
-            size = (
-                max(1, int(image.get_width() * scale)),
-                max(1, int(image.get_height() * scale))
-            )
-            image = pygame.transform.smoothscale(
-                image,
-                size
-            )
-
         return image
 
     def _blit_centered(

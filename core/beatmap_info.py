@@ -304,3 +304,31 @@ class LocalScoreManager:
             self.scores.pop(key, None)
         self.save()
         return True
+
+    def delete_records_under(self, folder):
+        try:
+            root = Path(folder).resolve()
+        except (OSError, RuntimeError):
+            return 0
+
+        removed = 0
+        for key in list(self.scores.keys()):
+            try:
+                path = Path(key).resolve()
+            except (OSError, RuntimeError):
+                continue
+            try:
+                is_child = path.is_relative_to(root)
+            except AttributeError:
+                try:
+                    path.relative_to(root)
+                    is_child = True
+                except ValueError:
+                    is_child = False
+            if is_child:
+                self.scores.pop(key, None)
+                removed += 1
+
+        if removed:
+            self.save()
+        return removed

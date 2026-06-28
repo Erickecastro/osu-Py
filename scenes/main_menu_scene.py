@@ -915,6 +915,8 @@ class MainMenuScene(BaseScene):
             if event.type == pygame.MOUSEWHEEL:
                 if self.settings_controls.get("mouse_sensitivity", pygame.Rect(0, 0, 0, 0)).collidepoint(self.game.mouse_pos):
                     self._adjust_mouse_sensitivity(event.y * 0.05)
+                elif self.settings_controls.get("cursor_scale", pygame.Rect(0, 0, 0, 0)).collidepoint(self.game.mouse_pos):
+                    self._adjust_cursor_scale(event.y * 0.05)
                 elif self.settings_controls.get("gameplay_dim", pygame.Rect(0, 0, 0, 0)).collidepoint(self.game.mouse_pos):
                     self._adjust_gameplay_dim(event.y * 3)
                 return
@@ -922,6 +924,10 @@ class MainMenuScene(BaseScene):
                 if self.settings_controls.get("mouse_sensitivity", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
                     self.settings_dragging = "mouse_sensitivity"
                     self._set_mouse_sensitivity_from_pos(event.pos[0])
+                    return
+                if self.settings_controls.get("cursor_scale", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
+                    self.settings_dragging = "cursor_scale"
+                    self._set_cursor_scale_from_pos(event.pos[0])
                     return
                 if self.settings_controls.get("gameplay_dim", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
                     self.settings_dragging = "gameplay_dim"
@@ -956,6 +962,8 @@ class MainMenuScene(BaseScene):
             if event.type == pygame.MOUSEMOTION and self.settings_dragging:
                 if self.settings_dragging == "mouse_sensitivity":
                     self._set_mouse_sensitivity_from_pos(event.pos[0])
+                elif self.settings_dragging == "cursor_scale":
+                    self._set_cursor_scale_from_pos(event.pos[0])
                 elif self.settings_dragging == "gameplay_dim":
                     self._set_gameplay_dim_from_pos(event.pos[0])
                 return
@@ -1158,6 +1166,19 @@ class MainMenuScene(BaseScene):
         t = clamp((x - rect.left) / rect.width, 0.0, 1.0)
         value = 0.40 + (t * (2.00 - 0.40))
         self.game.set_mouse_sensitivity(round(value, 2))
+        self.settings_panel_cache.clear()
+
+    def _adjust_cursor_scale(self, amount):
+        self.game.set_cursor_scale(self.game.cursor_scale + amount)
+        self.settings_panel_cache.clear()
+
+    def _set_cursor_scale_from_pos(self, x):
+        rect = self.settings_controls.get("cursor_scale", pygame.Rect(0, 0, 0, 0))
+        if rect.width <= 0:
+            return
+        t = clamp((x - rect.left) / rect.width, 0.0, 1.0)
+        value = 0.50 + (t * (2.00 - 0.50))
+        self.game.set_cursor_scale(round(value, 2))
         self.settings_panel_cache.clear()
 
     def _adjust_gameplay_dim(self, amount):
@@ -1687,6 +1708,17 @@ class MainMenuScene(BaseScene):
                 visible_width,
                 content_alpha
             )
+            y = self._draw_settings_slider(
+                surface,
+                "cursor_scale",
+                "Cursor size",
+                f"{self.game.cursor_scale:.2f}x",
+                clamp((self.game.cursor_scale - 0.50) / 1.50, 0.0, 1.0),
+                x,
+                y,
+                visible_width,
+                content_alpha
+            )
             y = self._draw_settings_keys(surface, x, y, visible_width, content_alpha)
             y = self._draw_settings_toggle(
                 surface,
@@ -1735,6 +1767,7 @@ class MainMenuScene(BaseScene):
             hint_lines = (
                 "Tablet mode uses absolute cursor position.",
                 "Mouse sensitivity only affects raw mouse mode.",
+                "Cursor size affects cursor and trail together.",
                 "Click a key button, then press the new hit key."
             )
             for line in hint_lines:

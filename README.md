@@ -12,6 +12,7 @@ The project is experimental and educational. The core gameplay is already functi
 - Parser support for the main `.osu` sections: `General`, `Metadata`, `Difficulty`, `TimingPoints`, `Colours`, `Events`, and `HitObjects`.
 - Gameplay support for hit circles, sliders, slider ticks/scorepoints, reverse arrows, slider ball/follow circle, and spinners.
 - Hit judgment using `300`, `100`, `50`, and miss windows.
+- Centralized score/accuracy ledger for hit circles, slider heads, slider ticks/scorepoints, slider checkpoints, spinner pass/miss, spinner bonuses, combo, and ranking grades.
 - Score, combo, accuracy, health bar, hit error bar, pause/lose/result screens, and hit/miss visual effects.
 - Custom cursor with relative/raw mouse support, tablet absolute-input mode, configurable hit keys, and optional mouse-button blocking during gameplay.
 - Animated main menu with background music, circular FFT/BPM visualizer, track switching, settings, and smooth exit fade.
@@ -56,6 +57,14 @@ or:
 py -3.12 main.py
 ```
 
+## Tests
+
+The project includes a lightweight regression suite for parser, timing, slider scorepoints, spinner pass/miss behavior, score/accuracy accounting, `.osz` imports, and local rankings.
+
+```bash
+py -3.12 -B -m unittest discover -s tests -v
+```
+
 ## Controls
 
 ### Global
@@ -70,7 +79,7 @@ py -3.12 main.py
 - `Left`/`Right` or `A`/`D`: change menu music.
 - `Space`: pause/resume menu music.
 - `Esc`: close the menu or settings panel.
-- Settings panel: mouse sensitivity, hit keys, raw mouse input, tablet absolute input, gameplay dim, and mouse hit-button blocking.
+- Settings panel: mouse sensitivity, cursor size, hit keys, raw mouse input, tablet absolute input, gameplay dim, and mouse hit-button blocking.
 
 ### Song Selection
 
@@ -152,6 +161,7 @@ $env:PYOSU_SKIN_DIR="assets/skins/default"
 $env:PYOSU_PROFILE="1"
 $env:PYOSU_DEBUG_PERFORMANCE="1"
 $env:PYOSU_TARGET_FPS="1000"
+$env:PYOSU_AUTO_FPS_MULTIPLIER="4.0"
 $env:PYOSU_BUSY_FRAME_PACER="1"
 py -3.12 main.py
 ```
@@ -160,7 +170,9 @@ py -3.12 main.py
 - `PYOSU_SKIN_DIR`: sets the active skin directory.
 - `PYOSU_PROFILE=1`: starts with the profiler overlay enabled.
 - `PYOSU_DEBUG_PERFORMANCE=1`: enables performance instrumentation by default.
-- `PYOSU_TARGET_FPS`: sets the frame limit. The current code default is `480`.
+- `PYOSU_TARGET_FPS`: manually sets the frame limit. When unset, the game detects the monitor refresh rate and targets a high multiple of it automatically.
+- `PYOSU_AUTO_FPS_MULTIPLIER`: multiplier used by the automatic refresh-rate target. The default is `4.0`.
+- `PYOSU_AUTO_FPS_MIN` / `PYOSU_AUTO_FPS_MAX`: clamps the automatic frame target. Defaults are `480` and `1200`.
 - `PYOSU_BUSY_FRAME_PACER=1`: uses `tick_busy_loop`, reducing frame-time variance at the cost of higher CPU usage.
 
 ## Building the Windows Executable
@@ -267,6 +279,7 @@ songs/                   Local beatmaps
 The project uses several strategies to reduce stutter:
 
 - configurable frame pacing with `pygame.time.Clock()` and optional busy-loop pacing;
+- automatic FPS targeting based on the current monitor refresh rate when `PYOSU_TARGET_FPS` is not set;
 - frame `dt` clamping;
 - low mixer buffer;
 - startup preload of shared UI assets in `core/assets.py`;

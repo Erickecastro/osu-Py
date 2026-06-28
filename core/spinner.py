@@ -156,12 +156,11 @@ class SpinnerManager:
             bonus_count = int(over)
             if bonus_count > note.get("spinner_bonus_count", 0):
                 note["spinner_bonus_count"] = bonus_count
-                self.scene.score += 1000
+                self.scene._add_spinner_bonus_score(bonus_count)
                 self.scene._add_spinner_bonus_indicator(
                     bonus_count,
                     self.center
                 )
-                self.scene._advance_combo()
 
         if current_time < end:
             score_bank = note.get("spinner_score_bank", 0.0)
@@ -169,7 +168,7 @@ class SpinnerManager:
                 score_bank += note["spinner_rpm"] * dt * 0.42
             whole_points = int(score_bank)
             if whole_points > 0:
-                self.scene.score += whole_points
+                self.scene._add_raw_score(whole_points)
                 score_bank -= whole_points
             note["spinner_score_bank"] = score_bank
             if hit_held:

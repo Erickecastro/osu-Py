@@ -16,6 +16,8 @@ class FrameProfiler:
         "scene_update",
         "surface_warm",
         "followpoint_warm",
+        "slider_geometry_warm",
+        "slider_reveal_warm",
         "slider_warm",
         "slider_collect",
         "background_warm",

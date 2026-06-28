@@ -616,8 +616,8 @@ class SongSelectScene(BaseScene):
                     self.delete_prompt_rect = pygame.Rect(
                         event.pos[0],
                         event.pos[1],
-                        354,
-                        62
+                        316,
+                        38
                     )
                     return
             if event.button != 1:
@@ -1059,20 +1059,51 @@ class SongSelectScene(BaseScene):
             return False
         if not self._is_safe_song_folder(resolved):
             return False
+        old_selected = self.selected_osu_file
+        selected_was_deleted = self._path_string_inside_folder(
+            old_selected,
+            resolved
+        )
+        preview_was_deleted = self._path_string_inside_folder(
+            self.current_preview_path,
+            resolved
+        )
+        menu_music_was_deleted = self._path_string_inside_folder(
+            getattr(self.game, "current_menu_music_path", None),
+            resolved
+        )
+        if preview_was_deleted or menu_music_was_deleted:
+            try:
+                pygame.mixer.music.stop()
+                if hasattr(pygame.mixer.music, "unload"):
+                    pygame.mixer.music.unload()
+            except pygame.error:
+                pass
+            self.current_preview_path = None
+            self.game.current_menu_music_path = None
+            self.game.current_menu_music_title = None
+            self.game.current_menu_music_timing_points = []
         try:
             shutil.rmtree(resolved)
         except OSError:
             return False
 
-        old_selected = self.selected_osu_file
+        self.score_manager.delete_records_under(resolved)
         self.game.beatmaps = self.game.beatmap_loader.load_songs()
         self.infos = BeatmapParser.from_loaded_beatmaps(self.game.beatmaps)
+        self.score_manager.load()
         self.card_layer_cache.clear()
         self.card_image_cache.clear()
         self.panel_surface_cache.clear()
+        self.text_cache.clear()
         self.carousel.cards.clear()
         self.expanded_groups = set()
         self.filtered = list(self.infos)
+        if selected_was_deleted:
+            self.selected_info = None
+            self.selected_osu_file = None
+            self.selection_play_armed = False
+            self.selection_play_osu_file = None
         self._apply_filter()
         if self._find_index_by_osu_file(old_selected) is None:
             self.selected_info = None
@@ -1081,7 +1112,34 @@ class SongSelectScene(BaseScene):
             self.selection_play_osu_file = None
             if self.items:
                 self._confirm_selection(0, play_preview=True, arm_play=True)
+            else:
+                self.selected_index = 0
+                self.browse_index = 0
+                self.background_cache.clear()
+                self.current_background = None
+                self.previous_background = None
+                self.current_background_key = None
+        else:
+            index = self._find_index_by_osu_file(old_selected)
+            if index is not None:
+                self._confirm_selection(index, play_preview=False, arm_play=True)
         return True
+
+    def _path_string_inside_folder(self, path_value, folder):
+        if not path_value:
+            return False
+        try:
+            path = Path(path_value).resolve()
+        except (OSError, RuntimeError):
+            return False
+        try:
+            return path.is_relative_to(folder)
+        except AttributeError:
+            try:
+                path.relative_to(folder)
+                return True
+            except ValueError:
+                return False
 
     def _is_safe_song_folder(self, resolved):
         if not resolved.exists() or not resolved.is_dir():
@@ -1506,13 +1564,11 @@ class SongSelectScene(BaseScene):
         if self.pending_delete_beatmap is not None:
             title = self._fit_text_surface(
                 self.tiny_font,
-                "Certeza? Esse beatmap sera excluido permanentemente.",
+                "Are you sure you want to delete this beatmap?",
                 (255, 238, 242),
                 rect.width - 20
             )
-            screen.blit(title, title.get_rect(midtop=(rect.centerx, rect.y + 8)))
-            text = self._text_surface(self.small_font, "Delete?", (255, 238, 242))
-            screen.blit(text, text.get_rect(midbottom=(rect.centerx, rect.bottom - 8)))
+            screen.blit(title, title.get_rect(center=rect.center))
         else:
             text = self._text_surface(self.small_font, "Delete?", (255, 238, 242))
             screen.blit(text, text.get_rect(center=rect.center))

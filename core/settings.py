@@ -19,6 +19,14 @@ def clamp_sensitivity(value):
     return max(0.40, min(2.00, value))
 
 
+def clamp_cursor_scale(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = 1.0
+    return max(0.50, min(2.00, value))
+
+
 def clamp_gameplay_dim(value):
     try:
         value = int(round(float(value)))
@@ -38,6 +46,7 @@ def _coerce_key(value, default):
 @dataclass
 class GameSettings:
     mouse_sensitivity: float = 1.0
+    cursor_scale: float = 1.0
     hit_key_1: int = 122  # pygame.K_z
     hit_key_2: int = 120  # pygame.K_x
     raw_mouse_enabled: bool = True
@@ -57,6 +66,7 @@ class GameSettings:
             mouse_sensitivity=clamp_sensitivity(
                 data.get("mouse_sensitivity", 1.0)
             ),
+            cursor_scale=clamp_cursor_scale(data.get("cursor_scale", 1.0)),
             hit_key_1=_coerce_key(data.get("hit_key_1", 122), 122),
             hit_key_2=_coerce_key(data.get("hit_key_2", 120), 120),
             raw_mouse_enabled=bool(data.get("raw_mouse_enabled", True)),
@@ -76,6 +86,10 @@ class GameSettings:
                     {
                         "mouse_sensitivity": round(
                             clamp_sensitivity(self.mouse_sensitivity),
+                            3
+                        ),
+                        "cursor_scale": round(
+                            clamp_cursor_scale(self.cursor_scale),
                             3
                         ),
                         "hit_key_1": _coerce_key(self.hit_key_1, 122),

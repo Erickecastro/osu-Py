@@ -1,3 +1,6 @@
+from core.scoring import calculate_accuracy_from_points
+
+
 def calculate_accuracy(hit_counts):
     total_hits = sum(hit_counts.values())
     if total_hits <= 0:
@@ -9,7 +12,7 @@ def calculate_accuracy(hit_counts):
         + (hit_counts[50] * 50)
     )
 
-    return (weighted / (total_hits * 300)) * 100.0
+    return calculate_accuracy_from_points(weighted, total_hits * 300)
 
 
 def hit_result_for_delta(

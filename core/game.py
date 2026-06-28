@@ -5,6 +5,9 @@ from core.assets import preload_startup_assets
 from core.beatmap_loader import BeatmapLoader
 from core.osz_importer import OszImporter
 from core.performance import (
+    AUTO_FPS_MAX,
+    AUTO_FPS_MIN,
+    AUTO_FPS_MULTIPLIER,
     DEBUG_PERFORMANCE,
     MAX_FRAME_DT,
     MIXER_BUFFER,
@@ -18,13 +21,18 @@ from core.performance import (
 )
 from core.profiler import FrameProfiler
 from core.scene_manager import SceneManager
-from core.settings import GameSettings, clamp_gameplay_dim, clamp_sensitivity
+from core.settings import (
+    GameSettings,
+    clamp_cursor_scale,
+    clamp_gameplay_dim,
+    clamp_sensitivity
+)
 from rendering.cursor import CursorRenderer
 from scenes.main_menu_scene import MainMenuScene
 
 class Game:
 
-    FPS = TARGET_FPS
+    FPS = TARGET_FPS or AUTO_FPS_MIN
 
     def __init__(self):
 
@@ -55,6 +63,8 @@ class Game:
         self.fullscreen = True
 
         self.create_window()
+        self.display_refresh_rate = self._detect_display_refresh_rate()
+        self.FPS = self._resolve_target_fps()
 
         pygame.display.set_caption("PyOsu")
 
@@ -70,6 +80,7 @@ class Game:
         self.raw_mouse_sensitivity = clamp_sensitivity(
             self.settings.mouse_sensitivity or RAW_MOUSE_SENSITIVITY
         )
+        self.cursor_scale = clamp_cursor_scale(self.settings.cursor_scale)
         self.raw_mouse_preferred = bool(self.settings.raw_mouse_enabled)
         self.tablet_input_enabled = bool(self.settings.tablet_input_enabled)
         self.block_mouse_buttons_in_gameplay = bool(
@@ -80,7 +91,7 @@ class Game:
             int(self.settings.hit_key_2)
         )
         self.gameplay_dim = clamp_gameplay_dim(self.settings.gameplay_dim)
-        self.cursor_renderer = CursorRenderer()
+        self.cursor_renderer = CursorRenderer(user_scale=self.cursor_scale)
         pygame.mouse.set_visible(False)
         pygame.event.set_blocked(pygame.MOUSEMOTION)
         self.mouse_motion_blocked = True
@@ -196,6 +207,8 @@ class Game:
         self.fullscreen = not self.fullscreen
 
         self.create_window()
+        self.display_refresh_rate = self._detect_display_refresh_rate()
+        self.FPS = self._resolve_target_fps()
         self.mouse_pos = self._clamp_mouse_pos(self.mouse_pos)
 
         self.ui_manager = pygame_gui.UIManager(
@@ -203,6 +216,52 @@ class Game:
         )
 
         self._notify_resize()
+
+    def _detect_display_refresh_rate(self):
+        rate = 0
+
+        getter = getattr(pygame.display, "get_current_refresh_rate", None)
+        if callable(getter):
+            try:
+                rate = int(round(float(getter())))
+            except (pygame.error, TypeError, ValueError):
+                rate = 0
+
+        if rate > 0:
+            return rate
+
+        rates_getter = getattr(pygame.display, "get_desktop_refresh_rates", None)
+        if callable(rates_getter):
+            try:
+                rates = rates_getter()
+            except (pygame.error, TypeError, ValueError):
+                rates = []
+            try:
+                flattened = []
+                for item in rates:
+                    if isinstance(item, (list, tuple)):
+                        flattened.extend(item)
+                    else:
+                        flattened.append(item)
+                valid = [
+                    int(round(float(item)))
+                    for item in flattened
+                    if float(item) > 0
+                ]
+                if valid:
+                    return max(valid)
+            except (TypeError, ValueError):
+                pass
+
+        return 0
+
+    def _resolve_target_fps(self):
+        if TARGET_FPS > 0:
+            return max(30, int(TARGET_FPS))
+
+        refresh = self.display_refresh_rate or 60
+        target = int(round(refresh * AUTO_FPS_MULTIPLIER))
+        return max(AUTO_FPS_MIN, min(AUTO_FPS_MAX, target))
 
     def _notify_resize(self):
         if hasattr(self.scene_manager, "on_resize"):
@@ -327,6 +386,12 @@ class Game:
     def set_mouse_sensitivity(self, value):
         self.raw_mouse_sensitivity = clamp_sensitivity(value)
         self.settings.mouse_sensitivity = self.raw_mouse_sensitivity
+        self.settings.save()
+
+    def set_cursor_scale(self, value):
+        self.cursor_scale = clamp_cursor_scale(value)
+        self.settings.cursor_scale = self.cursor_scale
+        self.cursor_renderer.set_user_scale(self.cursor_scale)
         self.settings.save()
 
     def set_hit_key(self, slot, key):
