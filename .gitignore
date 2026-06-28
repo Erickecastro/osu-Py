@@ -1,11 +1,37 @@
-.vscode/
-core/__pycache__/
-scenes/__pycache__/
-*.pyc
+# Python caches
+__pycache__/
+*.py[cod]
 *.pyo
 *.pyd
+*$py.class
+
+# Virtual environments
 .venv/
+venv/
+env/
+
+# Build artifacts
 build/
 dist/
 *.spec
+
+# Local IDE/agent files
+.vscode/
+.agents/
+.codex/
+
+# Runtime/local data
 scores/
+settings.json
+*.log
+*.prof
+
+# Beatmaps and imports are user-provided runtime content.
+songs/*
+!songs/.gitkeep
+imports/*
+!imports/.gitkeep
+
+# OS files
+Thumbs.db
+Desktop.ini
