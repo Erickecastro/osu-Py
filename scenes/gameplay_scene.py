@@ -669,11 +669,14 @@ class GameplayScene(BaseScene):
             note["fade_out_duration"] = self.hit_explosion_duration
             note["end_time"] = self.current_time + self.hit_explosion_duration
 
-        self.combo += 1
-        self.max_combo = max(self.max_combo, self.combo)
+        self._advance_combo()
 
         combo_bonus = max(0, self.combo - 1) * result // 25
         self.score += result + combo_bonus
+
+    def _advance_combo(self):
+        self.combo += 1
+        self.max_combo = max(self.max_combo, self.combo)
 
     def _add_hit_result_indicator(self, note, result):
         self.hit_result_indicators.append({
@@ -808,8 +811,7 @@ class GameplayScene(BaseScene):
             )
             return
 
-        self.combo += 1
-        self.max_combo = max(self.max_combo, self.combo)
+        self._advance_combo()
         bonus = note.get("spinner_bonus_count", 0) * 1000
         self.score += result + bonus
         self._play_hit_sound()
@@ -1727,7 +1729,11 @@ class GameplayScene(BaseScene):
                 self.hit_mouse_buttons_held.discard(button)
 
     def _update_slider_checkpoint_sounds(self, note):
-        if note["type"] != "slider" or not note.get("head_hit"):
+        if (
+            note["type"] != "slider"
+            or not note.get("head_hit")
+            or note.get("slider_follow_missed")
+        ):
             return
 
         span_duration = float(note.get("span_duration", 0.0))
@@ -1742,6 +1748,8 @@ class GameplayScene(BaseScene):
                 break
 
             self._play_hit_sound()
+            self._advance_combo()
+            self.score += 30 + max(0, self.combo - 1)
             next_index += 1
 
         note["slider_hit_sound_index"] = next_index
@@ -1998,6 +2006,39 @@ class GameplayScene(BaseScene):
 
         note["slider_scorepoint_geometry_key"] = geometry_key
 
+    def _slider_path_reveal_progress(self, note):
+        visual_start = note.get("start_time", note["time"] - self.approach_time)
+        reveal_duration = max(
+            58.0,
+            min(118.0, self.approach_time * 0.105)
+        )
+        return self._smoothstep(
+            (self.current_time - visual_start) / reveal_duration
+        )
+
+    def _revealed_slider_points(self, note, slider_points, cumulative, total_length):
+        reveal = self._slider_path_reveal_progress(note)
+        if reveal >= 0.995 or total_length <= 0 or len(slider_points) < 2:
+            return slider_points, 1.0
+
+        target_distance = max(0.1, total_length * reveal)
+        segment_index = max(
+            0,
+            min(len(slider_points) - 2, bisect_right(cumulative, target_distance) - 1)
+        )
+        partial = list(slider_points[:segment_index + 1])
+        partial.append(
+            self.slider_renderer.point_at_distance(
+                slider_points,
+                target_distance,
+                cumulative,
+                total_length
+            )
+        )
+        if len(partial) < 2:
+            partial.append(slider_points[1])
+        return partial, reveal
+
     def _cursor_inside_slider_follow(self, pos):
         mouse_x, mouse_y = self.game.mouse_pos
         dx = mouse_x - pos[0]
@@ -2008,8 +2049,7 @@ class GameplayScene(BaseScene):
         scorepoint["processed"] = True
         scorepoint["collected"] = True
         scorepoint["processed_time"] = self.current_time
-        self.combo += 1
-        self.max_combo = max(self.max_combo, self.combo)
+        self._advance_combo()
         self.score += 10 + max(0, self.combo - 1)
 
     def _miss_slider_scorepoint(self, note, scorepoint, pos):
@@ -3344,9 +3384,9 @@ class GameplayScene(BaseScene):
                     self.game.mouse_pos
                 )
             elif note["type"] == "slider":
-                self._update_slider_checkpoint_sounds(note)
-                self._update_slider_scorepoints(note)
                 self._update_slider_follow_state(note)
+                self._update_slider_scorepoints(note)
+                self._update_slider_checkpoint_sounds(note)
 
         self.active_notes = prune_inactive_notes(
             self.active_notes,
@@ -3733,6 +3773,7 @@ class GameplayScene(BaseScene):
                     slider_cache_key = note.get("render_index")
 
                 slider_draw_points = render_slider_points
+                reveal_progress = 1.0
                 slider_screen_offset = (0, 0)
                 if self.failed and fail_offset_y:
                     slider_screen_offset = (0, fail_offset_y)
@@ -3748,6 +3789,26 @@ class GameplayScene(BaseScene):
                     slider_draw_points = render_slider_points
                     slider_cache_key = None
 
+                cumulative = note.get("scaled_slider_cumulative")
+                total_length = note.get("scaled_slider_length")
+                if cumulative is None or total_length is None:
+                    cumulative, total_length = self.slider_renderer.path_metrics(
+                        slider_points
+                    )
+                    note["scaled_slider_cumulative"] = cumulative
+                    note["scaled_slider_length"] = total_length
+
+                if not self.failed:
+                    revealed_points, reveal_progress = self._revealed_slider_points(
+                        note,
+                        render_slider_points,
+                        cumulative,
+                        total_length
+                    )
+                    if reveal_progress < 1.0:
+                        slider_draw_points = revealed_points
+                        slider_cache_key = None
+
                 if profiler_enabled:
                     slider_start = time.perf_counter()
                 self.slider_renderer.draw(
@@ -3759,7 +3820,7 @@ class GameplayScene(BaseScene):
                     draw_tail_marker=False,
                     cache_key=slider_cache_key,
                     repeat_count=note.get("repeat_count", 1),
-                    draw_reverse_markers=True,
+                    draw_reverse_markers=reveal_progress >= 0.985,
                     slider_start_time=note["time"],
                     span_duration=note.get("span_duration", 0.0),
                     screen_offset=slider_screen_offset
