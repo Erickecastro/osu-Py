@@ -1,4 +1,5 @@
 import math
+import shutil
 from pathlib import Path
 
 import pygame
@@ -7,6 +8,7 @@ from core.audio import find_audio_file, mark_music_loaded
 from core.assets import load_image
 from core.beatmap_info import BeatmapParser, LocalScoreManager
 from core.fonts import rounded_font
+from core.utils import discover_user_data_directories
 from scenes.base_scene import BaseScene
 from scenes.gameplay_scene import GameplayScene
 
@@ -250,6 +252,8 @@ class SongSelectScene(BaseScene):
         self.pending_play_info = None
         self.pending_play_elapsed = 0.0
         self.pending_play_duration = 0.22
+        self.selection_play_armed = False
+        self.selection_play_osu_file = None
         self.current_preview_path = None
         self.back_button_rect = pygame.Rect(0, 0, 0, 0)
         self.card_base_image = self._load_card_base_image()
@@ -270,10 +274,12 @@ class SongSelectScene(BaseScene):
         self.panel_surface_cache = {}
         self.rank_record_rects = []
         self.pending_delete_record = None
+        self.pending_delete_beatmap = None
         self.delete_prompt_rect = None
         self.drag_scroll_active = False
         self.drag_scroll_start_y = 0
         self.drag_scroll_start_index = 0
+        self.last_mouse_x = None
         self._layout()
         self._apply_filter()
         initial_index = self._index_for_music_path(self.initial_music_path)
@@ -451,9 +457,33 @@ class SongSelectScene(BaseScene):
         self.panel_surface_cache.clear()
         self.card_layer_cache.clear()
 
+    def refresh_beatmaps(self):
+        selected_osu_file = self.selected_osu_file
+        self.infos = BeatmapParser.from_loaded_beatmaps(self.game.beatmaps)
+        self.selection_play_armed = False
+        self.selection_play_osu_file = None
+        self._apply_filter()
+        if selected_osu_file:
+            index = self._find_index_by_osu_file(selected_osu_file)
+            if index is not None:
+                self._confirm_selection(index, play_preview=False, arm_play=False)
+                return
+        if self.items:
+            self._confirm_selection(
+                int(clamp(self.selected_index, 0, len(self.items) - 1)),
+                play_preview=False,
+                arm_play=False
+            )
+
     def handle_event(self, event):
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
+                if self.search_text:
+                    self.search_text = ""
+                    self.search_active = False
+                    self._apply_filter()
+                    self._center_selected_card()
+                    return
                 self._return_to_main_menu()
                 return
             if self.pending_play_info is not None:
@@ -534,9 +564,17 @@ class SongSelectScene(BaseScene):
                         self.score_manager.load()
                         self.panel_surface_cache.clear()
                     self.pending_delete_record = None
+                    self.pending_delete_beatmap = None
+                    self.delete_prompt_rect = None
+                    return
+                if self.delete_prompt_rect.collidepoint(event.pos) and self.pending_delete_beatmap:
+                    self._delete_selected_beatmap_folder(self.pending_delete_beatmap)
+                    self.pending_delete_record = None
+                    self.pending_delete_beatmap = None
                     self.delete_prompt_rect = None
                     return
                 self.pending_delete_record = None
+                self.pending_delete_beatmap = None
                 self.delete_prompt_rect = None
             if self.back_button_rect.collidepoint(event.pos):
                 self._return_to_main_menu()
@@ -568,6 +606,20 @@ class SongSelectScene(BaseScene):
                         )
                     )
                     return
+            if event.button == 3:
+                clicked = self._card_index_at(event.pos)
+                if clicked is not None:
+                    self.pending_delete_record = None
+                    self.pending_delete_beatmap = self._beatmap_delete_payload(
+                        self.items[clicked]
+                    )
+                    self.delete_prompt_rect = pygame.Rect(
+                        event.pos[0],
+                        event.pos[1],
+                        354,
+                        62
+                    )
+                    return
             if event.button != 1:
                 return
             if self._handle_search_click(event.pos):
@@ -578,11 +630,23 @@ class SongSelectScene(BaseScene):
                 if item["type"] == "group" and item["count"] > 1:
                     if item["group"] in self.expanded_groups:
                         return
-                    self._confirm_selection(clicked, play_preview=True)
+                    self._confirm_selection(clicked, play_preview=True, arm_play=True)
                 elif clicked == self.selected_index:
-                    self._play_selected()
+                    current_info = item.get("info")
+                    current_osu_file = (
+                        str(current_info.osu_file)
+                        if current_info is not None
+                        else None
+                    )
+                    if (
+                        self.selection_play_armed
+                        and self.selection_play_osu_file == current_osu_file
+                    ):
+                        self._play_selected()
+                    else:
+                        self._confirm_selection(clicked, play_preview=True, arm_play=True)
                 else:
-                    self._confirm_selection(clicked, play_preview=True)
+                    self._confirm_selection(clicked, play_preview=True, arm_play=True)
                 return
             self.drag_scroll_active = True
             self.drag_scroll_start_y = event.pos[1]
@@ -593,6 +657,8 @@ class SongSelectScene(BaseScene):
             return
         self.pending_play_info = None
         self.pending_play_elapsed = 0.0
+        self.selection_play_armed = False
+        self.selection_play_osu_file = None
         try:
             pygame.mixer.music.set_volume(self.preview_volume)
         except pygame.error:
@@ -602,6 +668,7 @@ class SongSelectScene(BaseScene):
         self._cancel_pending_play()
         self.drag_scroll_active = False
         self.pending_delete_record = None
+        self.pending_delete_beatmap = None
         self.delete_prompt_rect = None
         manager = self.game.scene_manager
         if len(getattr(manager, "scene_stack", [])) > 1:
@@ -627,6 +694,7 @@ class SongSelectScene(BaseScene):
                 self.pending_play_info = None
                 pygame.mixer.music.stop()
                 pygame.mixer.music.set_volume(self.preview_volume)
+                self.current_preview_path = None
                 self.game.scene_manager.push_scene_factory(
                     lambda info=info: GameplayScene(self.game, info.difficulty_data)
                 )
@@ -669,6 +737,7 @@ class SongSelectScene(BaseScene):
         self.visible_items = visible
         self.carousel.trim(visible)
         mouse_pos = self.game.mouse_pos
+        self._handle_mouse_center_crossing(mouse_pos)
         for key, index, info in visible:
             target = self._target_for_index(index)
             card = self.carousel.card_for(key, info, target)
@@ -692,9 +761,10 @@ class SongSelectScene(BaseScene):
             return
         self.browse_index = int(clamp(self.browse_index + amount, 0, len(self.items) - 1))
 
-    def _confirm_selection(self, index, play_preview=False):
+    def _confirm_selection(self, index, play_preview=False, arm_play=False):
         if not self.items:
             return
+        self._cancel_pending_play()
         index = int(clamp(index, 0, len(self.items) - 1))
         item = self.items[index]
 
@@ -711,6 +781,12 @@ class SongSelectScene(BaseScene):
             self.browse_index = self.selected_index
             info = self.items[self.selected_index]["info"]
             self._remember_selected_info(info)
+            self.selection_play_armed = bool(arm_play)
+            self.selection_play_osu_file = (
+                str(info.osu_file)
+                if self.selection_play_armed
+                else None
+            )
             self.background_load_delay = 0.04
             self._ensure_background(info)
             if play_preview:
@@ -718,13 +794,27 @@ class SongSelectScene(BaseScene):
             return
 
         self.selected_index = index
+        info = self.items[self.selected_index]["info"]
         self.expanded_groups = (
-            {item["group"]}
-            if item["type"] == "difficulty"
+            {info.folder_path}
+            if self._difficulty_count_for_group(info.folder_path) > 1
             else set()
         )
-        info = self.items[self.selected_index]["info"]
+        self._rebuild_items()
+        selected_index = self._find_index_by_osu_file(info.osu_file)
+        self.selected_index = (
+            selected_index
+            if selected_index is not None
+            else int(clamp(index, 0, max(0, len(self.items) - 1)))
+        )
         self._remember_selected_info(info)
+        selected_osu_file = str(info.osu_file)
+        self.selection_play_armed = bool(arm_play)
+        self.selection_play_osu_file = (
+            selected_osu_file
+            if self.selection_play_armed
+            else None
+        )
         self.browse_index = self.selected_index
         self.background_load_delay = 0.04
         self._ensure_background(info)
@@ -777,6 +867,7 @@ class SongSelectScene(BaseScene):
             self.pending_play_info is not None
             or not self.current_preview_path
             or pygame.mixer.music.get_busy()
+            or getattr(self.game.scene_manager, "pending_factory", None) is not None
         ):
             return
 
@@ -898,6 +989,14 @@ class SongSelectScene(BaseScene):
         reverse = sort_mode in ("BPM", "Stars", "Date")
         self.filtered.sort(key=key_funcs[sort_mode], reverse=reverse)
         selected_osu_file = self.selected_osu_file
+        if self.selected_info is not None:
+            self.expanded_groups = (
+                {self.selected_info.folder_path}
+                if self._difficulty_count_for_group(self.selected_info.folder_path, self.filtered) > 1
+                else set()
+            )
+        else:
+            self.expanded_groups = set()
         self._rebuild_items()
         selected_index = self._find_index_by_osu_file(selected_osu_file)
         if selected_index is not None:
@@ -906,6 +1005,104 @@ class SongSelectScene(BaseScene):
         else:
             self.selected_index = int(clamp(self.selected_index, 0, max(0, len(self.items) - 1)))
         self.browse_index = int(clamp(self.browse_index, 0, max(0, len(self.items) - 1)))
+
+    def _difficulty_count_for_group(self, group, infos=None):
+        if not group:
+            return 0
+        source = self.infos if infos is None else infos
+        return sum(1 for info in source if info.folder_path == group)
+
+    def _center_selected_card(self):
+        if not self.items:
+            return
+        if self.selected_info is not None:
+            self.expanded_groups = (
+                {self.selected_info.folder_path}
+                if self._difficulty_count_for_group(self.selected_info.folder_path, self.filtered) > 1
+                else set()
+            )
+            self._rebuild_items()
+        selected_index = self._find_index_by_osu_file(self.selected_osu_file)
+        if selected_index is None:
+            selected_index = int(clamp(self.selected_index, 0, len(self.items) - 1))
+        self.selected_index = selected_index
+        self.browse_index = selected_index
+
+    def _handle_mouse_center_crossing(self, mouse_pos):
+        previous_x = self.last_mouse_x
+        self.last_mouse_x = mouse_pos[0]
+        if previous_x is None or self.drag_scroll_active or self.pending_play_info is not None:
+            return
+        midpoint = self.game.WIDTH * 0.5
+        if previous_x >= midpoint and mouse_pos[0] < midpoint:
+            self._center_selected_card()
+
+    def _beatmap_delete_payload(self, item):
+        info = item.get("info")
+        folder = item.get("group") or (info.folder_path if info is not None else None)
+        title = "Beatmap"
+        if info is not None:
+            title = f"{info.artist} - {info.title}".strip(" -") or info.title or "Beatmap"
+        return {
+            "folder": str(folder) if folder else "",
+            "title": title
+        }
+
+    def _delete_selected_beatmap_folder(self, payload):
+        folder = payload.get("folder") if payload else None
+        if not folder:
+            return False
+        target = Path(folder)
+        try:
+            resolved = target.resolve()
+        except (OSError, RuntimeError):
+            return False
+        if not self._is_safe_song_folder(resolved):
+            return False
+        try:
+            shutil.rmtree(resolved)
+        except OSError:
+            return False
+
+        old_selected = self.selected_osu_file
+        self.game.beatmaps = self.game.beatmap_loader.load_songs()
+        self.infos = BeatmapParser.from_loaded_beatmaps(self.game.beatmaps)
+        self.card_layer_cache.clear()
+        self.card_image_cache.clear()
+        self.panel_surface_cache.clear()
+        self.carousel.cards.clear()
+        self.expanded_groups = set()
+        self.filtered = list(self.infos)
+        self._apply_filter()
+        if self._find_index_by_osu_file(old_selected) is None:
+            self.selected_info = None
+            self.selected_osu_file = None
+            self.selection_play_armed = False
+            self.selection_play_osu_file = None
+            if self.items:
+                self._confirm_selection(0, play_preview=True, arm_play=True)
+        return True
+
+    def _is_safe_song_folder(self, resolved):
+        if not resolved.exists() or not resolved.is_dir():
+            return False
+        for root in discover_user_data_directories("songs"):
+            try:
+                root_path = Path(root).resolve()
+            except (OSError, RuntimeError):
+                continue
+            if resolved == root_path:
+                return False
+            try:
+                if resolved.is_relative_to(root_path):
+                    return True
+            except AttributeError:
+                try:
+                    resolved.relative_to(root_path)
+                    return True
+                except ValueError:
+                    pass
+        return False
 
     def _rebuild_items(self):
         groups = {}
@@ -1291,17 +1488,34 @@ class SongSelectScene(BaseScene):
                 row_y += 40
 
     def _draw_delete_prompt(self, screen):
-        if self.delete_prompt_rect is None or self.pending_delete_record is None:
+        if (
+            self.delete_prompt_rect is None
+            or (
+                self.pending_delete_record is None
+                and self.pending_delete_beatmap is None
+            )
+        ):
             return
 
         rect = self.delete_prompt_rect.copy()
         rect.right = min(rect.right, self.game.WIDTH - 10)
         rect.bottom = min(rect.bottom, self.game.HEIGHT - self.bottom_bar_height - 8)
         self.delete_prompt_rect = rect
-        pygame.draw.rect(screen, (18, 15, 24, 238), rect, border_radius=8)
+        pygame.draw.rect(screen, (18, 15, 24, 242), rect, border_radius=8)
         pygame.draw.rect(screen, (255, 82, 112, 230), rect, 2, border_radius=8)
-        text = self._text_surface(self.small_font, "Delete?", (255, 238, 242))
-        screen.blit(text, text.get_rect(center=rect.center))
+        if self.pending_delete_beatmap is not None:
+            title = self._fit_text_surface(
+                self.tiny_font,
+                "Certeza? Esse beatmap sera excluido permanentemente.",
+                (255, 238, 242),
+                rect.width - 20
+            )
+            screen.blit(title, title.get_rect(midtop=(rect.centerx, rect.y + 8)))
+            text = self._text_surface(self.small_font, "Delete?", (255, 238, 242))
+            screen.blit(text, text.get_rect(midbottom=(rect.centerx, rect.bottom - 8)))
+        else:
+            text = self._text_surface(self.small_font, "Delete?", (255, 238, 242))
+            screen.blit(text, text.get_rect(center=rect.center))
 
     def _draw_cards(self, screen):
         if not self.items:
@@ -1347,8 +1561,6 @@ class SongSelectScene(BaseScene):
                 )
                 label = self._text_surface(self.medium_font, "back", (255, 255, 255))
                 surface.blit(label, label.get_rect(center=draw_rect.center))
-            guest = self._text_surface(self.tiny_font, "Guest", (235, 240, 255))
-            surface.blit(guest, guest.get_rect(center=(self.game.WIDTH // 2, h // 2)))
             self._cache_panel_surface(cache_key, surface)
         screen.blit(surface, (0, y))
 
