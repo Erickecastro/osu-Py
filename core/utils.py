@@ -44,6 +44,16 @@ def application_base_dirs():
     return dirs
 
 
+def user_data_base_dir():
+    appdata = (
+        os.environ.get("LOCALAPPDATA")
+        or os.environ.get("APPDATA")
+    )
+    if appdata:
+        return os.path.join(appdata, "PyOsu")
+    return os.path.join(os.path.expanduser("~"), ".pyosu")
+
+
 def ensure_application_cwd():
     if getattr(sys, "frozen", False):
         os.chdir(application_path())
@@ -75,7 +85,12 @@ def discover_user_data_directories(name):
     candidates = []
     seen = set()
 
-    for base in application_base_dirs():
+    if getattr(sys, "frozen", False):
+        base_dirs = [user_data_base_dir()] + application_base_dirs()
+    else:
+        base_dirs = application_base_dirs() + [user_data_base_dir()]
+
+    for base in base_dirs:
         candidate = os.path.join(base, name)
         normalized = os.path.normcase(os.path.abspath(candidate))
         if normalized in seen:
