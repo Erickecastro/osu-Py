@@ -49,7 +49,8 @@ def find_audio_file(folder_path, preferred_filename=None):
     ]
     files.sort()
 
-    for extensions in ((".mp3", ".ogg"), (".wav",)):
+    for extensions in ((".mp3", ".ogg"), (".wav",
+    )):
         for filename in files:
             lower = filename.lower()
             path = os.path.join(folder_path, filename)
