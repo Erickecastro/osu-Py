@@ -10,6 +10,13 @@ __pycache__/
 venv/
 env/
 
+# Test/tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
 # Build artifacts
 build/
 dist/
@@ -17,6 +24,7 @@ dist/
 
 # Local IDE/agent files
 .vscode/
+.idea/
 .agents/
 .codex/
 
@@ -31,6 +39,7 @@ songs/*
 !songs/.gitkeep
 imports/*
 !imports/.gitkeep
+*.osz
 
 # OS files
 Thumbs.db
