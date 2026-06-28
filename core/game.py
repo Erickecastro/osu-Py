@@ -3,6 +3,7 @@ import pygame_gui
 
 from core.assets import preload_startup_assets
 from core.beatmap_loader import BeatmapLoader
+from core.osz_importer import OszImporter
 from core.performance import (
     DEBUG_PERFORMANCE,
     MAX_FRAME_DT,
@@ -102,6 +103,8 @@ class Game:
         # BEATMAPS
         # -------------------------
         self.beatmap_loader = BeatmapLoader()
+        self.osz_importer = OszImporter(self.beatmap_loader)
+        self.last_import_result = self.osz_importer.import_pending()
 
         self.beatmaps = (
             self.beatmap_loader.load_songs()
@@ -146,10 +149,6 @@ class Game:
             "FINGERUP",
             "FINGERMOTION",
             "MULTIGESTURE",
-            "DROPFILE",
-            "DROPTEXT",
-            "DROPBEGIN",
-            "DROPCOMPLETE",
         ):
             event_type = getattr(pygame, name, None)
             if event_type is not None:
@@ -448,6 +447,9 @@ class Game:
             ):
                 self.sample_mouse_now()
 
+            if not self.raw_mouse_enabled and event.type == pygame.KEYDOWN:
+                self.sample_mouse_now()
+
             if not self.raw_mouse_enabled and hasattr(event, "pos"):
                 self.mouse_pos = event.pos
 
@@ -457,6 +459,10 @@ class Game:
             if event.type == pygame.QUIT:
 
                 self.running = False
+
+            if event.type == pygame.DROPFILE:
+                self.import_osz_file(getattr(event, "file", ""))
+                continue
 
             # -------------------------
             # KEYDOWN
@@ -496,6 +502,20 @@ class Game:
                 self.ui_manager.process_events(
                     event
                 )
+
+    def import_osz_file(self, path):
+        if not path or not str(path).lower().endswith(".osz"):
+            return None
+
+        result = self.osz_importer.import_file(path)
+        self.last_import_result = result
+        if result.changed:
+            self.beatmaps = self.beatmap_loader.load_songs()
+            current_scene = self.scene_manager.current_scene
+            refresh = getattr(current_scene, "refresh_beatmaps", None)
+            if callable(refresh):
+                refresh()
+        return result
 
     # -------------------------
     # UPDATE
