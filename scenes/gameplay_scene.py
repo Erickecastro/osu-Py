@@ -3941,10 +3941,17 @@ class GameplayScene(BaseScene):
         return pos
 
     def render(self, screen):
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+
         if self.music_started and not self.paused and not self.failed:
             self._sync_music_time_now()
 
+        if profiler_enabled:
+            profiler.start("background_render")
         self._draw_background(screen)
+        if profiler_enabled:
+            profiler.end("background_render")
 
         if not self.music_started and self.pre_music_started_at is None:
             self._render_ready(screen)
@@ -3965,6 +3972,8 @@ class GameplayScene(BaseScene):
             )
             if self.current_time >= self.first_object_visual_time - 80:
                 hud_alpha = 255
+            if profiler_enabled:
+                profiler.start("hud_render")
             self.hud_renderer.draw(
                 screen,
                 self.beatmap,
@@ -3979,6 +3988,8 @@ class GameplayScene(BaseScene):
                 self.hit_window_50,
                 alpha=hud_alpha
             )
+            if profiler_enabled:
+                profiler.end("hud_render")
 
         # Camada transparente para permitir alpha real (fade in/out suave).
         screen_size = screen.get_size()
@@ -3992,8 +4003,6 @@ class GameplayScene(BaseScene):
         overlay = self.overlay_surface
         overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
 
-        profiler = getattr(self.game, "profiler", None)
-        profiler_enabled = bool(profiler and profiler.enabled)
         slider_render_elapsed = 0.0
         if profiler_enabled:
             profiler.start("hitobjects_render")
@@ -4003,7 +4012,14 @@ class GameplayScene(BaseScene):
         for note in reversed(self.active_notes):
 
             if note["type"] == "spinner":
+                if profiler_enabled:
+                    spinner_start = time.perf_counter()
                 self.spinner_renderer.draw(overlay, note)
+                if profiler_enabled:
+                    profiler.add(
+                        "spinner_render",
+                        (time.perf_counter() - spinner_start) * 1000.0
+                    )
                 continue
 
             scaled_x, scaled_y = self._note_screen_pos(note)
@@ -4439,7 +4455,11 @@ class GameplayScene(BaseScene):
                     alpha=approach_alpha
                 )
 
+        if profiler_enabled:
+            profiler.start("followpoints_render")
         self._draw_followpoints(overlay)
+        if profiler_enabled:
+            profiler.end("followpoints_render")
 
         self.miss_indicators = [
             indicator
