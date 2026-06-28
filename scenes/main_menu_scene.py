@@ -761,7 +761,7 @@ class MainMenuScene(BaseScene):
         self.exit_snapshot_size = None
 
         self.circle = PulseCircle(self.title)
-        self.visualizer = CircularMenuVisualizer(bar_count=128)
+        self.visualizer = CircularMenuVisualizer(bar_count=140)
         self.snow = MenuSnow(self.assets_dir)
         self.snow.load()
         self.options = [
@@ -845,14 +845,13 @@ class MainMenuScene(BaseScene):
     def create_ui(self):
         self._prepare_mouse()
         self._layout()
-        self._sync_from_shared_music(defer_analysis=True)
+        self._sync_from_shared_music(defer_analysis=False)
         self._start_menu_music()
 
     def on_resume(self):
         self._prepare_mouse()
         self._layout()
-        self._sync_from_shared_music(defer_analysis=True)
-        self.visualizer_analysis_delay = max(self.visualizer_analysis_delay, 0.85)
+        self._sync_from_shared_music(defer_analysis=False)
 
     def on_resize(self):
         self._layout()
@@ -1281,9 +1280,12 @@ class MainMenuScene(BaseScene):
                 []
             )
             self.footer_cache.clear()
-            self.analyzed_music_path = None
-            self.visualizer_analysis_delay = 0.65
-            self.visualizer.request_audio_analysis(None, self.current_timing_points)
+            self.analyzed_music_path = str(self.music_path)
+            self.visualizer_analysis_delay = 0.0
+            self.visualizer.request_audio_analysis(
+                self.music_path,
+                self.current_timing_points
+            )
         else:
             self._set_track_metadata(track_index)
 
@@ -1331,7 +1333,7 @@ class MainMenuScene(BaseScene):
         self.dimmed_background_key = None
 
     def _start_menu_music(self):
-        self._sync_from_shared_music(defer_analysis=True)
+        self._sync_from_shared_music(defer_analysis=False)
         if self.music_started and (pygame.mixer.music.get_busy() or self.music_paused):
             return
 
@@ -1405,9 +1407,12 @@ class MainMenuScene(BaseScene):
         self.music_energy = track["energy"]
         self.current_timing_points = track.get("timing_points", [])
         self.beat_phase = 0.0
-        self.analyzed_music_path = None
-        self.visualizer_analysis_delay = 0.85
-        self.visualizer.request_audio_analysis(None, self.current_timing_points)
+        self.analyzed_music_path = str(self.music_path)
+        self.visualizer_analysis_delay = 0.0
+        self.visualizer.request_audio_analysis(
+            self.music_path,
+            self.current_timing_points
+        )
 
     def _advance_finished_menu_track(self):
         if (
@@ -1753,6 +1758,17 @@ class MainMenuScene(BaseScene):
         )
         return y + text.get_height() + 22
 
+    def _draw_settings_pill(self, surface, rect, color):
+        rect = pygame.Rect(rect)
+        if rect.width <= 0 or rect.height <= 0:
+            return
+        radius = rect.height // 2
+        body = rect.inflate(-rect.height, 0)
+        if body.width > 0:
+            pygame.draw.rect(surface, color, body)
+        pygame.draw.circle(surface, color, (rect.left + radius, rect.centery), radius)
+        pygame.draw.circle(surface, color, (rect.right - radius, rect.centery), radius)
+
     def _draw_settings_slider(self, surface, key, label, value_text, t, x, y, panel_width, alpha):
         label_surface = self.footer_font.render(label, True, (238, 240, 255))
         label_surface.set_alpha(alpha)
@@ -1762,10 +1778,10 @@ class MainMenuScene(BaseScene):
         surface.blit(value_surface, (panel_width - value_surface.get_width() - 28, y))
 
         slider = pygame.Rect(x, y + label_surface.get_height() + 13, panel_width - x - 32, 12)
-        pygame.draw.rect(surface, (54, 50, 77, int(alpha * 0.95)), slider, border_radius=slider.height // 2)
+        self._draw_settings_pill(surface, slider, (54, 50, 77, int(alpha * 0.95)))
         fill = slider.copy()
         fill.width = max(slider.height, int(slider.width * t))
-        pygame.draw.rect(surface, (226, 94, 166, alpha), fill, border_radius=fill.height // 2)
+        self._draw_settings_pill(surface, fill, (226, 94, 166, alpha))
         knob_x = slider.left + int(slider.width * t)
         pygame.draw.circle(surface, (255, 255, 255, alpha), (knob_x, slider.centery), 9)
         pygame.draw.circle(surface, (122, 92, 238, alpha), (knob_x, slider.centery), 4)
@@ -1824,10 +1840,10 @@ class MainMenuScene(BaseScene):
 
     def _draw_settings_toggle(self, surface, key, label, enabled, x, y, panel_width, alpha):
         rect = pygame.Rect(x, y, panel_width - x - 32, 38)
-        pygame.draw.rect(surface, (30, 28, 48, int(alpha * 0.88)), rect, border_radius=rect.height // 2)
+        self._draw_settings_pill(surface, rect, (30, 28, 48, int(alpha * 0.88)))
         knob_area = pygame.Rect(rect.right - 72, rect.y + 7, 54, 24)
         fill = (230, 102, 170) if enabled else (74, 72, 94)
-        pygame.draw.rect(surface, (*fill, alpha), knob_area, border_radius=knob_area.height // 2)
+        self._draw_settings_pill(surface, knob_area, (*fill, alpha))
         knob_x = knob_area.right - 12 if enabled else knob_area.left + 12
         pygame.draw.circle(surface, (255, 255, 255, alpha), (knob_x, knob_area.centery), 9)
         text = self.footer_font.render(label, True, (238, 240, 255))
