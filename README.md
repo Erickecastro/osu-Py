@@ -43,8 +43,6 @@ If you use the Windows Python launcher:
 py -3.12 -m pip install -r requirements.txt
 ```
 
-The `.venv` folder is for local development only. It is not bundled into the executable.
-
 ## Running (Development)
 
 ```bash
