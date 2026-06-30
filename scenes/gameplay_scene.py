@@ -1675,6 +1675,12 @@ class GameplayScene(BaseScene):
         )
         return True
 
+    def _approach_contact_padding(self):
+        return max(3.0, self.scaled_radius * 0.055)
+
+    def _approach_contact_radius(self):
+        return (self.note_visual_radius * 1.12) + self._approach_contact_padding()
+
     def _draw_approach_skin(self, target, center, radius, alpha=255, color=None):
         image = self.skin_images.get("approach")
         if image is None:
@@ -2827,8 +2833,11 @@ class GameplayScene(BaseScene):
                 jobs.append(("scale", overlay, diameter))
 
         if approach is not None:
-            min_radius = int(self.note_visual_radius * 1.12)
-            max_radius = int(self.note_visual_radius * (1.12 + 2.82))
+            min_radius = int(self._approach_contact_radius())
+            max_radius = int(
+                self._approach_contact_radius()
+                + (self.note_visual_radius * 2.82)
+            )
             min_diameter = self._quantized_diameter(min_radius * 2, quantum=4)
             max_diameter = self._quantized_diameter(max_radius * 2, quantum=4)
             for diameter in range(min_diameter, max_diameter + 1, 4):
@@ -4093,7 +4102,7 @@ class GameplayScene(BaseScene):
             scaled_hit_radius = self.note_visual_radius
 
             approach_radius = int(
-                scaled_hit_radius * 1.12
+                self._approach_contact_radius()
                 + (
                     progress
                     * scaled_hit_radius

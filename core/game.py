@@ -88,6 +88,8 @@ class Game:
             self.raw_mouse_preferred = False
             self.settings.raw_mouse_enabled = False
             self.settings.save()
+        if self.tablet_input_enabled or not self.raw_mouse_preferred:
+            self._normalize_system_pointer_sensitivity()
         self.block_mouse_buttons_in_gameplay = bool(
             self.settings.block_mouse_buttons_in_gameplay
         )
@@ -367,8 +369,9 @@ class Game:
                 self._apply_mouse_delta(rel)
             return self.mouse_pos
 
-        if self.tablet_input_enabled:
+        if self.tablet_input_enabled or not self.raw_mouse_preferred:
             self.mouse_pos = self._clamp_mouse_pos(pygame.mouse.get_pos())
+            pygame.mouse.get_rel()
             return self.mouse_pos
 
         rel = pygame.mouse.get_rel()
@@ -413,7 +416,17 @@ class Game:
             )
         )
 
+    def _normalize_system_pointer_sensitivity(self):
+        self.raw_mouse_sensitivity = 1.0
+        if self.settings.mouse_sensitivity != 1.0:
+            self.settings.mouse_sensitivity = 1.0
+            self.settings.save()
+
     def set_mouse_sensitivity(self, value):
+        if not self.raw_mouse_preferred:
+            self._normalize_system_pointer_sensitivity()
+            return
+
         self.raw_mouse_sensitivity = clamp_sensitivity(value)
         self.settings.mouse_sensitivity = self.raw_mouse_sensitivity
         self.settings.save()
@@ -441,6 +454,8 @@ class Game:
         if self.raw_mouse_preferred:
             self.tablet_input_enabled = False
             self.settings.tablet_input_enabled = False
+        else:
+            self._normalize_system_pointer_sensitivity()
         self.settings.raw_mouse_enabled = self.raw_mouse_preferred
         self.settings.save()
         self.sync_input_mode(self.mouse_pos)
@@ -450,6 +465,7 @@ class Game:
         if self.tablet_input_enabled:
             self.raw_mouse_preferred = False
             self.settings.raw_mouse_enabled = False
+            self._normalize_system_pointer_sensitivity()
         self.settings.tablet_input_enabled = self.tablet_input_enabled
         self.settings.save()
         self.sync_input_mode(self.mouse_pos)

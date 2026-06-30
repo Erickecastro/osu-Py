@@ -720,6 +720,9 @@ class MainMenuScene(BaseScene):
         self.settings_slider_rect = pygame.Rect(0, 0, 0, 0)
         self.settings_dragging = None
         self.settings_panel_t = 0.0
+        self.settings_scroll = 0.0
+        self.settings_content_height = 0.0
+        self.settings_scroll_overshoot = 90.0
         self.settings_controls = {}
         self.settings_rebind_slot = None
         self.menu_t = 0.0
@@ -918,6 +921,8 @@ class MainMenuScene(BaseScene):
                     self._adjust_cursor_scale(event.y * 0.05)
                 elif self.settings_controls.get("gameplay_dim", pygame.Rect(0, 0, 0, 0)).collidepoint(self.game.mouse_pos):
                     self._adjust_gameplay_dim(event.y * 3)
+                else:
+                    self._scroll_settings(-event.y * 58)
                 return
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 if self.settings_controls.get("mouse_sensitivity", pygame.Rect(0, 0, 0, 0)).collidepoint(event.pos):
@@ -1054,6 +1059,7 @@ class MainMenuScene(BaseScene):
             1.0 if self.settings_open else 0.0,
             1.0 - math.exp(-dt * 12.0)
         )
+        self._update_settings_scroll(dt)
 
         self.circle.update(
             dt,
@@ -1150,9 +1156,40 @@ class MainMenuScene(BaseScene):
         )
 
     def _open_settings(self):
+        if not self.settings_open:
+            self.settings_scroll = 0.0
         self.settings_open = True
         self.menu_open = True
         self.circle.trigger_click()
+
+    def _settings_max_scroll(self):
+        visible_height = max(1.0, float(self.game.HEIGHT))
+        return max(0.0, float(self.settings_content_height) - visible_height)
+
+    def _scroll_settings(self, amount):
+        max_scroll = self._settings_max_scroll()
+        overshoot = self.settings_scroll_overshoot
+        self.settings_scroll = clamp(
+            self.settings_scroll + amount,
+            -overshoot,
+            max_scroll + overshoot
+        )
+
+    def _update_settings_scroll(self, dt):
+        if self.settings_panel_t <= 0.01 and not self.settings_open:
+            self.settings_scroll = 0.0
+            return
+
+        max_scroll = self._settings_max_scroll()
+        target = clamp(self.settings_scroll, 0.0, max_scroll)
+        if abs(self.settings_scroll - target) > 0.01:
+            self.settings_scroll = lerp(
+                self.settings_scroll,
+                target,
+                1.0 - math.exp(-dt * 13.0)
+            )
+            if abs(self.settings_scroll - target) < 0.35:
+                self.settings_scroll = target
 
     def _adjust_mouse_sensitivity(self, amount):
         self.game.set_mouse_sensitivity(
@@ -1691,7 +1728,8 @@ class MainMenuScene(BaseScene):
         content_alpha = int(255 * clamp((progress - 0.25) / 0.75, 0.0, 1.0))
         if content_alpha > 0:
             x = 28
-            y = 34
+            scroll_y = int(round(self.settings_scroll))
+            y = 34 - scroll_y
             title = self.option_font.render("Settings", True, (255, 255, 255))
             title.set_alpha(content_alpha)
             surface.blit(title, (x, y))
@@ -1767,7 +1805,8 @@ class MainMenuScene(BaseScene):
             )
             hint_lines = (
                 "Tablet mode uses absolute cursor position.",
-                "Mouse sensitivity affects mouse mode globally.",
+                "Mouse sensitivity affects raw mouse input only.",
+                "Raw off uses the operating system pointer speed.",
                 "Tablet input disables raw mouse input.",
                 "Cursor size affects cursor and trail together.",
                 "Click a key button, then press the new hit key."
@@ -1777,6 +1816,11 @@ class MainMenuScene(BaseScene):
                 hint.set_alpha(int(content_alpha * 0.78))
                 surface.blit(hint, (x, y + 8))
                 y += hint.get_height() + 7
+
+            self.settings_content_height = max(
+                0.0,
+                float(y + scroll_y + 36)
+            )
 
         screen.blit(surface, panel)
 
