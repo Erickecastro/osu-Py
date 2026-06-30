@@ -297,8 +297,8 @@ class SongSelectScene(BaseScene):
                 self._publish_preview_music(info, self.current_preview_path)
             self.initial_music_path = None
         pygame.mouse.set_visible(False)
-        if hasattr(self.game, "disable_raw_mouse"):
-            self.game.disable_raw_mouse()
+        if hasattr(self.game, "sync_input_mode"):
+            self.game.sync_input_mode(self.game.mouse_pos)
 
     def _layout(self):
         w, h = self.game.WIDTH, self.game.HEIGHT

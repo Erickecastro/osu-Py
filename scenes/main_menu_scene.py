@@ -745,7 +745,6 @@ class MainMenuScene(BaseScene):
         self.footer_cache = {}
         self.settings_panel_cache = {}
         self.settings_key_button_cache = {}
-        self.settings_key_button_source = load_image("button.png")
         self.intro_elapsed = 0.0
         self.intro_duration = 0.82
         self.intro_overlay = None
@@ -793,8 +792,8 @@ class MainMenuScene(BaseScene):
         self._start_menu_music()
 
     def _prepare_mouse(self):
-        if hasattr(self.game, "disable_raw_mouse"):
-            self.game.disable_raw_mouse()
+        if hasattr(self.game, "sync_input_mode"):
+            self.game.sync_input_mode(self.game.mouse_pos)
         pygame.mouse.set_visible(False)
 
     def _layout(self):
@@ -1045,6 +1044,8 @@ class MainMenuScene(BaseScene):
         )
         if self.settings_dragging == "mouse_sensitivity":
             self._set_mouse_sensitivity_from_pos(mouse_pos[0])
+        elif self.settings_dragging == "cursor_scale":
+            self._set_cursor_scale_from_pos(mouse_pos[0])
         elif self.settings_dragging == "gameplay_dim":
             self._set_gameplay_dim_from_pos(mouse_pos[0])
 
@@ -1531,7 +1532,7 @@ class MainMenuScene(BaseScene):
         text = "".join(
             ch
             for ch in str(text)
-            if ch.isprintable() and ch not in "\ufffd□■"
+            if ch.isprintable() and ch not in "\ufffdâ–¡â– "
         ).strip()
         return " ".join(text.split())
 
@@ -1766,7 +1767,8 @@ class MainMenuScene(BaseScene):
             )
             hint_lines = (
                 "Tablet mode uses absolute cursor position.",
-                "Mouse sensitivity only affects raw mouse mode.",
+                "Mouse sensitivity affects mouse mode globally.",
+                "Tablet input disables raw mouse input.",
                 "Cursor size affects cursor and trail together.",
                 "Click a key button, then press the new hit key."
             )
@@ -1796,11 +1798,79 @@ class MainMenuScene(BaseScene):
         if rect.width <= 0 or rect.height <= 0:
             return
         radius = rect.height // 2
-        body = rect.inflate(-rect.height, 0)
-        if body.width > 0:
-            pygame.draw.rect(surface, color, body)
-        pygame.draw.circle(surface, color, (rect.left + radius, rect.centery), radius)
-        pygame.draw.circle(surface, color, (rect.right - radius, rect.centery), radius)
+        pill = self._settings_rounded_surface(rect.size, color, radius)
+        surface.blit(pill, rect)
+
+    def _settings_rounded_surface(self, size, color, radius=None):
+        width = max(1, int(size[0]))
+        height = max(1, int(size[1]))
+        if len(color) >= 4:
+            alpha = max(0, min(255, int(round(color[3] / 8.0) * 8)))
+            rgb = tuple(int(c) for c in color[:3])
+        else:
+            alpha = 255
+            rgb = tuple(int(c) for c in color[:3])
+        radius = height // 2 if radius is None else max(0, int(radius))
+        key = ("rounded", width, height, radius, rgb, alpha)
+        cached = self.settings_panel_cache.get(key)
+        if cached is not None:
+            return cached
+
+        scale = 5
+        high_size = (width * scale, height * scale)
+        high = pygame.Surface(high_size, pygame.SRCALPHA).convert_alpha()
+        pygame.draw.rect(
+            high,
+            (*rgb, alpha),
+            high.get_rect(),
+            border_radius=radius * scale
+        )
+        surface = pygame.transform.smoothscale(high, (width, height)).convert_alpha()
+        if len(self.settings_panel_cache) > 192:
+            self.settings_panel_cache.clear()
+        self.settings_panel_cache[key] = surface
+        return surface
+
+    def _settings_circle_surface(self, radius, color):
+        radius = max(1, int(radius))
+        if len(color) >= 4:
+            alpha = max(0, min(255, int(round(color[3] / 8.0) * 8)))
+            rgb = tuple(int(c) for c in color[:3])
+        else:
+            alpha = 255
+            rgb = tuple(int(c) for c in color[:3])
+        key = ("circle", radius, rgb, alpha)
+        cached = self.settings_panel_cache.get(key)
+        if cached is not None:
+            return cached
+
+        diameter = radius * 2
+        scale = 5
+        high = pygame.Surface(
+            (diameter * scale, diameter * scale),
+            pygame.SRCALPHA
+        ).convert_alpha()
+        pygame.draw.circle(
+            high,
+            (*rgb, alpha),
+            (radius * scale, radius * scale),
+            radius * scale
+        )
+        surface = pygame.transform.smoothscale(
+            high,
+            (diameter, diameter)
+        ).convert_alpha()
+        if len(self.settings_panel_cache) > 192:
+            self.settings_panel_cache.clear()
+        self.settings_panel_cache[key] = surface
+        return surface
+
+    def _draw_settings_circle(self, surface, center, radius, color):
+        circle = self._settings_circle_surface(radius, color)
+        rect = circle.get_rect(
+            center=(int(round(center[0])), int(round(center[1])))
+        )
+        surface.blit(circle, rect)
 
     def _draw_settings_slider(self, surface, key, label, value_text, t, x, y, panel_width, alpha):
         label_surface = self.footer_font.render(label, True, (238, 240, 255))
@@ -1816,8 +1886,18 @@ class MainMenuScene(BaseScene):
         fill.width = max(slider.height, int(slider.width * t))
         self._draw_settings_pill(surface, fill, (226, 94, 166, alpha))
         knob_x = slider.left + int(slider.width * t)
-        pygame.draw.circle(surface, (255, 255, 255, alpha), (knob_x, slider.centery), 9)
-        pygame.draw.circle(surface, (122, 92, 238, alpha), (knob_x, slider.centery), 4)
+        self._draw_settings_circle(
+            surface,
+            (knob_x, slider.centery),
+            9,
+            (255, 255, 255, alpha)
+        )
+        self._draw_settings_circle(
+            surface,
+            (knob_x, slider.centery),
+            4,
+            (122, 92, 238, alpha)
+        )
         self.settings_controls[key] = slider
         if key == "mouse_sensitivity":
             self.settings_slider_rect = slider
@@ -1850,22 +1930,16 @@ class MainMenuScene(BaseScene):
         return top + button_h + 24
 
     def _settings_key_button_surface(self, size, color, alpha):
-        source = self.settings_key_button_source
         key = ("key_button", int(size[0]), int(size[1]), tuple(color), int(alpha))
         cached = self.settings_key_button_cache.get(key)
         if cached is not None:
             return cached
 
-        if source is not None:
-            surface = tint_surface_from_alpha(source, size, color, alpha)
-        else:
-            surface = pygame.Surface(size, pygame.SRCALPHA).convert_alpha()
-            pygame.draw.rect(
-                surface,
-                (*color, int(alpha)),
-                surface.get_rect(),
-                border_radius=max(1, int(size[1]) // 2)
-            )
+        surface = self._settings_rounded_surface(
+            size,
+            (*color, int(alpha)),
+            max(1, int(size[1]) // 2)
+        )
         if len(self.settings_key_button_cache) > 24:
             self.settings_key_button_cache.clear()
         self.settings_key_button_cache[key] = surface
@@ -1878,7 +1952,12 @@ class MainMenuScene(BaseScene):
         fill = (230, 102, 170) if enabled else (74, 72, 94)
         self._draw_settings_pill(surface, knob_area, (*fill, alpha))
         knob_x = knob_area.right - 12 if enabled else knob_area.left + 12
-        pygame.draw.circle(surface, (255, 255, 255, alpha), (knob_x, knob_area.centery), 9)
+        self._draw_settings_circle(
+            surface,
+            (knob_x, knob_area.centery),
+            9,
+            (255, 255, 255, alpha)
+        )
         text = self.footer_font.render(label, True, (238, 240, 255))
         text.set_alpha(alpha)
         surface.blit(text, (rect.x + 16, rect.centery - text.get_height() // 2))

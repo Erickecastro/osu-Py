@@ -77,12 +77,17 @@ class Game:
         self.settings = GameSettings.load()
         self.mouse_pos = pygame.mouse.get_pos()
         self.raw_mouse_enabled = False
+        self.raw_mouse_fallback = False
         self.raw_mouse_sensitivity = clamp_sensitivity(
             self.settings.mouse_sensitivity or RAW_MOUSE_SENSITIVITY
         )
         self.cursor_scale = clamp_cursor_scale(self.settings.cursor_scale)
         self.raw_mouse_preferred = bool(self.settings.raw_mouse_enabled)
         self.tablet_input_enabled = bool(self.settings.tablet_input_enabled)
+        if self.tablet_input_enabled and self.raw_mouse_preferred:
+            self.raw_mouse_preferred = False
+            self.settings.raw_mouse_enabled = False
+            self.settings.save()
         self.block_mouse_buttons_in_gameplay = bool(
             self.settings.block_mouse_buttons_in_gameplay
         )
@@ -95,6 +100,7 @@ class Game:
         pygame.mouse.set_visible(False)
         pygame.event.set_blocked(pygame.MOUSEMOTION)
         self.mouse_motion_blocked = True
+        self.sync_input_mode(self.mouse_pos)
 
         self.current_menu_music_path = None
         self.current_menu_music_title = None
@@ -217,6 +223,7 @@ class Game:
         )
 
         self._notify_resize()
+        self.sync_input_mode(self.mouse_pos)
 
     def _detect_display_refresh_rate(self):
         rate = 0
@@ -296,12 +303,24 @@ class Game:
         self.mouse_pos = self._clamp_mouse_pos(self.mouse_pos)
         self.ui_manager = pygame_gui.UIManager(size)
         self._notify_resize()
+        self.sync_input_mode(self.mouse_pos)
+
+    def sync_input_mode(self, pos=None):
+        if self.tablet_input_enabled or not self.raw_mouse_preferred:
+            self.disable_raw_mouse(recenter=False)
+            if pos is not None:
+                self.mouse_pos = self._clamp_mouse_pos(pos)
+            pygame.mouse.get_rel()
+            return
+
+        self.enable_raw_mouse(pos if pos is not None else self.mouse_pos)
 
     def enable_raw_mouse(self, pos=None):
         if pos is None:
             pos = self.mouse_pos
 
         self.mouse_pos = self._clamp_mouse_pos(pos)
+        self.raw_mouse_fallback = False
         if self.tablet_input_enabled or not self.raw_mouse_preferred:
             self.disable_raw_mouse(recenter=False)
             return
@@ -317,15 +336,21 @@ class Game:
                     else True
                 )
             except pygame.error:
-                self.raw_mouse_enabled = False
-                pygame.event.set_grab(False)
+                self.raw_mouse_enabled = bool(pygame.event.get_grab())
+                self.raw_mouse_fallback = self.raw_mouse_enabled
         else:
-            self.raw_mouse_enabled = False
-            pygame.event.set_grab(False)
+            self.raw_mouse_enabled = bool(pygame.event.get_grab())
+            self.raw_mouse_fallback = self.raw_mouse_enabled
+
+        if not self.raw_mouse_enabled and pygame.event.get_grab():
+            self.raw_mouse_enabled = True
+            self.raw_mouse_fallback = True
 
         if self.raw_mouse_enabled:
             pygame.event.set_blocked(pygame.MOUSEMOTION)
             self.mouse_motion_blocked = True
+        else:
+            pygame.event.set_grab(False)
 
         pygame.mouse.get_rel()
 
@@ -339,10 +364,16 @@ class Game:
         if self.raw_mouse_enabled:
             rel = pygame.mouse.get_rel()
             if rel != (0, 0):
-                self._apply_raw_mouse_delta(rel)
+                self._apply_mouse_delta(rel)
             return self.mouse_pos
 
-        self.mouse_pos = pygame.mouse.get_pos()
+        if self.tablet_input_enabled:
+            self.mouse_pos = self._clamp_mouse_pos(pygame.mouse.get_pos())
+            return self.mouse_pos
+
+        rel = pygame.mouse.get_rel()
+        if rel != (0, 0):
+            self._apply_mouse_delta(rel)
         return self.mouse_pos
 
     def disable_raw_mouse(self, recenter=True):
@@ -357,6 +388,7 @@ class Game:
 
         pygame.event.set_grab(False)
         self.raw_mouse_enabled = False
+        self.raw_mouse_fallback = False
 
         if recenter:
             try:
@@ -373,10 +405,7 @@ class Game:
             max(0, min(self.HEIGHT - 1, float(pos[1])))
         )
 
-    def _apply_raw_mouse_delta(self, rel):
-        if not self.raw_mouse_enabled:
-            return
-
+    def _apply_mouse_delta(self, rel):
         self.mouse_pos = self._clamp_mouse_pos(
             (
                 self.mouse_pos[0] + (rel[0] * self.raw_mouse_sensitivity),
@@ -409,17 +438,21 @@ class Game:
 
     def set_raw_mouse_enabled(self, enabled):
         self.raw_mouse_preferred = bool(enabled)
+        if self.raw_mouse_preferred:
+            self.tablet_input_enabled = False
+            self.settings.tablet_input_enabled = False
         self.settings.raw_mouse_enabled = self.raw_mouse_preferred
         self.settings.save()
-        if not self.raw_mouse_preferred or self.tablet_input_enabled:
-            self.disable_raw_mouse(recenter=False)
+        self.sync_input_mode(self.mouse_pos)
 
     def set_tablet_input_enabled(self, enabled):
         self.tablet_input_enabled = bool(enabled)
+        if self.tablet_input_enabled:
+            self.raw_mouse_preferred = False
+            self.settings.raw_mouse_enabled = False
         self.settings.tablet_input_enabled = self.tablet_input_enabled
         self.settings.save()
-        if self.tablet_input_enabled:
-            self.disable_raw_mouse(recenter=False)
+        self.sync_input_mode(self.mouse_pos)
 
     def set_block_mouse_buttons_in_gameplay(self, enabled):
         self.block_mouse_buttons_in_gameplay = bool(enabled)
@@ -519,8 +552,10 @@ class Game:
             if not self.raw_mouse_enabled and event.type == pygame.KEYDOWN:
                 self.sample_mouse_now()
 
-            if not self.raw_mouse_enabled and hasattr(event, "pos"):
+            if self.tablet_input_enabled and hasattr(event, "pos"):
                 self.mouse_pos = event.pos
+
+            event = self._event_with_current_mouse_pos(event)
 
             # -------------------------
             # QUIT
@@ -571,6 +606,25 @@ class Game:
                 self.ui_manager.process_events(
                     event
                 )
+
+    def _event_with_current_mouse_pos(self, event):
+        if event.type not in (
+            pygame.MOUSEBUTTONDOWN,
+            pygame.MOUSEBUTTONUP,
+            pygame.MOUSEMOTION
+        ):
+            return event
+
+        try:
+            data = event.dict.copy()
+        except AttributeError:
+            return event
+
+        data["pos"] = (
+            int(round(self.mouse_pos[0])),
+            int(round(self.mouse_pos[1]))
+        )
+        return pygame.event.Event(event.type, data)
 
     def import_osz_file(self, path):
         if not path or not str(path).lower().endswith(".osz"):

@@ -81,30 +81,30 @@ class GameSettings:
         path = settings_path()
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(
-                json.dumps(
-                    {
-                        "mouse_sensitivity": round(
-                            clamp_sensitivity(self.mouse_sensitivity),
-                            3
-                        ),
-                        "cursor_scale": round(
-                            clamp_cursor_scale(self.cursor_scale),
-                            3
-                        ),
-                        "hit_key_1": _coerce_key(self.hit_key_1, 122),
-                        "hit_key_2": _coerce_key(self.hit_key_2, 120),
-                        "raw_mouse_enabled": bool(self.raw_mouse_enabled),
-                        "tablet_input_enabled": bool(self.tablet_input_enabled),
-                        "block_mouse_buttons_in_gameplay": bool(
-                            self.block_mouse_buttons_in_gameplay
-                        ),
-                        "gameplay_dim": clamp_gameplay_dim(self.gameplay_dim)
-                    },
-                    indent=2
-                ),
-                encoding="utf-8"
+            payload = json.dumps(
+                {
+                    "mouse_sensitivity": round(
+                        clamp_sensitivity(self.mouse_sensitivity),
+                        3
+                    ),
+                    "cursor_scale": round(
+                        clamp_cursor_scale(self.cursor_scale),
+                        3
+                    ),
+                    "hit_key_1": _coerce_key(self.hit_key_1, 122),
+                    "hit_key_2": _coerce_key(self.hit_key_2, 120),
+                    "raw_mouse_enabled": bool(self.raw_mouse_enabled),
+                    "tablet_input_enabled": bool(self.tablet_input_enabled),
+                    "block_mouse_buttons_in_gameplay": bool(
+                        self.block_mouse_buttons_in_gameplay
+                    ),
+                    "gameplay_dim": clamp_gameplay_dim(self.gameplay_dim)
+                },
+                indent=2
             )
+            temp_path = path.with_name(f"{path.name}.tmp")
+            temp_path.write_text(payload, encoding="utf-8")
+            temp_path.replace(path)
         except OSError:
             return False
         return True

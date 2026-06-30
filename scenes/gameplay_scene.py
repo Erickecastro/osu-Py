@@ -4827,6 +4827,7 @@ class GameplayScene(BaseScene):
         else:
             pygame.mixer.music.stop()
 
-        self.game.disable_raw_mouse()
+        if hasattr(self.game, "sync_input_mode"):
+            self.game.sync_input_mode(self.game.mouse_pos)
 
         pygame.mouse.set_visible(False)
