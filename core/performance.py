@@ -40,3 +40,6 @@ def configure_low_latency_environment():
     os.environ.setdefault("SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS", "0")
     os.environ.setdefault("SDL_HINT_MOUSE_DOUBLE_CLICK_RADIUS", "0")
     os.environ.setdefault("SDL_HINT_MOUSE_DOUBLE_CLICK_TIME", "0")
+    # Enable OpenGL backend in pygame-ce
+    os.environ.setdefault("SDL_VIDEODRIVER", "windows")  # For Windows, use the default Windows driver
+    os.environ.setdefault("SDL_HINT_RENDER_DRIVER", "opengl")

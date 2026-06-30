@@ -41,7 +41,7 @@ class GameplayEffectsRenderer:
             return cached
 
         height = max(part.get_height() for part in parts)
-        spacing = -max(1, int(height * 0.115))
+        spacing = -max(1, int(height * 0.09775))
         width = (
             sum(part.get_width() for part in parts)
             + spacing * max(0, len(parts) - 1)

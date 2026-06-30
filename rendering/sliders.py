@@ -185,7 +185,7 @@ def render_track_surface_pixels(size, points, outline_radius, body_radius):
 
     render_points = _simplify_points(
         list(points),
-        tolerance=0.18
+        tolerance=0.5
     )
     distances = _distance_field(
         width,

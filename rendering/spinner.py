@@ -156,6 +156,6 @@ class SpinnerRenderer:
         key = (id(image), diameter)
         cached = self.cache.get(key)
         if cached is None:
-            cached = pygame.transform.scale(image, (diameter, diameter)).convert_alpha()
+            cached = pygame.transform.smoothscale(image, (diameter, diameter)).convert_alpha()
             self.cache[key] = cached
         return cached

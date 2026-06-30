@@ -2184,7 +2184,6 @@ class GameplayScene(BaseScene):
         if (
             note["type"] != "slider"
             or not note.get("head_hit")
-            or note.get("slider_follow_missed")
         ):
             return
 
@@ -2255,7 +2254,6 @@ class GameplayScene(BaseScene):
             return
         if (
             note.get("head_hit_result") == 0
-            or note.get("slider_follow_missed")
         ):
             return
 
@@ -2321,7 +2319,6 @@ class GameplayScene(BaseScene):
         if (
             note["type"] != "slider"
             or not note.get("head_hit")
-            or note.get("slider_follow_missed")
         ):
             return
 
@@ -2350,13 +2347,15 @@ class GameplayScene(BaseScene):
                 note["slider_follow_outside_reason"] = None
                 return
 
-            self._register_slider_follow_miss(
-                note,
-                state["ball_pos"],
-                early_release=(
-                    note.get("slider_follow_outside_reason") == "release"
+            # Don't block if already missed; just don't process further
+            if not note.get("slider_follow_missed"):
+                self._register_slider_follow_miss(
+                    note,
+                    state["ball_pos"],
+                    early_release=(
+                        note.get("slider_follow_outside_reason") == "release"
+                    )
                 )
-            )
             return
 
         mouse_x, mouse_y = self.game.mouse_pos
@@ -2377,6 +2376,13 @@ class GameplayScene(BaseScene):
             state,
             current_reason
         )
+        
+        # If already missed but player comes back, reset to allow continuing
+        if not outside and note.get("slider_follow_missed"):
+            note["slider_follow_missed"] = False
+            note["slider_follow_outside_since"] = None
+            note["slider_follow_outside_reason"] = None
+
         if outside:
             if remaining <= end_tolerance_ms:
                 note["slider_follow_released_near_end"] = True
@@ -2401,11 +2407,12 @@ class GameplayScene(BaseScene):
             if outside_elapsed < grace_ms:
                 return
 
-            self._register_slider_follow_miss(
-                note,
-                ball_pos,
-                early_release=reason == "release"
-            )
+            if not note.get("slider_follow_missed"):
+                self._register_slider_follow_miss(
+                    note,
+                    ball_pos,
+                    early_release=reason == "release"
+                )
             return
 
         note["slider_follow_outside_since"] = None
@@ -3403,7 +3410,7 @@ class GameplayScene(BaseScene):
             max(1, int(image_w * scale)),
             max(1, int(image_h * scale))
         )
-        scaled = pygame.transform.scale(
+        scaled = pygame.transform.smoothscale(
             source,
             target_size
         ).convert()

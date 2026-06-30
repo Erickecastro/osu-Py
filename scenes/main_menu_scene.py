@@ -392,7 +392,7 @@ class MenuSnow:
         )
         fade_before_ground = self.random.random() < 0.58
         ground_y = height - self.random.uniform(5, 22)
-        image = pygame.transform.scale(
+        image = pygame.transform.smoothscale(
             self.image,
             (max(4, int(size)), max(4, int(size)))
         ).convert_alpha()
@@ -648,7 +648,7 @@ class PulseCircle:
         source = self._logo_surface or self._load_logo_surface()
         self._logo_surface = source
         diameter = max(1, int(radius_key * 2.12))
-        scaled = pygame.transform.scale(source, (diameter, diameter)).convert_alpha()
+        scaled = pygame.transform.smoothscale(source, (diameter, diameter)).convert_alpha()
 
         if len(self._logo_cache) > 96:
             self._logo_cache.clear()

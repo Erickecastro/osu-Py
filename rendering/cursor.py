@@ -127,7 +127,7 @@ class CursorRenderer:
             cache_key = (id(image), size)
             render_image = self.scaled_image_cache.get(cache_key)
             if render_image is None:
-                render_image = pygame.transform.scale(
+                render_image = pygame.transform.smoothscale(
                     image,
                     size
                 ).convert_alpha()
