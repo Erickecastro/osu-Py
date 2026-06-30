@@ -761,7 +761,7 @@ class MainMenuScene(BaseScene):
         self.exit_snapshot_size = None
 
         self.circle = PulseCircle(self.title)
-        self.visualizer = CircularMenuVisualizer(bar_count=140)
+        self.visualizer = CircularMenuVisualizer(bar_count=96)
         self.snow = MenuSnow(self.assets_dir)
         self.snow.load()
         self.options = [

@@ -172,7 +172,7 @@ class Game:
     # CREATE WINDOW
     # -------------------------
     def create_window(self):
-        flags = pygame.DOUBLEBUF
+        flags = pygame.DOUBLEBUF | pygame.HWSURFACE
 
         if self.fullscreen:
 
@@ -187,7 +187,8 @@ class Game:
             self.screen = pygame.display.set_mode(
                 size,
                 flags,
-                vsync=0
+                vsync=0,
+                depth=32
             )
         except TypeError:
             self.screen = pygame.display.set_mode(
@@ -452,6 +453,7 @@ class Game:
             if profiler_enabled:
                 self.profiler.begin_frame()
 
+            # Process events first to get fresh input
             if profiler_enabled:
                 self.profiler.start("events")
             self.events()
@@ -464,6 +466,8 @@ class Game:
             if profiler_enabled:
                 self.profiler.end("update")
 
+            # Sample mouse right before rendering for freshest position
+            self.sample_mouse_now(pump=False)
             if profiler_enabled:
                 self.profiler.start("render")
             self.render()
@@ -586,7 +590,6 @@ class Game:
     # UPDATE
     # -------------------------
     def update(self, dt):
-        self.sample_mouse_now()
         current_scene = self.scene_manager.current_scene
 
         profiler_enabled = self.profiler.enabled
@@ -613,7 +616,6 @@ class Game:
     # RENDER
     # -------------------------
     def render(self):
-        self.sample_mouse_now()
         current_scene = self.scene_manager.current_scene
         if self.fullscreen:
             self._sync_display_size()
@@ -650,7 +652,6 @@ class Game:
             )
 
         if not getattr(current_scene, "draws_own_cursor", False):
-            self.sample_mouse_now()
             if profiler_enabled:
                 self.profiler.start("cursor_draw")
             self.cursor_renderer.draw(self.screen, self.mouse_pos)

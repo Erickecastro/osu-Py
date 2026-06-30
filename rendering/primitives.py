@@ -24,7 +24,7 @@ def aa_circle_surface(
     if cached is not None:
         return cached
 
-    aa_scale = 3
+    aa_scale = 2
     padding = max(4, outline_width + 2)
     size = (radius + padding) * 2
     high_size = size * aa_scale
@@ -38,7 +38,7 @@ def aa_circle_surface(
     high_surface = pygame.Surface(
         (high_size, high_size),
         pygame.SRCALPHA
-    )
+    ).convert_alpha()
 
     if fill_key is not None:
         pygame.draw.circle(
@@ -60,7 +60,7 @@ def aa_circle_surface(
     surface = pygame.transform.smoothscale(
         high_surface,
         (size, size)
-    )
+    ).convert_alpha()
     cache[key] = surface
 
     return surface

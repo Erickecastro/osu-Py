@@ -15,7 +15,8 @@ class SpinnerRenderer:
         self.cache = {}
 
     def _load_image(self, filename):
-        return load_image(filename, "spinner")
+        img = load_image(filename, "spinner")
+        return img.convert_alpha() if img else None
 
     def draw(self, target, note):
         start = note["spinner_start_time"]
@@ -155,6 +156,6 @@ class SpinnerRenderer:
         key = (id(image), diameter)
         cached = self.cache.get(key)
         if cached is None:
-            cached = pygame.transform.smoothscale(image, (diameter, diameter)).convert_alpha()
+            cached = pygame.transform.scale(image, (diameter, diameter)).convert_alpha()
             self.cache[key] = cached
         return cached

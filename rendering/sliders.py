@@ -20,7 +20,7 @@ _TRACK_PIXEL_CACHE_LOCK = threading.Lock()
 _TRACK_PIXEL_CACHE = OrderedDict()
 _TRACK_PIXEL_CACHE_LIMIT = max(
     0,
-    int(os.environ.get("PYOSU_SLIDER_PIXEL_CACHE", "96") or 0)
+    int(os.environ.get("PYOSU_SLIDER_PIXEL_CACHE", "256") or 0)
 )
 
 
@@ -264,7 +264,7 @@ def render_track_surface_pixels(size, points, outline_radius, body_radius):
 
 
 def surface_from_track_pixels(size, pixels):
-    surface = pygame.Surface(size, pygame.SRCALPHA)
+    surface = pygame.Surface(size, pygame.SRCALPHA).convert_alpha()
     if pixels is None:
         return surface
 
@@ -277,10 +277,7 @@ def surface_from_track_pixels(size, pixels):
     alpha[:, :] = final_alpha.T
     del rgb
     del alpha
-    try:
-        return surface.convert_alpha()
-    except pygame.error:
-        return surface
+    return surface
 
 
 def can_render_track_pixels():
@@ -295,7 +292,8 @@ class SliderRenderer:
         self.precache_index = 0
 
     def _load_reverse_arrow(self):
-        return load_image("reversearrow.png", "novo_reversearrow")
+        img = load_image("reversearrow.png", "novo_reversearrow")
+        return img.convert_alpha() if img is not None else img
 
     def build_points(self, note):
         all_points = note.get("curve_points", [])

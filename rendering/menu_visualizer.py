@@ -91,7 +91,7 @@ class CircularMenuVisualizer:
         self._layer_radius = 0
         self._layer_shrink_elapsed = 0.0
         self._redraw_elapsed = 1.0
-        self.render_interval = 1.0 / 180.0
+        self.render_interval = 1.0 / 120.0
         self._analysis_lock = threading.Lock()
         self._analysis_thread = None
         self._analysis_thread_key = None

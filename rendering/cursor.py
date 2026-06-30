@@ -101,7 +101,7 @@ class CursorRenderer:
         image = load_image(filename, "cursor")
         if image is None:
             return None
-        return image
+        return image.convert_alpha()
 
     def _blit_centered(
         self,
@@ -127,10 +127,10 @@ class CursorRenderer:
             cache_key = (id(image), size)
             render_image = self.scaled_image_cache.get(cache_key)
             if render_image is None:
-                render_image = pygame.transform.smoothscale(
+                render_image = pygame.transform.scale(
                     image,
                     size
-                )
+                ).convert_alpha()
                 self.scaled_image_cache[cache_key] = render_image
         else:
             render_image = image

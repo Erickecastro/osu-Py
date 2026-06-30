@@ -273,6 +273,8 @@ class GameplayScene(BaseScene):
         self.music_preloaded = False
         self.audio_lead_in = int(self.beatmap.get("audio_lead_in", 0) or 0)
         self._load_background_surface()
+        # Warmup background early (during initialization)
+        self._warm_background_surface()
 
         self.slider_multiplier = (
             self.beatmap["difficulty"].get(
@@ -3412,7 +3414,7 @@ class GameplayScene(BaseScene):
         dim_overlay = pygame.Surface(
             target_size,
             pygame.SRCALPHA
-        )
+        ).convert_alpha()
         dim_overlay.fill((0, 0, 0, self.background_dim_alpha))
         scaled.blit(dim_overlay, (0, 0))
 
