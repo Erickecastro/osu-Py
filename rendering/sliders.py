@@ -477,6 +477,8 @@ class SliderRenderer:
                     surface_pos[1] + offset_y
                 )
             )
+            if not draw_head_marker and not draw_tail_marker and not draw_reverse_markers:
+                return
             can_draw_head = (
                 draw_head_marker
                 and not (
