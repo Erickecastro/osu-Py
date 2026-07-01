@@ -28,6 +28,7 @@ from core.settings import (
     clamp_sensitivity
 )
 from rendering.cursor import CursorRenderer
+from rendering.render_backend import create_render_backend
 from scenes.main_menu_scene import MainMenuScene
 
 class Game:
@@ -99,6 +100,8 @@ class Game:
         )
         self.gameplay_dim = clamp_gameplay_dim(self.settings.gameplay_dim)
         self.cursor_renderer = CursorRenderer(user_scale=self.cursor_scale)
+        self._last_cursor_scene = None
+        self.render_backend = create_render_backend(self.screen)
         pygame.mouse.set_visible(False)
         pygame.event.set_blocked(pygame.MOUSEMOTION)
         self.mouse_motion_blocked = True
@@ -632,15 +635,21 @@ class Game:
             return event
 
         try:
-            data = event.dict.copy()
+            event_dict = event.dict
         except AttributeError:
             return event
 
-        data["pos"] = (
+        pos = (
             int(round(self.mouse_pos[0])),
             int(round(self.mouse_pos[1]))
         )
-        return pygame.event.Event(event.type, data)
+        if event_dict is not None:
+            event_dict["pos"] = pos
+        try:
+            event.pos = pos
+        except (AttributeError, TypeError):
+            pass
+        return event
 
     def import_osz_file(self, path):
         if not path or not str(path).lower().endswith(".osz"):
@@ -661,6 +670,7 @@ class Game:
     # -------------------------
     def update(self, dt):
         current_scene = self.scene_manager.current_scene
+        scene_before_update = current_scene
 
         profiler_enabled = self.profiler.enabled
         if getattr(current_scene, "uses_ui", True):
@@ -675,10 +685,25 @@ class Game:
         self.scene_manager.update(dt)
         if profiler_enabled:
             self.profiler.end("scene_manager_update")
+
+        current_scene = self.scene_manager.current_scene
+        scene_changed = (
+            current_scene is not scene_before_update
+            or bool(getattr(self.scene_manager, "factory_transition_completed", False))
+            or current_scene is not self._last_cursor_scene
+        )
+        suppress_cursor_trail = bool(
+            getattr(self.scene_manager, "is_cursor_trail_suppressed", lambda: False)()
+        )
+
         if not getattr(current_scene, "draws_own_cursor", False):
             if profiler_enabled:
                 self.profiler.start("cursor_update")
-            self.cursor_renderer.update(dt, self.mouse_pos)
+            if scene_changed or suppress_cursor_trail:
+                self.cursor_renderer.reset_trail(self.mouse_pos)
+            else:
+                self.cursor_renderer.update(dt, self.mouse_pos)
+            self._last_cursor_scene = current_scene
             if profiler_enabled:
                 self.profiler.end("cursor_update")
 
@@ -691,11 +716,23 @@ class Game:
             self._sync_display_size()
 
         profiler_enabled = self.profiler.enabled
+        clear_for_transition = bool(
+            getattr(
+                self.scene_manager,
+                "should_clear_screen_for_transition",
+                lambda: False
+            )()
+        )
+        if clear_for_transition:
+            self.screen.fill((0, 0, 0))
+
         if profiler_enabled:
             self.profiler.start("scene_render")
         self.scene_manager.render(
             self.screen
         )
+        if getattr(self, "render_backend", None) is not None:
+            self.render_backend.present()
         if profiler_enabled:
             self.profiler.end("scene_render")
 
@@ -724,7 +761,14 @@ class Game:
         if not getattr(current_scene, "draws_own_cursor", False):
             if profiler_enabled:
                 self.profiler.start("cursor_draw")
-            self.cursor_renderer.draw(self.screen, self.mouse_pos)
+            loading_transition = bool(
+                getattr(self.scene_manager, "is_cursor_trail_suppressed", lambda: False)()
+            )
+            self.cursor_renderer.draw(
+                self.screen,
+                self.mouse_pos,
+                draw_trail=not loading_transition
+            )
             if profiler_enabled:
                 self.profiler.end("cursor_draw")
 
