@@ -111,8 +111,6 @@ def scale_image_high_quality(image, target_size):
         if current_w == target_w and current_h == target_h:
             break
             
-    # Final smoothscale to exact target size to ensure perfection
-    scaled = pygame.transform.smoothscale(scaled, (target_w, target_h))
     return scaled
 
 

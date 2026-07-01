@@ -232,6 +232,10 @@ class GameplayScene(BaseScene):
                 self.slider_path_radius
             ) + 16
         )
+        
+        # Precompute values that only change on resize
+        self.approach_contact_padding = max(3.0, self.scaled_radius * 0.055)
+        self.approach_contact_radius = (self.note_visual_radius * 1.12) + self.approach_contact_padding
 
         # Aproximação do comportamento do osu! para visibilidade:
         # fade-in durante o approach e fade-out logo após o hit.
@@ -555,6 +559,10 @@ class GameplayScene(BaseScene):
         self.usable_height = self.playfield_height * self.scale
         self.object_scale = self.scale
         self.object_offset_x = self.offset_x
+        
+        # Precompute values that only change on resize
+        self.approach_contact_padding = max(3.0, self.scaled_radius * 0.055)
+        self.approach_contact_radius = (self.note_visual_radius * 1.12) + self.approach_contact_padding
         self.object_offset_y = self.offset_y
         self.playfield_rect = (
             self.offset_x,
@@ -1718,10 +1726,10 @@ class GameplayScene(BaseScene):
         return True
 
     def _approach_contact_padding(self):
-        return max(3.0, self.scaled_radius * 0.055)
+        return self.approach_contact_padding
 
     def _approach_contact_radius(self):
-        return (self.note_visual_radius * 1.12) + self._approach_contact_padding()
+        return self.approach_contact_radius
 
     def _draw_approach_skin(self, target, center, radius, alpha=255, color=None):
         image = self.skin_images.get("approach")
@@ -4094,6 +4102,8 @@ class GameplayScene(BaseScene):
             profiler.start("hitobjects_render")
 
         approach_draws = []
+        
+        fail_offset_y, fail_alpha_factor = self._fail_object_motion()
 
         for note in reversed(self.active_notes):
 
@@ -4112,7 +4122,6 @@ class GameplayScene(BaseScene):
             shake_x, shake_y = self._notelock_shake_offset(note)
             scaled_x += shake_x
             scaled_y += shake_y
-            fail_offset_y, fail_alpha_factor = self._fail_object_motion()
             scaled_y += fail_offset_y
 
             time_left = (
