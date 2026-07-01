@@ -20,10 +20,7 @@ class GameplayInputController:
         return False
 
     def _hit_position_now(self):
-        sampler = getattr(self.scene.game, "sample_mouse_now", None)
-        if sampler is not None:
-            return sampler()
-        return self.scene.game.mouse_pos
+        return tuple(getattr(self.scene.game, "mouse_pos", (0.0, 0.0)))
 
     def _hit_keys(self):
         return tuple(getattr(self.scene.game, "hit_keys", self.HIT_KEYS))
