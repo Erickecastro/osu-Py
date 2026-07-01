@@ -17,6 +17,9 @@ class SceneManager:
         self.transition_overlay_size = None
         self.transition_snapshot = None
         self.transition_snapshot_size = None
+        self.factory_transition_completed = False
+        self.transition_warmup_min_frames = 3
+        self.transition_warmup_frames = 0
 
     # -------------------------
     # CURRENT SCENE
@@ -126,6 +129,10 @@ class SceneManager:
     # -------------------------
     def update(self, dt):
 
+        self.factory_transition_completed = False
+        if self.transition_warmup_frames > 0:
+            self.transition_warmup_frames -= 1
+
         current = self.current_scene
 
         if current:
@@ -194,6 +201,7 @@ class SceneManager:
         if factory is None:
             return
 
+        self._draw_blocking_loading_frame()
         scene = factory()
         if mode == "push":
             current = self.current_scene
@@ -209,7 +217,28 @@ class SceneManager:
 
         self.transition_snapshot = None
         self.transition_snapshot_size = None
+        self.factory_transition_completed = True
+        self.transition_warmup_frames = self.transition_warmup_min_frames
         self._start_transition(from_black=True)
+
+    def is_transition_warmup_active(self):
+        return self.transition_warmup_frames > 0
+
+    def is_cursor_trail_suppressed(self):
+        return (
+            self.pending_factory is not None
+            or bool(self.transition_out_start)
+            or bool(self.transition_from_black and self.transition_start)
+            or bool(self.factory_transition_completed)
+            or self.is_transition_warmup_active()
+        )
+
+    def should_clear_screen_for_transition(self):
+        return (
+            self.pending_factory is not None
+            or bool(self.transition_out_start)
+            or self.is_transition_warmup_active()
+        )
 
     def _draw_blocking_loading_frame(self):
         screen = pygame.display.get_surface()
@@ -217,7 +246,6 @@ class SceneManager:
             return
         try:
             screen.fill((0, 0, 0))
-            pygame.display.flip()
             self.transition_snapshot = screen.copy().convert()
             self.transition_snapshot_size = screen.get_size()
             pygame.event.pump()
