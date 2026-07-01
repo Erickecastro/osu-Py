@@ -172,6 +172,8 @@ py -3.12 main.py
 - `PYOSU_AUTO_FPS_MULTIPLIER`: multiplier used by the automatic refresh-rate target. The default is `4.0`.
 - `PYOSU_AUTO_FPS_MIN` / `PYOSU_AUTO_FPS_MAX`: clamps the automatic frame target. Defaults are `480` and `1200`.
 - `PYOSU_BUSY_FRAME_PACER=1`: uses `tick_busy_loop`, reducing frame-time variance at the cost of higher CPU usage.
+- `PYOSU_LOW_LATENCY_RENDER=1`: enables the low-latency render path and keeps the frame pipeline lighter.
+- `PYOSU_FORCE_MODERNGL=1`: forces the optional ModernGL backend when the OpenGL context is available.
 
 ## Building the Windows Executable
 
