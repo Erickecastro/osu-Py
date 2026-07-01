@@ -4,7 +4,7 @@ import pygame
 
 from core.assets import load_image
 
-
+ 
 class SpinnerRenderer:
     def __init__(self, scene):
         self.scene = scene
