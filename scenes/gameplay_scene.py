@@ -15,6 +15,7 @@ from core.audio import (
 )
 from core.assets import asset_path, load_image
 from core.fonts import rounded_font
+from core.utils import is_object_visible
 from core.gameplay import hit_result_for_delta
 from core.health import apply_health_drain, apply_health_result
 from core.hit_detection import find_best_hit_object
@@ -38,7 +39,6 @@ from core.gameplay_state import (
     prune_inactive_notes
 )
 from core.spinner import SpinnerManager
-from rendering.cursor import CursorRenderer
 from rendering.effects import GameplayEffectsRenderer
 from rendering.hud import GameplayHUDRenderer
 from rendering.primitives import (
@@ -47,6 +47,7 @@ from rendering.primitives import (
     draw_aa_circle,
     draw_centered_text
 )
+from rendering.render_backend import PygameRenderBackend
 from rendering.sliders import (
     SliderRenderer,
     can_render_track_pixels,
@@ -124,11 +125,14 @@ class GameplayScene(BaseScene):
         self.tinted_surface_cache = {}
         self.overlay_surface = None
         self.overlay_surface_size = None
+        self.overlay_full_clear_frames = 4
         self.background_path = None
         self.background_load_attempted = False
         self.background_source = None
         self.background_surface = None
         self.background_surface_size = None
+        self.background_surface_cache = {}
+        self.render_backend = getattr(game, "render_backend", PygameRenderBackend())
         self.background_dim_alpha = int(
             255
             * max(
@@ -352,10 +356,23 @@ class GameplayScene(BaseScene):
         self.next_slider_geometry_index = 0
         self.slider_geometry_complete = not self.slider_geometry_notes
         self.slider_reveal_prewarm_cursor = 0
+        self.initial_slider_cache_horizon_ms = max(
+            9000,
+            int(self.approach_time + 9000)
+        )
+        self._prime_initial_slider_geometry_cache()
+        self._queue_initial_slider_surface_cache(
+            horizon_ms=self.initial_slider_cache_horizon_ms,
+            max_items=96
+        )
+        self._warm_slider_reveal_cache(
+            max_ms=2.4,
+            max_items=24,
+            horizon_ms=self.initial_slider_cache_horizon_ms
+        )
 
         self.circle_number_font = rounded_font(32, bold=True)
 
-        self.cursor_renderer = CursorRenderer()
         self.circle_number_font = rounded_font(28, bold=True)
         self.effects_renderer = GameplayEffectsRenderer(self)
         self.hud_renderer = GameplayHUDRenderer(self.font)
@@ -382,6 +399,9 @@ class GameplayScene(BaseScene):
         self.miss_indicators = []
         self.hit_result_indicators = []
         self.hit_error_markers = []
+        self._indicator_pool = []
+        self._marker_pool = []
+        self._approach_draws = []
         self.hit_error_marker_duration = 3000
         self.hit_keys_held = set()
         self.hit_mouse_buttons_held = set()
@@ -405,6 +425,7 @@ class GameplayScene(BaseScene):
         self.spinner_bonus_text_surface = None
         self.spinner_pass_text_surface = None
         self.center_overlay_cache = {}
+        self.text_surface_cache = {}
         self.center_overlay_shade = None
         self.center_overlay_shade_size = None
         self.center_overlay_buttons = []
@@ -451,6 +472,18 @@ class GameplayScene(BaseScene):
 
     def _boost_hitcircle_alpha(self, alpha):
         return max(0, min(255, int(alpha * self.HITCIRCLE_ALPHA_BOOST)))
+
+    def _cached_text_surface(self, font, text, color):
+        key = (font, text, tuple(color))
+        cached = self.text_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        surface = font.render(text, True, color)
+        if surface is not None:
+            surface = surface.convert_alpha()
+        self.text_surface_cache[key] = surface
+        return surface
 
     def _accuracy(self):
         return self.score_ledger.accuracy()
@@ -748,6 +781,17 @@ class GameplayScene(BaseScene):
         self._sync_score_fields()
 
     def _add_hit_result_indicator(self, note, result):
+        if self._indicator_pool:
+            payload = self._indicator_pool.pop()
+            payload.update({
+                "result": result,
+                "pos": self._note_screen_pos(note),
+                "show_time": self.current_time,
+                "start_time": self.current_time
+            })
+            self.hit_result_indicators.append(payload)
+            return
+
         self.hit_result_indicators.append({
             "result": result,
             "pos": self._note_screen_pos(note),
@@ -757,6 +801,21 @@ class GameplayScene(BaseScene):
 
     def _add_hit_error_marker(self, note, result):
         if note["type"] not in ("circle", "slider"):
+            return
+
+        if self._marker_pool:
+            payload = self._marker_pool.pop()
+            payload.update({
+                "delta": (
+                    self.current_time
+                    - note["time"]
+                    + self.hit_error_display_offset_ms
+                ),
+                "result": result,
+                "time": self.current_time,
+                "duration": self.hit_error_marker_duration
+            })
+            self.hit_error_markers.append(payload)
             return
 
         self.hit_error_markers.append({
@@ -2841,6 +2900,27 @@ class GameplayScene(BaseScene):
             start = connection["start"]
             dx = connection["dx"]
             dy = connection["dy"]
+            segment_end = (start[0] + dx, start[1] + dy)
+            segment_radius = max(
+                self.followpoint_visual_radius,
+                self.scaled_radius * 0.55
+            )
+            if not (
+                is_object_visible(
+                    start,
+                    self.playfield_rect,
+                    radius=segment_radius,
+                    padding=12,
+                )
+                or is_object_visible(
+                    segment_end,
+                    self.playfield_rect,
+                    radius=segment_radius,
+                    padding=12,
+                )
+            ):
+                continue
+
             count = connection["count"]
             sequence_smoothing = connection["sequence_smoothing"]
             reveal_head = progress * (count + 7)
@@ -3028,6 +3108,65 @@ class GameplayScene(BaseScene):
         finally:
             if profiler_enabled:
                 profiler.end("surface_warm")
+
+    def _prime_initial_slider_geometry_cache(self):
+        if not self.slider_geometry_notes:
+            return
+
+        horizon_time = float(self.initial_slider_cache_horizon_ms)
+        index = 0
+        total = len(self.slider_geometry_notes)
+        while index < total:
+            note = self.slider_geometry_notes[index]
+            if note["time"] > horizon_time:
+                break
+            self._prepare_slider_geometry(note)
+            index += 1
+
+        self.next_slider_geometry_index = max(
+            self.next_slider_geometry_index,
+            index
+        )
+        self.slider_geometry_complete = self.next_slider_geometry_index >= total
+
+    def _queue_initial_slider_surface_cache(self, horizon_ms=None, max_items=96):
+        if not self.slider_cache_notes:
+            return
+
+        horizon_time = float(
+            horizon_ms
+            if horizon_ms is not None
+            else self.initial_slider_cache_horizon_ms
+        )
+        queued = 0
+        index = 0
+        total = len(self.slider_cache_notes)
+        while index < total and queued < max_items:
+            note = self.slider_cache_notes[index]
+            if note["time"] > horizon_time:
+                break
+
+            self._prepare_slider_geometry(note)
+            cache_key = note.get("render_index")
+            if cache_key in self.slider_surface_cache:
+                index += 1
+                continue
+
+            if self.slider_cache_executor is not None:
+                self._schedule_slider_cache_job(note)
+            else:
+                self.slider_renderer.cache_full_surface(note)
+            queued += 1
+            index += 1
+
+        self.next_slider_cache_index = max(
+            self.next_slider_cache_index,
+            index
+        )
+        self.slider_precache_complete = (
+            self.next_slider_cache_index >= total
+            and not self.slider_cache_futures
+        )
 
     def _prepare_slider_geometry(self, note, *, include_scorepoints=True):
         if note.get("type") != "slider":
@@ -3229,6 +3368,35 @@ class GameplayScene(BaseScene):
             if note["time"] > horizon_time:
                 break
             if not self._slider_cache_ready(note):
+                return False
+        return True
+
+    def _critical_slider_reveal_cache_ready(self, horizon_ms, max_bucket=9):
+        if self.slider_cache_executor is None or not self.slider_cache_notes:
+            return True
+
+        horizon_time = max(0.0, float(horizon_ms))
+        max_bucket = max(1, min(9, int(max_bucket)))
+        for note in self.slider_cache_notes:
+            if note["time"] > horizon_time:
+                break
+            base_cache_key = note.get("render_index")
+            if base_cache_key is None:
+                continue
+            for bucket in range(1, max_bucket + 1):
+                reveal_key = ("reveal", base_cache_key, bucket)
+                if reveal_key in self.slider_surface_cache:
+                    continue
+                if reveal_key in self.slider_cache_failed:
+                    continue
+                payload = self.slider_cache_futures.get(reveal_key)
+                if payload is not None and payload[0].done():
+                    self._collect_slider_cache_results(max_ms=1.0, max_items=8)
+                    if (
+                        reveal_key in self.slider_surface_cache
+                        or reveal_key in self.slider_cache_failed
+                    ):
+                        continue
                 return False
         return True
 
@@ -3455,28 +3623,48 @@ class GameplayScene(BaseScene):
         try:
             self.background_source = pygame.image.load(
                 self.background_path
-            ).convert()
-            self._scaled_background((self.game.WIDTH, self.game.HEIGHT))
+            ).convert_alpha()
+            for size in self._background_warm_sizes():
+                self._scaled_background(size)
         except pygame.error:
             self.background_source = None
         finally:
             if profiler_enabled:
                 profiler.end("background_warm")
 
+    def _background_warm_sizes(self):
+        sizes = []
+        width = max(1, int(getattr(self.game, "WIDTH", 0)))
+        height = max(1, int(getattr(self.game, "HEIGHT", 0)))
+        if width <= 0 or height <= 0:
+            return sizes
+
+        sizes.append((width, height))
+        sizes.append((max(1, int(width * 0.75)), max(1, int(height * 0.75))))
+        sizes.append((max(1, int(width * 0.5)), max(1, int(height * 0.5))))
+        return sizes
+
     def _scaled_background(self, screen_size):
         source = getattr(self, "background_source", None)
         if source is None:
             return None
 
-        # NEW: Force reset cache by using a tuple with version number
-        cache_key = (screen_size, "v2_high_quality_background")
-        if (
-            self.background_surface is not None
-            and self.background_surface_size == cache_key
-        ):
-            return self.background_surface
+        screen_w, screen_h = int(screen_size[0]), int(screen_size[1])
+        if screen_w <= 0 or screen_h <= 0:
+            return None
 
-        screen_w, screen_h = screen_size
+        cache_key = (
+            screen_w,
+            screen_h,
+            int(self.background_dim_alpha),
+            "v3_background_cache"
+        )
+        cached = self.background_surface_cache.get(cache_key)
+        if cached is not None:
+            self.background_surface = cached
+            self.background_surface_size = cache_key
+            return cached
+
         image_w, image_h = source.get_size()
         if image_w <= 0 or image_h <= 0:
             return None
@@ -3486,11 +3674,9 @@ class GameplayScene(BaseScene):
             max(1, int(image_w * scale)),
             max(1, int(image_h * scale))
         )
-        
-        # Use our high-quality scaling function
+
         from core.assets import scale_image_high_quality
-        source_alpha = source.convert_alpha()
-        scaled = scale_image_high_quality(source_alpha, target_size).convert()
+        scaled = scale_image_high_quality(source, target_size).convert()
         position = (
             (screen_w - target_size[0]) // 2,
             (screen_h - target_size[1]) // 2
@@ -3502,11 +3688,16 @@ class GameplayScene(BaseScene):
         dim_overlay.fill((0, 0, 0, self.background_dim_alpha))
         scaled.blit(dim_overlay, (0, 0))
 
-        self.background_surface = (scaled, position)
-        self.background_surface_size = cache_key  # Store the new cache key
-        return self.background_surface
+        prepared = (scaled, position)
+        self.background_surface_cache[cache_key] = prepared
+        if len(self.background_surface_cache) > 6:
+            self.background_surface_cache.clear()
+            self.background_surface_cache[cache_key] = prepared
+        self.background_surface = prepared
+        self.background_surface_size = cache_key
+        return prepared
 
-    def _draw_background(self, screen):
+    def _draw_background(self, screen, batch=None):
         background = self._scaled_background(
             screen.get_size()
         )
@@ -3515,7 +3706,10 @@ class GameplayScene(BaseScene):
             return
 
         surface, position = background
-        screen.blit(surface, position)
+        if batch is not None:
+            batch.add_surface(surface, position)
+            return
+        self.render_backend.blit_surface(surface, position)
 
     def _toggle_pause(self):
         if self.failed:
@@ -3690,11 +3884,11 @@ class GameplayScene(BaseScene):
             )
             self._warm_skin_image_cache(max_ms=3, max_items=24)
             self._warm_gameplay_surface_cache(max_ms=4, max_items=24)
-            if ready_elapsed >= 180:
+            if ready_elapsed >= 40:
                 self._warm_followpoint_connections(max_ms=2, max_items=96)
                 self._warm_slider_geometry_cache(
-                    max_ms=2.4,
-                    max_items=96,
+                    max_ms=3.0,
+                    max_items=140,
                     horizon_ms=self.approach_time + 14000
                 )
             if ready_elapsed >= 420:
@@ -3709,8 +3903,8 @@ class GameplayScene(BaseScene):
                     horizon_ms=self.approach_time + 9000
                 )
                 self._warm_slider_reveal_cache(
-                    max_ms=1.5,
-                    max_items=10,
+                    max_ms=3.2,
+                    max_items=28,
                     horizon_ms=self.approach_time + 9000
                 )
             if ready_elapsed >= 650:
@@ -3729,11 +3923,16 @@ class GameplayScene(BaseScene):
                 int(self.approach_time + 7200)
             )
             extra_slider_warm_budget = 1250
+            critical_slider_ready = self._critical_slider_cache_ready(
+                critical_slider_horizon
+            )
+            critical_reveal_ready = self._critical_slider_reveal_cache_ready(
+                critical_slider_horizon,
+                max_bucket=9
+            )
             if (
                 ready_elapsed < total_intro_delay + extra_slider_warm_budget
-                and not self._critical_slider_cache_ready(
-                    critical_slider_horizon
-                )
+                and not (critical_slider_ready and critical_reveal_ready)
             ):
                 self._warm_slider_geometry_cache(
                     max_ms=5,
@@ -3746,8 +3945,8 @@ class GameplayScene(BaseScene):
                     horizon_ms=critical_slider_horizon
                 )
                 self._warm_slider_reveal_cache(
-                    max_ms=2.2,
-                    max_items=16,
+                    max_ms=5.5,
+                    max_items=48,
                     horizon_ms=critical_slider_horizon
                 )
                 self._warm_skin_image_cache(max_ms=2, max_items=16)
@@ -3776,8 +3975,8 @@ class GameplayScene(BaseScene):
                         horizon_ms=self.approach_time + 11000
                     )
                     self._warm_slider_reveal_cache(
-                        max_ms=1.8,
-                        max_items=12,
+                        max_ms=3.8,
+                        max_items=32,
                         horizon_ms=self.approach_time + 11000
                     )
                     self._warm_followpoint_connections(max_ms=2, max_items=96)
@@ -4022,6 +4221,28 @@ class GameplayScene(BaseScene):
             margin * 2
         ).clip(screen_rect)
 
+    def _prepare_render_frame_state(self, screen):
+        screen_size = screen.get_size()
+        if self.overlay_surface is None or self.overlay_surface_size != screen_size:
+            self.overlay_surface = pygame.Surface(
+                screen_size,
+                pygame.SRCALPHA
+            ).convert_alpha()
+            self.overlay_surface_size = screen_size
+
+        overlay = self.overlay_surface
+        if self.overlay_full_clear_frames > 0:
+            overlay.fill((0, 0, 0, 0))
+            self.overlay_full_clear_frames -= 1
+        else:
+            overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
+        fail_offset_y, fail_alpha_factor = self._fail_object_motion()
+        return {
+            "overlay": overlay,
+            "fail_offset_y": fail_offset_y,
+            "fail_alpha_factor": fail_alpha_factor,
+        }
+
     def _note_screen_pos(self, note):
         pos = note.get("scaled_pos")
         if pos is not None:
@@ -4041,13 +4262,16 @@ class GameplayScene(BaseScene):
         if self.music_started and not self.paused and not self.failed:
             self._sync_music_time_now()
 
+        batch = self.render_backend.create_batch()
         if profiler_enabled:
             profiler.start("background_render")
-        self._draw_background(screen)
+        self._draw_background(screen, batch=batch)
         if profiler_enabled:
             profiler.end("background_render")
 
         if not self.music_started and self.pre_music_started_at is None:
+            if batch is not None:
+                batch.flush(screen)
             self._render_ready(screen)
             if self.paused:
                 self._draw_pause_overlay(screen)
@@ -4080,30 +4304,27 @@ class GameplayScene(BaseScene):
                 self.hit_window_300,
                 self.hit_window_100,
                 self.hit_window_50,
-                alpha=hud_alpha
+                alpha=hud_alpha,
+                batch=batch,
             )
             if profiler_enabled:
                 profiler.end("hud_render")
 
-        # Camada transparente para permitir alpha real (fade in/out suave).
-        screen_size = screen.get_size()
-        if self.overlay_surface is None or self.overlay_surface_size != screen_size:
-            self.overlay_surface = pygame.Surface(
-                screen_size,
-                pygame.SRCALPHA
-            ).convert_alpha()
-            self.overlay_surface_size = screen_size
+        if batch is not None:
+            batch.flush(screen)
 
-        overlay = self.overlay_surface
-        overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
+        # Camada transparente para permitir alpha real (fade in/out suave).
+        render_state = self._prepare_render_frame_state(screen)
+        overlay = render_state["overlay"]
+        fail_offset_y = render_state["fail_offset_y"]
+        fail_alpha_factor = render_state["fail_alpha_factor"]
 
         slider_render_elapsed = 0.0
         if profiler_enabled:
             profiler.start("hitobjects_render")
 
-        approach_draws = []
-        
-        fail_offset_y, fail_alpha_factor = self._fail_object_motion()
+        approach_draws = self._approach_draws
+        approach_draws.clear()
 
         for note in reversed(self.active_notes):
 
@@ -4123,6 +4344,14 @@ class GameplayScene(BaseScene):
             scaled_x += shake_x
             scaled_y += shake_y
             scaled_y += fail_offset_y
+
+            if not is_object_visible(
+                (scaled_x, scaled_y),
+                self.playfield_rect,
+                radius=self.note_visual_radius * 1.12,
+                padding=24,
+            ):
+                continue
 
             time_left = (
                 note["time"]
@@ -4272,13 +4501,14 @@ class GameplayScene(BaseScene):
 
                 slider_points = note.get("scaled_slider_points")
                 if slider_points is None:
-                    slider_points = self.slider_renderer.build_points(note)
-                    note["scaled_slider_points"] = slider_points
-                    cumulative, total_length = self.slider_renderer.path_metrics(
-                        slider_points
-                    )
-                    note["scaled_slider_cumulative"] = cumulative
-                    note["scaled_slider_length"] = total_length
+                    if profiler_enabled:
+                        profiler.start("slider_render_missing_geometry")
+                    self._prepare_slider_geometry(note)
+                    if profiler_enabled:
+                        profiler.end("slider_render_missing_geometry")
+                    slider_points = note.get("scaled_slider_points")
+                    if slider_points is None:
+                        continue
 
                 if shake_x or shake_y:
                     render_slider_points = [
@@ -4556,16 +4786,21 @@ class GameplayScene(BaseScene):
         if profiler_enabled:
             profiler.end("followpoints_render")
 
-        self.miss_indicators = [
-            indicator
-            for indicator in self.miss_indicators
-            if self.current_time < indicator["show_time"] + self.miss_indicator_duration
-        ]
-        self.hit_result_indicators = [
-            indicator
-            for indicator in self.hit_result_indicators
-            if self.current_time < indicator["show_time"] + self.miss_indicator_duration
-        ]
+        active_miss = []
+        for indicator in self.miss_indicators:
+            if self.current_time < indicator["show_time"] + self.miss_indicator_duration:
+                active_miss.append(indicator)
+            else:
+                self._indicator_pool.append(indicator)
+        self.miss_indicators = active_miss
+
+        active_results = []
+        for indicator in self.hit_result_indicators:
+            if self.current_time < indicator["show_time"] + self.miss_indicator_duration:
+                active_results.append(indicator)
+            else:
+                self._indicator_pool.append(indicator)
+        self.hit_result_indicators = active_results
 
         for indicators in (
             self.miss_indicators,
@@ -4799,8 +5034,16 @@ class GameplayScene(BaseScene):
 
         center_x = screen.get_width() // 2
         center_y = screen.get_height() // 2
-        title_surface = self.title_overlay_font.render(title, True, (255, 255, 255))
-        subtitle_surface = self.small_overlay_font.render(subtitle, True, (230, 235, 250))
+        title_surface = self._cached_text_surface(
+            self.title_overlay_font,
+            title,
+            (255, 255, 255)
+        )
+        subtitle_surface = self._cached_text_surface(
+            self.small_overlay_font,
+            subtitle,
+            (230, 235, 250)
+        )
         if overlay_factor < 1.0:
             title_surface.set_alpha(int(255 * overlay_factor))
             subtitle_surface.set_alpha(int(230 * overlay_factor))
@@ -4849,7 +5092,11 @@ class GameplayScene(BaseScene):
                     draw_rect,
                     border_radius=draw_rect.height // 2
                 )
-            label_surface = self.medium_overlay_font.render(label, True, (255, 255, 255))
+            label_surface = self._cached_text_surface(
+                self.medium_overlay_font,
+                label,
+                (255, 255, 255)
+            )
             screen.blit(label_surface, label_surface.get_rect(center=draw_rect.center))
 
     def _draw_pause_overlay(self, screen):
@@ -4880,9 +5127,9 @@ class GameplayScene(BaseScene):
             return
 
         dots = "." * (1 + int((self.pre_start_delay_ms - remaining) / 400) % 3)
-        text = self.font.render(
+        text = self._cached_text_surface(
+            self.font,
             f"Ready{dots}",
-            True,
             (255, 255, 255)
         )
         rect = text.get_rect(
