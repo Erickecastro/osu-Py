@@ -1,6 +1,7 @@
 import pygame
 
 from core.assets import load_image
+from rendering.render_backend import RenderCommandBatch
 
 
 class GameplayHUDRenderer:
@@ -16,6 +17,7 @@ class GameplayHUDRenderer:
         self.hit_error_marker_cache = {}
         self.fade_surface = None
         self.fade_surface_size = None
+        self._hud_surface_cache = {}
 
     def _load_health_bar_image(self):
         return load_image("scorebar-colour.png", "HP")
@@ -34,6 +36,8 @@ class GameplayHUDRenderer:
             True,
             color
         )
+        if surface is not None:
+            surface = surface.convert_alpha()
         self.text_cache[key] = surface
         return surface
 
@@ -47,6 +51,8 @@ class GameplayHUDRenderer:
             return cached_surface
 
         surface = self.font.render(text, True, color)
+        if surface is not None:
+            surface = surface.convert_alpha()
         self.dynamic_text_cache[slot] = (key, surface)
         return surface
 
@@ -63,7 +69,8 @@ class GameplayHUDRenderer:
         hit_window_300=50,
         hit_window_100=100,
         hit_window_50=150,
-        alpha=255
+        alpha=255,
+        batch=None,
     ):
         alpha = max(0, min(255, int(alpha)))
         if alpha <= 0:
@@ -76,7 +83,7 @@ class GameplayHUDRenderer:
                 self.fade_surface_size = size
             hud_surface = self.fade_surface
             hud_surface.fill((0, 0, 0, 0))
-            self.draw(
+            self._draw_hud_content(
                 hud_surface,
                 beatmap,
                 current_time,
@@ -88,12 +95,42 @@ class GameplayHUDRenderer:
                 hit_window_300,
                 hit_window_100,
                 hit_window_50,
-                alpha=255
+                batch=None,
             )
             hud_surface.set_alpha(alpha)
             screen.blit(hud_surface, (0, 0))
             return
 
+        self._draw_hud_content(
+            screen,
+            beatmap,
+            current_time,
+            score,
+            accuracy,
+            combo,
+            health,
+            hit_error_markers,
+            hit_window_300,
+            hit_window_100,
+            hit_window_50,
+            batch=batch,
+        )
+
+    def _draw_hud_content(
+        self,
+        screen,
+        beatmap,
+        current_time,
+        score,
+        accuracy,
+        combo,
+        health=1.0,
+        hit_error_markers=None,
+        hit_window_300=50,
+        hit_window_100=100,
+        hit_window_50=150,
+        batch=None,
+    ):
         score_text = self.dynamic_text_surface(
             "score",
             f"{score:08d}",
@@ -110,39 +147,63 @@ class GameplayHUDRenderer:
             (255, 255, 255)
         )
 
-        screen.blit(
-            score_text,
-            (
-                screen.get_width() - score_text.get_width() - 20,
-                20
+        if batch is not None:
+            batch.add_surface(
+                score_text,
+                (
+                    screen.get_width() - score_text.get_width() - 20,
+                    20
+                )
             )
-        )
-        screen.blit(
-            accuracy_text,
-            (
-                screen.get_width() - accuracy_text.get_width() - 20,
-                60
+            batch.add_surface(
+                accuracy_text,
+                (
+                    screen.get_width() - accuracy_text.get_width() - 20,
+                    60
+                )
             )
-        )
-        screen.blit(
-            combo_text,
-            (
-                20,
-                screen.get_height() - combo_text.get_height() - 20
+            batch.add_surface(
+                combo_text,
+                (
+                    20,
+                    screen.get_height() - combo_text.get_height() - 20
+                )
             )
-        )
+        else:
+            screen.blit(
+                score_text,
+                (
+                    screen.get_width() - score_text.get_width() - 20,
+                    20
+                )
+            )
+            screen.blit(
+                accuracy_text,
+                (
+                    screen.get_width() - accuracy_text.get_width() - 20,
+                    60
+                )
+            )
+            screen.blit(
+                combo_text,
+                (
+                    20,
+                    screen.get_height() - combo_text.get_height() - 20
+                )
+            )
 
-        self.draw_health_bar(screen, health)
+        self.draw_health_bar(screen, health, batch=batch)
         self.draw_hit_error_bar(
             screen,
             current_time,
             hit_error_markers or (),
             hit_window_300,
             hit_window_100,
-            hit_window_50
+            hit_window_50,
+            batch=batch,
         )
 
-    def draw_health_bar(self, screen, health):
+    def draw_health_bar(self, screen, health, batch=None):
         health = max(0.0, min(1.0, float(health)))
         width = min(760, max(360, int(screen.get_width() * 0.56)))
         source_ratio = (
@@ -168,17 +229,27 @@ class GameplayHUDRenderer:
                 )
                 self.health_bar_scaled_cache[scaled_key] = scaled
             if fill_width > 0:
-                screen.blit(
-                    scaled,
-                    (x, y),
-                    pygame.Rect(0, 0, fill_width, height)
-                )
+                if batch is not None:
+                    batch.add_surface(
+                        scaled,
+                        (x, y),
+                        area=pygame.Rect(0, 0, fill_width, height)
+                    )
+                else:
+                    screen.blit(
+                        scaled,
+                        (x, y),
+                        pygame.Rect(0, 0, fill_width, height)
+                    )
             return
 
         cache_key = (width, height, fill_width, self.health_bar_image is not None)
         cached = self.health_bar_cache.get(cache_key)
         if cached is not None:
-            screen.blit(cached, (x, y))
+            if batch is not None:
+                batch.add_surface(cached, (x, y))
+            else:
+                screen.blit(cached, (x, y))
             return
 
         if len(self.health_bar_cache) > 128:
@@ -197,7 +268,10 @@ class GameplayHUDRenderer:
                 border_radius=max(2, height // 2)
             )
         self.health_bar_cache[cache_key] = surface
-        screen.blit(surface, (x, y))
+        if batch is not None:
+            batch.add_surface(surface, (x, y))
+        else:
+            screen.blit(surface, (x, y))
 
     def draw_hit_error_bar(
         self,
@@ -206,7 +280,8 @@ class GameplayHUDRenderer:
         markers,
         hit_window_300,
         hit_window_100,
-        hit_window_50
+        hit_window_50,
+        batch=None,
     ):
         width = min(225, max(160, int(screen.get_width() * 0.157)))
         height = 28
@@ -224,7 +299,10 @@ class GameplayHUDRenderer:
             hit_window_100,
             hit_window_50
         )
-        screen.blit(base, (x, y))
+        if batch is not None:
+            batch.add_surface(base, (x, y))
+        else:
+            screen.blit(base, (x, y))
 
         for marker in markers:
             age = current_time - marker["time"]
@@ -242,7 +320,10 @@ class GameplayHUDRenderer:
                 alpha,
                 height
             )
-            screen.blit(marker_surface, (x + marker_x - 3, y))
+            if batch is not None:
+                batch.add_surface(marker_surface, (x + marker_x - 3, y))
+            else:
+                screen.blit(marker_surface, (x + marker_x - 3, y))
 
     def _hit_error_base_surface(
         self,
