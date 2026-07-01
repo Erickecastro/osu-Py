@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import patch
 
+import pygame
+
 from core.game import Game
 
 
@@ -74,6 +76,16 @@ class InputLatencyTests(unittest.TestCase):
         self.assertEqual(game.raw_mouse_sensitivity, 1.0)
         self.assertEqual(game.settings.mouse_sensitivity, 1.0)
         self.assertTrue(game.settings.saved)
+
+    def test_event_with_current_mouse_pos_updates_existing_mouse_event(self):
+        game = object.__new__(Game)
+        game.mouse_pos = (12.4, 34.6)
+
+        event = pygame.event.Event(pygame.MOUSEMOTION, {"pos": (0, 0)})
+        result = Game._event_with_current_mouse_pos(game, event)
+
+        self.assertIs(result, event)
+        self.assertEqual(result.pos, (12, 35))
 
 
 if __name__ == "__main__":
