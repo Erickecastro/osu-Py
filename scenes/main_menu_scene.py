@@ -39,9 +39,16 @@ def lerp_color(start, end, amount):
     )
 
 
+_tint_surface_cache = {}
+
 def tint_surface_from_alpha(source, size, color, alpha=255):
     width, height = max(1, int(size[0])), max(1, int(size[1]))
-    scaled = pygame.transform.smoothscale(source, (width, height)).convert_alpha()
+    key = (id(source), (width, height), color, alpha, "v2_high_quality")
+    cached = _tint_surface_cache.get(key)
+    if cached is not None:
+        return cached
+    from core.assets import scale_image_high_quality
+    scaled = scale_image_high_quality(source, (width, height)).convert_alpha()
     tinted = pygame.Surface((width, height), pygame.SRCALPHA).convert_alpha()
     tinted.fill((color[0], color[1], color[2], max(0, min(255, int(alpha)))))
     try:
@@ -53,6 +60,7 @@ def tint_surface_from_alpha(source, size, color, alpha=255):
         del target_alpha
     except (ImportError, pygame.error, ValueError, TypeError, AttributeError):
         tinted.blit(scaled, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
+    _tint_surface_cache[key] = tinted
     return tinted
 
 

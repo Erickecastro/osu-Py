@@ -161,7 +161,7 @@ class GameplayScene(BaseScene):
 
         self.circle_radius = (
             54.4 - (4.48 * self.cs)
-        ) * self.GAMEPLAY_OBJECT_SCALE
+        )
         self.object_alpha_scale = self.GAMEPLAY_OBJECT_ALPHA_SCALE
 
         if self.ar < 5:
@@ -202,7 +202,7 @@ class GameplayScene(BaseScene):
                 self.playfield_height
                 * self.scale
             )
-        ) / 2 + (8 * self.scale)
+        ) / 2
 
         self.slider_base_radius = int(
             round(self.circle_radius * self.scale)
@@ -528,7 +528,7 @@ class GameplayScene(BaseScene):
         self.offset_y = (
             self.game.HEIGHT
             - (self.playfield_height * self.scale)
-        ) / 2 + (8 * self.scale)
+        ) / 2
 
         self.slider_base_radius = int(
             round(self.circle_radius * self.scale)
@@ -1474,12 +1474,14 @@ class GameplayScene(BaseScene):
             max(1, int(round(size[0]))),
             max(1, int(round(size[1])))
         )
-        key = (id(image), size)
+        # NEW cache key to invalidate old caches!
+        key = (id(image), size, "v2_high_quality")
         cached = self.image_surface_cache.get(key)
         if cached is not None:
             return cached
 
-        scaled = pygame.transform.smoothscale(image, size).convert_alpha()
+        from core.assets import scale_image_high_quality
+        scaled = scale_image_high_quality(image, size).convert_alpha()
         self.image_surface_cache[key] = scaled
         return scaled
 
@@ -1602,6 +1604,46 @@ class GameplayScene(BaseScene):
         self.tinted_surface_cache[key] = tinted
         return tinted
 
+    def _clean_approach_image(self, image, color):
+        if image is None:
+            return None
+
+        rgb = tuple(int(c) for c in color[:3])
+        key = ("approach_clean", id(image), rgb)
+        cached = self.tinted_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        cleaned = pygame.Surface(image.get_size(), pygame.SRCALPHA).convert_alpha()
+        width, height = image.get_size()
+        image.lock()
+        cleaned.lock()
+        try:
+            for y in range(height):
+                for x in range(width):
+                    pixel = image.get_at((x, y))
+                    alpha = pixel.a
+                    if alpha <= 0:
+                        continue
+
+                    # The skin approach sprite has dark shadow pixels around the
+                    # white ring. Use the sprite brightness as a mask so those
+                    # pixels do not become colored shadows after combo tinting.
+                    brightness = max(pixel.r, pixel.g, pixel.b)
+                    if brightness <= 132:
+                        continue
+
+                    strength = min(1.0, (brightness - 132) / 92.0)
+                    final_alpha = int(alpha * strength)
+                    if final_alpha > 0:
+                        cleaned.set_at((x, y), (*rgb, final_alpha))
+        finally:
+            cleaned.unlock()
+            image.unlock()
+
+        self.tinted_surface_cache[key] = cleaned
+        return cleaned
+
     def _draw_image_centered(
         self,
         target,
@@ -1685,16 +1727,31 @@ class GameplayScene(BaseScene):
         image = self.skin_images.get("approach")
         if image is None:
             return False
-        if color is not None:
-            image = self._tinted_image(image, color)
-
-        return self._draw_image_centered(
-            target,
+        image = self._clean_approach_image(
             image,
+            color if color is not None else (255, 255, 255)
+        )
+
+        # Calculate diameter without aggressive quantization for better smoothness
+        diameter = max(1, int(round(radius * 2)))
+        
+        # NEW cache key to invalidate old caches!
+        key = (id(image), diameter, "v2_high_quality_approach")
+        cached = self.image_surface_cache.get(key)
+        if cached is None:
+            from core.assets import scale_image_high_quality
+            scaled = scale_image_high_quality(image, (diameter, diameter)).convert_alpha()
+            self.image_surface_cache[key] = scaled
+        else:
+            scaled = cached
+
+        self._blit_centered(
+            target,
+            scaled,
             center,
-            diameter=self._quantized_diameter(radius * 2, quantum=4),
             alpha=alpha
         )
+        return True
 
     def _add_miss_indicator(self, pos, show_time=None):
         self.miss_indicators.append({
@@ -3403,9 +3460,11 @@ class GameplayScene(BaseScene):
         if source is None:
             return None
 
+        # NEW: Force reset cache by using a tuple with version number
+        cache_key = (screen_size, "v2_high_quality_background")
         if (
             self.background_surface is not None
-            and self.background_surface_size == screen_size
+            and self.background_surface_size == cache_key
         ):
             return self.background_surface
 
@@ -3419,10 +3478,11 @@ class GameplayScene(BaseScene):
             max(1, int(image_w * scale)),
             max(1, int(image_h * scale))
         )
-        scaled = pygame.transform.smoothscale(
-            source,
-            target_size
-        ).convert()
+        
+        # Use our high-quality scaling function
+        from core.assets import scale_image_high_quality
+        source_alpha = source.convert_alpha()
+        scaled = scale_image_high_quality(source_alpha, target_size).convert()
         position = (
             (screen_w - target_size[0]) // 2,
             (screen_h - target_size[1]) // 2
@@ -3435,7 +3495,7 @@ class GameplayScene(BaseScene):
         scaled.blit(dim_overlay, (0, 0))
 
         self.background_surface = (scaled, position)
-        self.background_surface_size = screen_size
+        self.background_surface_size = cache_key  # Store the new cache key
         return self.background_surface
 
     def _draw_background(self, screen):
@@ -3855,37 +3915,45 @@ class GameplayScene(BaseScene):
 
     def _apply_stack_offsets(self):
         stackable = {"circle", "slider"}
-        distance_limit = self.scaled_radius * 0.74
-        time_limit = 850
-        offset_step = max(3.0, self.scaled_radius * 0.105)
-
-        for index, note in enumerate(self.notes):
+        stack_leniency = self.beatmap["difficulty"].get("StackLeniency", 0.7)
+        time_limit = self.approach_time * stack_leniency
+        # Stack offset per stack is circle radius / 10, then scaled to screen size
+        circle_radius_osu = 54.4 - (4.48 * self.cs)
+        offset_step_unscaled = circle_radius_osu / 10
+        offset_step = offset_step_unscaled * self.scale
+        distance_limit = 3 * self.scale  # STACK_DISTANCE = 3 osu! pixels, scaled
+        
+        # First pass: calculate stack counts in reverse order like peppy's algorithm
+        for index in reversed(range(len(self.notes))):
+            note = self.notes[index]
             note["stack_count"] = 0
             note["stack_offset"] = (0.0, 0.0)
             if note["type"] not in stackable:
                 continue
 
-            base_x, base_y = note["scaled_pos"]
-            stack_count = 0
             lookback = index - 1
             while lookback >= 0:
                 previous = self.notes[lookback]
                 if note["time"] - previous["time"] > time_limit:
                     break
                 if previous["type"] in stackable:
-                    px, py = previous["scaled_pos"]
-                    if ((base_x - px) ** 2 + (base_y - py) ** 2) ** 0.5 <= distance_limit:
-                        stack_count = max(
-                            stack_count,
-                            previous.get("stack_count", 0) + 1
-                        )
+                    # Calculate distance in osu! coordinates (not scaled)
+                    dx_osu = note["x"] - previous["x"]
+                    dy_osu = note["y"] - previous["y"]
+                    distance_osu = (dx_osu ** 2 + dy_osu ** 2) ** 0.5
+                    if distance_osu <= 3:  # STACK_DISTANCE = 3 osu! pixels
+                        previous["stack_count"] = note["stack_count"] + 1
+                        note = previous
                 lookback -= 1
-
-            if stack_count <= 0:
+        
+        # Second pass: apply offsets
+        for note in self.notes:
+            if note["type"] not in stackable or note["stack_count"] <= 0:
                 continue
-
-            stack_count = min(stack_count, 5)
-            note["stack_count"] = stack_count
+            
+            base_x, base_y = note["scaled_pos"]
+            stack_count = note["stack_count"]
+            # Stack in osu! is (-StackOffset, -StackOffset) direction
             shift = offset_step * stack_count
             note["stack_offset"] = (-shift, -shift)
             note["scaled_pos"] = (

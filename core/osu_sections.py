@@ -168,7 +168,8 @@ def parse_difficulty_section(lines):
         "OD": 8,
         "HP": 5,
         "SliderMultiplier": 1.4,
-        "SliderTickRate": 1
+        "SliderTickRate": 1,
+        "StackLeniency": 0.7
     }
 
     key_map = {
@@ -177,7 +178,8 @@ def parse_difficulty_section(lines):
         "OverallDifficulty": "OD",
         "HPDrainRate": "HP",
         "SliderMultiplier": "SliderMultiplier",
-        "SliderTickRate": "SliderTickRate"
+        "SliderTickRate": "SliderTickRate",
+        "StackLeniency": "StackLeniency"
     }
 
     for line in section_lines(lines, "Difficulty"):

@@ -72,6 +72,50 @@ def _resolved_key(path):
         return str(path)
 
 
+def scale_image_high_quality(image, target_size):
+    """
+    Scale an image to target size with MAXIMUM possible quality!
+    Uses multi-pass scaling for optimal results both up and down.
+    """
+    target_w, target_h = target_size
+    
+    if image.get_width() == target_w and image.get_height() == target_h:
+        return image
+    
+    # First ensure we're working with an alpha surface for best results
+    scaled = image.convert_alpha()
+    current_w, current_h = scaled.get_size()
+    
+    # Multi-step scaling approach (always use power-of-2 steps for quality)
+    while True:
+        if current_w == target_w and current_h == target_h:
+            break
+            
+        # Calculate next size
+        next_w, next_h = target_w, target_h
+        
+        # For upscaling: go in smaller steps for better results
+        if target_w > current_w * 1.1 or target_h > current_h * 1.1:
+            next_w = min(int(current_w * 1.3), target_w)
+            next_h = min(int(current_h * 1.3), target_h)
+        # For downscaling: also use smaller steps
+        elif target_w < current_w * 0.9 or target_h < current_h * 0.9:
+            next_w = max(int(current_w * 0.8), target_w)
+            next_h = max(int(current_h * 0.8), target_h)
+        
+        # Use smoothscale for the best possible quality
+        scaled = pygame.transform.smoothscale(scaled, (next_w, next_h))
+        current_w, current_h = next_w, next_h
+        
+        # Break if we've reached the target
+        if current_w == target_w and current_h == target_h:
+            break
+            
+    # Final smoothscale to exact target size to ensure perfection
+    scaled = pygame.transform.smoothscale(scaled, (target_w, target_h))
+    return scaled
+
+
 def load_image(filename, *legacy_parts, alpha=True):
     path = asset_path(filename, *legacy_parts)
     if not path.exists():
