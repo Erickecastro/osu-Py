@@ -36,6 +36,13 @@ class CursorRenderer:
         self.user_scale = value
         self.scaled_image_cache.clear()
 
+    def reset_trail(self, pos=None):
+        if pos is not None:
+            self.pos = pos
+        self.last_emit_pos = self.pos
+        self.emit_timer = 0.0
+        self.trail.clear()
+
     def update(self, dt, pos):
         self.pos = pos
         self.emit_timer += dt
@@ -51,11 +58,12 @@ class CursorRenderer:
 
         dx = self.pos[0] - self.last_emit_pos[0]
         dy = self.pos[1] - self.last_emit_pos[1]
-        moved_distance = (dx * dx + dy * dy) ** 0.5
+        moved_distance_sq = (dx * dx) + (dy * dy)
+        min_distance_sq = self.trail_min_distance * self.trail_min_distance
 
         if (
             self.emit_timer >= self.trail_emit_interval
-            and moved_distance >= self.trail_min_distance
+            and moved_distance_sq >= min_distance_sq
         ):
             live_trail.append([self.pos, 0.0])
             self.emit_timer = 0.0
@@ -64,10 +72,22 @@ class CursorRenderer:
         if len(live_trail) > self.trail_max_points:
             del live_trail[:-self.trail_max_points]
 
-    def draw(self, screen, pos=None):
+    def draw(self, screen, pos=None, draw_trail=True):
         if pos is not None:
             self.pos = pos
 
+        if draw_trail:
+            self._draw_trail(screen)
+
+        self._blit_centered(
+            screen,
+            self.cursor_image,
+            self.pos,
+            alpha=None,
+            scale=self.cursor_base_scale * self.user_scale
+        )
+
+    def _draw_trail(self, screen):
         for entry in self.trail:
             entry_pos, entry_age = entry
             progress = self._clamp01(
@@ -88,14 +108,6 @@ class CursorRenderer:
                 alpha=alpha,
                 scale=self.trail_base_scale * self.user_scale * scale
             )
-
-        self._blit_centered(
-            screen,
-            self.cursor_image,
-            self.pos,
-            alpha=None,
-            scale=self.cursor_base_scale * self.user_scale
-        )
 
     def _load_asset(self, filename):
         image = load_image(filename, "cursor")
@@ -135,15 +147,22 @@ class CursorRenderer:
         else:
             render_image = image
 
-        if alpha is not None and render_image.get_alpha() != alpha:
-            render_image.set_alpha(alpha)
         rect = render_image.get_rect(
             center=(
                 int(round(center[0])),
                 int(round(center[1]))
             )
         )
+        if alpha is None:
+            target.blit(render_image, rect)
+            return
+
+        previous_alpha = render_image.get_alpha()
+        if previous_alpha != alpha:
+            render_image.set_alpha(alpha)
         target.blit(render_image, rect)
+        if previous_alpha != alpha:
+            render_image.set_alpha(previous_alpha)
 
     def _clamp01(self, value):
         if value <= 0:
