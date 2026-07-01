@@ -2,6 +2,30 @@ import os
 import sys
 
 
+def is_object_visible(position, bounds, *, radius=0, padding=0):
+    if bounds is None:
+        return True
+
+    x, y = position
+    if hasattr(bounds, "left") and hasattr(bounds, "top"):
+        left = bounds.left - padding - radius
+        top = bounds.top - padding - radius
+        right = bounds.right + padding + radius
+        bottom = bounds.bottom + padding + radius
+        return left <= x <= right and top <= y <= bottom
+
+    if isinstance(bounds, (tuple, list)) and len(bounds) == 4:
+        left, top, width, height = bounds
+        right = left + width
+        bottom = top + height
+        return (
+            left - padding - radius <= x <= right + padding + radius
+            and top - padding - radius <= y <= bottom + padding + radius
+        )
+
+    return True
+
+
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
