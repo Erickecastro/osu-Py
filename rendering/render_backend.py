@@ -3,6 +3,8 @@ from typing import Optional
 
 import pygame
 
+from rendering.sprite_atlas import SpriteAtlasRegistry
+
 
 def _blit_destination_rect(surface, dest, area=None):
     if surface is None:
@@ -33,22 +35,31 @@ def _surface_blit_visible(target, surface, dest, area=None):
 class RenderCommandBatch:
     """Collects surface blit operations and flushes them to a target later."""
 
-    __slots__ = ("_commands", "last_culled_count")
+    __slots__ = (
+        "_commands",
+        "last_culled_count",
+        "last_atlas_command_count",
+        "last_atlas_group_count",
+    )
 
     def __init__(self):
         self._commands = []
         self.last_culled_count = 0
+        self.last_atlas_command_count = 0
+        self.last_atlas_group_count = 0
 
-    def add_surface(self, surface, dest, area=None, alpha=None):
+    def add_surface(self, surface, dest, area=None, alpha=None, atlas_key=None):
         if surface is None:
             return
         if alpha is not None and int(alpha) <= 0:
             return
-        self._commands.append((surface, dest, area, alpha))
+        self._commands.append((surface, dest, area, alpha, atlas_key))
 
     def clear(self):
         self._commands.clear()
         self.last_culled_count = 0
+        self.last_atlas_command_count = 0
+        self.last_atlas_group_count = 0
 
     def flush(self, target, before_blit=None):
         count = len(self._commands)
@@ -57,16 +68,23 @@ class RenderCommandBatch:
             return 0
         drawn = 0
         culled = 0
-        for surface, dest, area, alpha in self._commands:
+        atlas_commands = 0
+        atlas_groups = set()
+        for surface, dest, area, alpha, atlas_key in self._commands:
             if not _surface_blit_visible(target, surface, dest, area=area):
                 culled += 1
                 continue
             if before_blit is not None:
-                before_blit(surface)
+                before_blit(surface, atlas_key)
+            if atlas_key is not None:
+                atlas_commands += 1
+                atlas_groups.add(atlas_key)
             blit_surface_with_alpha(target, surface, dest, area=area, alpha=alpha)
             drawn += 1
         self._commands.clear()
         self.last_culled_count = culled
+        self.last_atlas_command_count = atlas_commands
+        self.last_atlas_group_count = len(atlas_groups)
         return drawn
 
     def __len__(self):
@@ -109,6 +127,12 @@ class RenderBackend:
         self.last_unique_surface_count = 0
         self.last_culled_count = 0
         self.last_direct_culled_count = 0
+        self.sprite_atlas = SpriteAtlasRegistry()
+        self.last_atlas_pages = 0
+        self.last_atlas_sprites = 0
+        self.last_atlas_evictions = 0
+        self.last_atlas_command_count = 0
+        self.last_atlas_group_count = 0
 
     def set_target_surface(self, target_surface: Optional[pygame.Surface]):
         self.target_surface = target_surface
@@ -121,6 +145,9 @@ class RenderBackend:
         self.last_unique_surface_count = 0
         self.last_culled_count = 0
         self.last_direct_culled_count = 0
+        self.last_atlas_command_count = 0
+        self.last_atlas_group_count = 0
+        self._update_atlas_metrics()
 
     def clear(self, color=(0, 0, 0, 0)):
         if self.target_surface is None:
@@ -146,6 +173,16 @@ class RenderBackend:
         self.registered_surface_count = len(self._surface_tokens)
         return token
 
+    def register_sprite_surface(self, surface, key=None):
+        ref = self.sprite_atlas.add(surface, key=key)
+        self._update_atlas_metrics()
+        return ref
+
+    def _update_atlas_metrics(self):
+        self.last_atlas_pages = self.sprite_atlas.page_count
+        self.last_atlas_sprites = self.sprite_atlas.sprite_count
+        self.last_atlas_evictions = self.sprite_atlas.eviction_count
+
     def blit_surface(self, surface, dest, area=None, alpha=None):
         if not _surface_blit_visible(self.target_surface, surface, dest, area=area):
             self.last_direct_culled_count += 1
@@ -170,13 +207,17 @@ class RenderBackend:
             self.last_unique_surface_count = 0
             self.last_culled_count = 0
             self.last_direct_culled_count = 0
+            self.last_atlas_command_count = 0
+            self.last_atlas_group_count = 0
             return 0
         self._frame_surface_tokens.clear()
 
-        def register(surface):
+        def register(surface, atlas_key=None):
             token = self._register_surface(surface)
             if token:
                 self._frame_surface_tokens.add(token)
+            if atlas_key is not None:
+                self.register_sprite_surface(surface, key=atlas_key)
 
         self.last_flush_count = batch.flush(
             self.target_surface,
@@ -184,6 +225,17 @@ class RenderBackend:
         )
         self.last_unique_surface_count = len(self._frame_surface_tokens)
         self.last_culled_count += getattr(batch, "last_culled_count", 0)
+        self.last_atlas_command_count = getattr(
+            batch,
+            "last_atlas_command_count",
+            0
+        )
+        self.last_atlas_group_count = getattr(
+            batch,
+            "last_atlas_group_count",
+            0
+        )
+        self._update_atlas_metrics()
         return self.last_flush_count
 
     def present(self):

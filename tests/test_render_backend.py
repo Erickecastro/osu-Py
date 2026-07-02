@@ -82,6 +82,34 @@ class RenderBackendTests(unittest.TestCase):
         self.assertEqual(backend.last_unique_surface_count, 2)
         self.assertEqual(backend.registered_surface_count, 2)
 
+    def test_batch_can_register_atlas_sprites(self):
+        backend = PygameRenderBackend(pygame.Surface((16, 16), pygame.SRCALPHA))
+        source = pygame.Surface((4, 4), pygame.SRCALPHA)
+
+        batch = backend.create_batch()
+        batch.add_surface(source, (0, 0), atlas_key=("hud", "marker"))
+        backend.flush_batch(batch)
+
+        self.assertEqual(backend.last_flush_count, 1)
+        self.assertEqual(backend.last_atlas_pages, 1)
+        self.assertEqual(backend.last_atlas_sprites, 1)
+        self.assertEqual(backend.last_atlas_command_count, 1)
+        self.assertEqual(backend.last_atlas_group_count, 1)
+
+    def test_batch_tracks_atlas_groups_without_changing_draw_order(self):
+        backend = PygameRenderBackend(pygame.Surface((16, 16), pygame.SRCALPHA))
+        first = pygame.Surface((2, 2), pygame.SRCALPHA)
+        second = pygame.Surface((2, 2), pygame.SRCALPHA)
+
+        batch = backend.create_batch()
+        batch.add_surface(first, (0, 0), atlas_key=("hud", "a"))
+        batch.add_surface(first, (1, 1), atlas_key=("hud", "a"))
+        batch.add_surface(second, (2, 2), atlas_key=("hud", "b"))
+        backend.flush_batch(batch)
+
+        self.assertEqual(backend.last_flush_count, 3)
+        self.assertEqual(backend.last_atlas_command_count, 3)
+        self.assertEqual(backend.last_atlas_group_count, 2)
 
     def test_batch_culls_fully_offscreen_surfaces(self):
         backend = PygameRenderBackend(pygame.Surface((8, 8), pygame.SRCALPHA))

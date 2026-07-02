@@ -26,6 +26,8 @@ class GameplayHUDRenderer:
         self.combo_anim_value = None
         self.combo_anim_start_time = 0.0
         self.combo_pop_duration = 140.0
+        self.combo_scaled_cache = {}
+        self.combo_scaled_cache_limit = 96
 
     def _load_health_bar_image(self):
         return load_image("scorebar-colour.png", "HP")
@@ -213,7 +215,7 @@ class GameplayHUDRenderer:
                 max(1, int(round(combo_text.get_width() * combo_scale))),
                 max(1, int(round(combo_text.get_height() * combo_scale)))
             )
-            combo_draw_surface = pygame.transform.smoothscale(
+            combo_draw_surface = self._scaled_combo_surface(
                 combo_text,
                 scaled_size
             )
@@ -281,7 +283,8 @@ class GameplayHUDRenderer:
                     batch.add_surface(
                         scaled,
                         (x, y),
-                        area=pygame.Rect(0, 0, fill_width, height)
+                        area=pygame.Rect(0, 0, fill_width, height),
+                        atlas_key=("hud", "health", width, height)
                     )
                 else:
                     screen.blit(
@@ -295,7 +298,11 @@ class GameplayHUDRenderer:
         cached = self.health_bar_cache.get(cache_key)
         if cached is not None:
             if batch is not None:
-                batch.add_surface(cached, (x, y))
+                batch.add_surface(
+                    cached,
+                    (x, y),
+                    atlas_key=("hud", "fallback_health", cache_key)
+                )
             else:
                 screen.blit(cached, (x, y))
             return
@@ -317,7 +324,11 @@ class GameplayHUDRenderer:
             )
         self.health_bar_cache[cache_key] = surface
         if batch is not None:
-            batch.add_surface(surface, (x, y))
+            batch.add_surface(
+                surface,
+                (x, y),
+                atlas_key=("hud", "fallback_health", cache_key)
+            )
         else:
             screen.blit(surface, (x, y))
 
@@ -348,7 +359,19 @@ class GameplayHUDRenderer:
             hit_window_50
         )
         if batch is not None:
-            batch.add_surface(base, (x, y))
+            batch.add_surface(
+                base,
+                (x, y),
+                atlas_key=(
+                    "hud",
+                    "hit_error_base",
+                    width,
+                    height,
+                    int(hit_window_300),
+                    int(hit_window_100),
+                    int(hit_window_50)
+                )
+            )
         else:
             screen.blit(base, (x, y))
 
@@ -369,9 +392,35 @@ class GameplayHUDRenderer:
                 height
             )
             if batch is not None:
-                batch.add_surface(marker_surface, (x + marker_x - 3, y))
+                batch.add_surface(
+                    marker_surface,
+                    (x + marker_x - 3, y),
+                    atlas_key=(
+                        "hud",
+                        "hit_error_marker",
+                        color,
+                        alpha,
+                        height
+                    )
+                )
             else:
                 screen.blit(marker_surface, (x + marker_x - 3, y))
+
+    def _scaled_combo_surface(self, combo_text, scaled_size):
+        cache_key = (id(combo_text), scaled_size)
+        cached = self.combo_scaled_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        if len(self.combo_scaled_cache) > self.combo_scaled_cache_limit:
+            self.combo_scaled_cache.clear()
+
+        scaled = pygame.transform.smoothscale(
+            combo_text,
+            scaled_size
+        ).convert_alpha()
+        self.combo_scaled_cache[cache_key] = scaled
+        return scaled
 
     def _hit_error_base_surface(
         self,

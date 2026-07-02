@@ -45,7 +45,11 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Add backend surface-token registry to prepare atlas/sprite batching diagnostics.
 - [x] Cull fully offscreen batched blits before they reach the active renderer.
 - [x] Cull fully offscreen direct backend blits and expose the count in profiler metrics.
-- [ ] Add sprite atlas generation for skin assets and HUD sprites.
+- [x] Add CPU-side sprite atlas generation for cached HUD sprites.
+- [x] Expose sprite atlas page/sprite counts in profiler metrics.
+- [x] Expose atlas command/group counts as batching-readiness diagnostics.
+- [x] Cache combo pop scaled HUD surfaces instead of scaling every pop frame.
+- [ ] Extend sprite atlas registration to skin assets and followpoint/cursor sprites.
 - [ ] Batch sprite commands by texture/atlas.
 - [ ] Move cursor, HUD, followpoints, and hitobject sprites to a GPU sprite path.
 - [ ] Move cached slider path textures to GPU-backed draw commands.
