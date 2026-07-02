@@ -13,10 +13,77 @@ class SpinnerRenderer:
             "circle": self._load_image("spinner-circle.png")
         }
         self.cache = {}
+        self.prewarm_jobs = []
+        self.prewarm_index = 0
+        self.prewarm_complete = True
+        # 4 px buckets keep the spinner approach circle visually smooth while
+        # still allowing us to prewarm every scale before gameplay.
+        self.approach_quantize_step = 4
+        self.rotation_angle_step = 6
+        self.approach_start_scale = 3.68
+        self.approach_end_scale = 0.16
+        self.approach_curve_power = 1.12
 
     def _load_image(self, filename):
         img = load_image(filename, "spinner")
         return img.convert_alpha() if img else None
+
+    def reset_prewarm_jobs(self, notes):
+        self.prewarm_jobs = self._build_prewarm_jobs(notes)
+        self.prewarm_index = 0
+        self.prewarm_complete = not self.prewarm_jobs
+
+    def _spinner_radius(self):
+        return int(min(self.scene.game.WIDTH, self.scene.game.HEIGHT) * 0.3705)
+
+    def _build_prewarm_jobs(self, notes):
+        if not any(note.get("type") == "spinner" for note in notes):
+            return []
+
+        jobs = []
+        radius = self._spinner_radius()
+        circle = self.images.get("circle")
+        approach = self.images.get("approach")
+
+        circle_diameter = int(radius * 1.35)
+        if circle is not None:
+            jobs.append(("scale", circle, circle_diameter, None))
+            for angle in range(0, 360, self.rotation_angle_step):
+                jobs.append(("rotated", circle, circle_diameter, angle))
+
+        if approach is not None:
+            max_diameter = int(radius * self.approach_start_scale)
+            min_diameter = max(1, int(radius * self.approach_end_scale))
+            step = max(4, int(self.approach_quantize_step))
+            for diameter in range(max_diameter, min_diameter - 1, -step):
+                jobs.append(("scale", approach, diameter, step))
+
+        return jobs
+
+    def prewarm_step(self, max_ms=1.0, max_items=8):
+        if self.prewarm_complete:
+            return True
+
+        start = pygame.time.get_ticks()
+        count = 0
+        total = len(self.prewarm_jobs)
+        while self.prewarm_index < total:
+            job = self.prewarm_jobs[self.prewarm_index]
+            self.prewarm_index += 1
+            kind = job[0]
+            if kind == "scale":
+                _, image, diameter, quantize_step = job
+                self._scaled(image, diameter, quantize_step=quantize_step)
+            elif kind == "rotated":
+                _, image, diameter, angle = job
+                self._rotated(image, diameter, angle)
+
+            count += 1
+            if count >= max_items or pygame.time.get_ticks() - start >= max_ms:
+                break
+
+        self.prewarm_complete = self.prewarm_index >= total
+        return self.prewarm_complete
 
     def draw(self, target, note):
         start = note["spinner_start_time"]
@@ -30,10 +97,10 @@ class SpinnerRenderer:
             self.scene.game.HEIGHT // 2
         )
         duration = max(1, end - start)
-        radius = int(min(self.scene.game.WIDTH, self.scene.game.HEIGHT) * 0.3705)
+        radius = self._spinner_radius()
         progress = self.scene._clamp01((current - start) / duration)
-        approach_progress = self.scene._smoothstep(progress)
-        fade_in = self.scene._ease_out_cubic((current - start) / 150.0)
+        approach_progress = 1.0 - ((1.0 - progress) ** self.approach_curve_power)
+        fade_in = self.scene._ease_out_cubic((current - start) / 110.0)
         fade_out = 1.0
         fade_out_start = note.get("fade_out_start")
         if fade_out_start is not None:
@@ -61,9 +128,18 @@ class SpinnerRenderer:
                 target,
                 self.images["approach"],
                 center,
-                int(radius * (3.35 - 3.17 * approach_progress)),
+                int(
+                    radius
+                    * (
+                        self.approach_start_scale
+                        - (
+                            (self.approach_start_scale - self.approach_end_scale)
+                            * approach_progress
+                        )
+                    )
+                ),
                 alpha=approach_alpha,
-                quantize_step=4
+                quantize_step=self.approach_quantize_step
             )
         if not self._draw_rotated_centered(
             target,
@@ -128,13 +204,8 @@ class SpinnerRenderer:
     def _draw_rotated_centered(self, target, image, center, diameter, angle, alpha=255):
         if image is None:
             return False
-        angle_key = int(round(angle / 4.0) * 4) % 360
-        key = ("rotated", id(image), max(1, int(diameter)), angle_key)
-        rotated = self.cache.get(key)
-        if rotated is None:
-            scaled = self._scaled(image, diameter)
-            rotated = pygame.transform.rotozoom(scaled, angle_key, 1.0)
-            self.cache[key] = rotated
+        angle_key = int(round(angle / self.rotation_angle_step) * self.rotation_angle_step) % 360
+        rotated = self._rotated(image, diameter, angle_key)
 
         previous_alpha = rotated.get_alpha()
         if alpha != 255:
@@ -143,6 +214,17 @@ class SpinnerRenderer:
         if alpha != 255:
             rotated.set_alpha(previous_alpha)
         return True
+
+    def _rotated(self, image, diameter, angle_key):
+        key = ("rotated", id(image), max(1, int(diameter)), int(angle_key) % 360)
+        cached = self.cache.get(key)
+        if cached is not None:
+            return cached
+
+        scaled = self._scaled(image, diameter)
+        cached = pygame.transform.rotozoom(scaled, key[3], 1.0).convert_alpha()
+        self.cache[key] = cached
+        return cached
 
     def _scaled(self, image, diameter, quantize_step=None):
         diameter = max(1, int(diameter))

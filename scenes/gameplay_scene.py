@@ -133,6 +133,9 @@ class GameplayScene(BaseScene):
         self.background_surface_size = None
         self.background_surface_cache = {}
         self.render_backend = getattr(game, "render_backend", PygameRenderBackend())
+        self.slider_surface_fallbacks_frame = 0
+        self.slider_reveal_fallbacks_frame = 0
+        self.slider_base_fallbacks_frame = 0
         self.background_dim_alpha = int(
             255
             * max(
@@ -363,11 +366,11 @@ class GameplayScene(BaseScene):
         self._prime_initial_slider_geometry_cache()
         self._queue_initial_slider_surface_cache(
             horizon_ms=self.initial_slider_cache_horizon_ms,
-            max_items=96
+            max_items=160
         )
         self._warm_slider_reveal_cache(
-            max_ms=2.4,
-            max_items=24,
+            max_ms=3.2,
+            max_items=42,
             horizon_ms=self.initial_slider_cache_horizon_ms
         )
 
@@ -435,6 +438,7 @@ class GameplayScene(BaseScene):
         self.small_overlay_font = rounded_font(18, bold=False)
         self.spinner_manager = SpinnerManager(self)
         self.spinner_renderer = SpinnerRenderer(self)
+        self.spinner_renderer.reset_prewarm_jobs(self.notes)
 
     def _tinted_button_image(self, tint_color, size, hover=0.0):
         image = self.button_image
@@ -680,6 +684,7 @@ class GameplayScene(BaseScene):
             self.slider_renderer.reverse_arrow_cache.clear()
         if hasattr(self.spinner_renderer, "cache"):
             self.spinner_renderer.cache.clear()
+            self.spinner_renderer.reset_prewarm_jobs(self.notes)
 
     def _apply_intro_lead_in(self):
         self.pre_music_lead_in_ms = 0
@@ -968,7 +973,7 @@ class GameplayScene(BaseScene):
     def _note_can_receive_early_hit(self, note):
         return self.current_time >= note["time"] - self._early_hit_limit_ms()
 
-    def event_music_time(self, event):
+    def event_tick(self, event):
         now = pygame.time.get_ticks()
         event_tick = getattr(event, "timestamp", None)
         if (
@@ -976,8 +981,11 @@ class GameplayScene(BaseScene):
             or event_tick <= 0
             or abs(float(event_tick) - now) > 60000
         ):
-            event_tick = now
-        return self.music_time_from_tick(event_tick)
+            return now
+        return float(event_tick)
+
+    def event_music_time(self, event):
+        return self.music_time_from_tick(self.event_tick(event))
 
     def music_time_from_tick(self, tick_ms):
         if self.start_time is None or not self.music_started:
@@ -1153,8 +1161,18 @@ class GameplayScene(BaseScene):
             self.approach_time
         )
 
-    def _try_hit_at(self, pos, input_time=None):
+    def _try_hit_at(self, pos, input_time=None, input_tick_ms=None):
         if input_time is not None:
+            profiler = getattr(self.game, "profiler", None)
+            if (
+                input_tick_ms is not None
+                and profiler is not None
+                and getattr(profiler, "enabled", False)
+            ):
+                profiler.add(
+                    "input_judgement_latency",
+                    max(0.0, pygame.time.get_ticks() - float(input_tick_ms))
+                )
             previous_time = self.current_time
             self.current_time = float(input_time)
             try:
@@ -3606,6 +3624,36 @@ class GameplayScene(BaseScene):
         self.background_path = path
         self.background_load_attempted = False
 
+
+    def _warm_spinner_cache(self, max_ms=1.0, max_items=8):
+        spinner_renderer = getattr(self, "spinner_renderer", None)
+        if spinner_renderer is None or getattr(spinner_renderer, "prewarm_complete", True):
+            return
+
+        profiler = getattr(self.game, "profiler", None)
+        profiler_enabled = bool(profiler and profiler.enabled)
+        if profiler_enabled:
+            profiler.start("spinner_warm")
+        try:
+            spinner_renderer.prewarm_step(max_ms=max_ms, max_items=max_items)
+        finally:
+            if profiler_enabled:
+                profiler.end("spinner_warm")
+
+    def _safe_to_warm_gameplay_caches(self, margin_ms=260):
+        if self.active_notes:
+            return False
+
+        if self.next_note_index >= len(self.notes):
+            return True
+
+        next_note = self.notes[self.next_note_index]
+        visual_time = next_note.get(
+            "start_time",
+            next_note.get("time", 0) - self.approach_time
+        )
+        return self.current_time < visual_time - margin_ms
+
     def _warm_background_surface(self):
         if (
             self.background_source is not None
@@ -3884,6 +3932,7 @@ class GameplayScene(BaseScene):
             )
             self._warm_skin_image_cache(max_ms=3, max_items=24)
             self._warm_gameplay_surface_cache(max_ms=4, max_items=24)
+            self._warm_spinner_cache(max_ms=2.0, max_items=18)
             if ready_elapsed >= 40:
                 self._warm_followpoint_connections(max_ms=2, max_items=96)
                 self._warm_slider_geometry_cache(
@@ -3922,7 +3971,7 @@ class GameplayScene(BaseScene):
                 5200,
                 int(self.approach_time + 7200)
             )
-            extra_slider_warm_budget = 1250
+            extra_slider_warm_budget = 2400
             critical_slider_ready = self._critical_slider_cache_ready(
                 critical_slider_horizon
             )
@@ -3930,9 +3979,18 @@ class GameplayScene(BaseScene):
                 critical_slider_horizon,
                 max_bucket=9
             )
+            critical_spinner_ready = getattr(
+                self.spinner_renderer,
+                "prewarm_complete",
+                True
+            )
             if (
                 ready_elapsed < total_intro_delay + extra_slider_warm_budget
-                and not (critical_slider_ready and critical_reveal_ready)
+                and not (
+                    critical_slider_ready
+                    and critical_reveal_ready
+                    and critical_spinner_ready
+                )
             ):
                 self._warm_slider_geometry_cache(
                     max_ms=5,
@@ -3951,6 +4009,8 @@ class GameplayScene(BaseScene):
                 )
                 self._warm_skin_image_cache(max_ms=2, max_items=16)
                 self._warm_followpoint_connections(max_ms=1, max_items=64)
+                self._warm_spinner_cache(max_ms=2.5, max_items=24)
+                self._collect_slider_cache_results(max_ms=3.0, max_items=24)
                 return
 
             if self.pre_music_lead_in_ms > 0:
@@ -3962,25 +4022,27 @@ class GameplayScene(BaseScene):
                     - self.pre_music_started_at
                 )
                 if lead_elapsed < self.pre_music_lead_in_ms:
-                    self._warm_gameplay_surface_cache(max_ms=4, max_items=24)
-                    self._warm_skin_image_cache(max_ms=3, max_items=24)
-                    self._warm_slider_geometry_cache(
-                        max_ms=4,
-                        max_items=180,
-                        horizon_ms=None
-                    )
-                    self._warm_slider_cache(
-                        max_ms=8,
-                        max_items=48,
-                        horizon_ms=self.approach_time + 11000
-                    )
-                    self._warm_slider_reveal_cache(
-                        max_ms=3.8,
-                        max_items=32,
-                        horizon_ms=self.approach_time + 11000
-                    )
-                    self._warm_followpoint_connections(max_ms=2, max_items=96)
                     self.current_time = lead_elapsed - self.pre_music_lead_in_ms
+                    if self._safe_to_warm_gameplay_caches(margin_ms=320):
+                        self._warm_gameplay_surface_cache(max_ms=4, max_items=24)
+                        self._warm_skin_image_cache(max_ms=3, max_items=24)
+                        self._warm_slider_geometry_cache(
+                            max_ms=4,
+                            max_items=180,
+                            horizon_ms=None
+                        )
+                        self._warm_slider_cache(
+                            max_ms=8,
+                            max_items=48,
+                            horizon_ms=self.approach_time + 11000
+                        )
+                        self._warm_slider_reveal_cache(
+                            max_ms=3.8,
+                            max_items=32,
+                            horizon_ms=self.approach_time + 11000
+                        )
+                        self._warm_followpoint_connections(max_ms=2, max_items=96)
+                        self._warm_spinner_cache(max_ms=2.0, max_items=20)
                     if profiler_enabled:
                         profiler.start("hitobjects")
                     self.next_note_index = activate_due_notes(
@@ -4013,24 +4075,25 @@ class GameplayScene(BaseScene):
         if self.start_time is not None:
             self._update_music_sync()
 
-        self._warm_slider_geometry_cache(
-            max_ms=0.12,
-            max_items=4,
-            horizon_ms=self.approach_time + 10000
-        )
-        self._warm_slider_cache(
-            max_ms=0.42,
-            max_items=2,
-            horizon_ms=self.approach_time + 6400
-        )
-        self._warm_slider_reveal_cache(
-            max_ms=0.18,
-            max_items=1,
-            horizon_ms=self.approach_time + 3200
-        )
-        self._warm_skin_image_cache(max_ms=0.12, max_items=1)
-        self._warm_followpoint_connections(max_ms=0.18, max_items=4)
-        self._warm_background_surface()
+        if self._safe_to_warm_gameplay_caches(margin_ms=220):
+            self._warm_slider_geometry_cache(
+                max_ms=0.12,
+                max_items=4,
+                horizon_ms=self.approach_time + 10000
+            )
+            self._warm_slider_cache(
+                max_ms=0.42,
+                max_items=2,
+                horizon_ms=self.approach_time + 6400
+            )
+            self._warm_slider_reveal_cache(
+                max_ms=0.18,
+                max_items=1,
+                horizon_ms=self.approach_time + 3200
+            )
+            self._warm_skin_image_cache(max_ms=0.12, max_items=1)
+            self._warm_followpoint_connections(max_ms=0.18, max_items=4)
+            self._warm_spinner_cache(max_ms=0.20, max_items=1)
 
         if self.start_time is not None:
             self._update_music_sync()
@@ -4255,9 +4318,19 @@ class GameplayScene(BaseScene):
         note["scaled_pos"] = pos
         return pos
 
+    def record_slider_surface_fallback(self, cache_key):
+        self.slider_surface_fallbacks_frame += 1
+        if isinstance(cache_key, tuple) and cache_key[:1] == ("reveal",):
+            self.slider_reveal_fallbacks_frame += 1
+        else:
+            self.slider_base_fallbacks_frame += 1
+
     def render(self, screen):
         profiler = getattr(self.game, "profiler", None)
         profiler_enabled = bool(profiler and profiler.enabled)
+        self.slider_surface_fallbacks_frame = 0
+        self.slider_reveal_fallbacks_frame = 0
+        self.slider_base_fallbacks_frame = 0
 
         if self.music_started and not self.paused and not self.failed:
             self._sync_music_time_now()
@@ -4271,7 +4344,7 @@ class GameplayScene(BaseScene):
 
         if not self.music_started and self.pre_music_started_at is None:
             if batch is not None:
-                batch.flush(screen)
+                self.render_backend.flush_batch(batch)
             self._render_ready(screen)
             if self.paused:
                 self._draw_pause_overlay(screen)
@@ -4311,7 +4384,7 @@ class GameplayScene(BaseScene):
                 profiler.end("hud_render")
 
         if batch is not None:
-            batch.flush(screen)
+            self.render_backend.flush_batch(batch)
 
         # Camada transparente para permitir alpha real (fade in/out suave).
         render_state = self._prepare_render_frame_state(screen)
@@ -4874,6 +4947,18 @@ class GameplayScene(BaseScene):
             profiler.end("hitobjects_render")
             if slider_render_elapsed > 0.0:
                 profiler.add("sliders", slider_render_elapsed)
+            profiler.set_metric(
+                "slider_fallbacks",
+                self.slider_surface_fallbacks_frame
+            )
+            profiler.set_metric(
+                "slider_reveal_fallbacks",
+                self.slider_reveal_fallbacks_frame
+            )
+            profiler.set_metric(
+                "slider_base_fallbacks",
+                self.slider_base_fallbacks_frame
+            )
 
         screen.blit(
             overlay,

@@ -22,7 +22,9 @@ class FrameProfiler:
         "slider_warm",
         "slider_collect",
         "background_warm",
+        "spinner_warm",
         "hitobjects",
+        "input_judgement_latency",
         "audio",
         "render",
         "scene_render",
@@ -32,6 +34,8 @@ class FrameProfiler:
         "followpoints_render",
         "visualizer",
         "sliders",
+        "slider_render_missing_geometry",
+        "slider_surface_fallback",
         "hitobjects_render",
         "ui_draw",
         "cursor_update",
@@ -51,6 +55,7 @@ class FrameProfiler:
         self.font = None
         self.small_font = None
         self.scene_name = None
+        self.metrics = {}
 
     def _reset_scene_samples(self, scene_name):
         if self.scene_name == scene_name:
@@ -58,6 +63,7 @@ class FrameProfiler:
         self.scene_name = scene_name
         self.samples.clear()
         self.starts.clear()
+        self.metrics.clear()
         self.last_report = time.perf_counter()
 
     def toggle(self):
@@ -88,6 +94,11 @@ class FrameProfiler:
             return
         self.samples[name].append(float(milliseconds))
 
+    def set_metric(self, name, value):
+        if not self.enabled:
+            return
+        self.metrics[name] = value
+
     def end_frame(self, scene_name, fps):
         if not self.enabled:
             return
@@ -106,8 +117,13 @@ class FrameProfiler:
             if stats is None:
                 continue
             parts.append(
-                f"{name}:avg={stats['avg']:.2f} p95={stats['p95']:.2f} max={stats['max']:.2f}ms"
+                f"{name}:avg={stats['avg']:.2f} p50={stats['p50']:.2f} p95={stats['p95']:.2f} p99={stats['p99']:.2f} max={stats['max']:.2f}ms"
             )
+        if self.metrics:
+            metric_text = " ".join(
+                f"{key}={value}" for key, value in sorted(self.metrics.items())
+            )
+            parts.append(f"metrics:{metric_text}")
         print(" | ".join(parts))
 
     def stats(self, name):
@@ -115,13 +131,41 @@ class FrameProfiler:
         if not values:
             return None
         ordered = sorted(values)
+        p50_index = max(0, min(len(ordered) - 1, int(len(ordered) * 0.50)))
         p95_index = max(0, min(len(ordered) - 1, int(len(ordered) * 0.95)))
+        p99_index = max(0, min(len(ordered) - 1, int(len(ordered) * 0.99)))
         return {
             "avg": sum(values) / len(values),
+            "p50": ordered[p50_index],
             "p95": ordered[p95_index],
+            "p99": ordered[p99_index],
             "max": max(values),
             "last": values[-1]
         }
+
+    def _fit_overlay_line(self, font, line, max_width):
+        if font.size(line)[0] <= max_width:
+            return line
+        ellipsis = "..."
+        while len(line) > 4 and font.size(line + ellipsis)[0] > max_width:
+            line = line[:-1]
+        return line + ellipsis
+
+    def _metric_lines(self, font, max_width):
+        if not self.metrics:
+            return []
+        lines = []
+        current = "metrics"
+        for key, value in sorted(self.metrics.items()):
+            part = f"  {key}: {value}"
+            candidate = current + part
+            if font.size(candidate)[0] <= max_width:
+                current = candidate
+                continue
+            lines.append(current)
+            current = "metrics" + part
+        lines.append(current)
+        return lines
 
     def draw_overlay(self, screen, scene_name, fps):
         if not self.enabled:
@@ -137,11 +181,18 @@ class FrameProfiler:
             if stats is None:
                 continue
             lines.append(
-                f"{name:<12} avg {stats['avg']:5.2f}  p95 {stats['p95']:5.2f}  max {stats['max']:5.2f} ms"
+                f"{name:<12} avg {stats['avg']:5.2f}  p95 {stats['p95']:5.2f}  p99 {stats['p99']:5.2f}  max {stats['max']:5.2f} ms"
             )
+        line_height = 16
+        width = min(430, max(390, screen.get_width() - 24))
+        text_max_width = width - 20
+        lines.extend(self._metric_lines(self.small_font, text_max_width))
 
-        line_height = 18
-        width = 390
+        max_lines = max(5, (screen.get_height() - 24) // line_height)
+        if len(lines) > max_lines:
+            hidden = len(lines) - max_lines + 1
+            lines = lines[:max_lines - 1] + [f"... {hidden} more profiler rows"]
+
         height = 12 + (len(lines) * line_height)
         panel = pygame.Surface((width, height), pygame.SRCALPHA)
         panel.fill((0, 0, 0, 170))
@@ -150,7 +201,8 @@ class FrameProfiler:
         for index, line in enumerate(lines):
             font = self.font if index == 0 else self.small_font
             color = (230, 246, 255) if index == 0 else (215, 225, 235)
-            text = font.render(line, True, color)
+            fitted = self._fit_overlay_line(font, line, width - 20)
+            text = font.render(fitted, True, color)
             panel.blit(text, (10, 8 + index * line_height))
 
         screen.blit(panel, (12, 12))

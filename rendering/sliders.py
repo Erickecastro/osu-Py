@@ -416,9 +416,12 @@ class SliderRenderer:
             slider_points = self.build_points(note)
             note["scaled_slider_points"] = slider_points
 
-        cumulative, total = self.path_metrics(slider_points)
-        note["scaled_slider_cumulative"] = cumulative
-        note["scaled_slider_length"] = total
+        cumulative = note.get("scaled_slider_cumulative")
+        total = note.get("scaled_slider_length")
+        if cumulative is None or total is None:
+            cumulative, total = self.path_metrics(slider_points)
+            note["scaled_slider_cumulative"] = cumulative
+            note["scaled_slider_length"] = total
 
         geometry = self._surface_geometry(slider_points)
         if geometry is None:
@@ -516,12 +519,27 @@ class SliderRenderer:
             1,
             int(outline_radius - max(3, outline_radius * 0.11))
         )
+        if cache_key is not None:
+            recorder = getattr(self.scene, "record_slider_surface_fallback", None)
+            if recorder is not None:
+                recorder(cache_key)
+
+        profiler = getattr(getattr(self.scene, "game", None), "profiler", None)
+        profiler_enabled = bool(
+            profiler
+            and getattr(profiler, "enabled", False)
+            and cache_key is not None
+        )
+        if profiler_enabled:
+            profiler.start("slider_surface_fallback")
         slider_surface = self._render_track_surface(
             size,
             local_points,
             outline_radius,
             body_radius
         )
+        if profiler_enabled:
+            profiler.end("slider_surface_fallback")
 
         if cache_key is not None:
             self.scene.slider_surface_cache[cache_key] = (

@@ -4,26 +4,70 @@ from typing import Optional
 import pygame
 
 
+def _blit_destination_rect(surface, dest, area=None):
+    if surface is None:
+        return pygame.Rect(0, 0, 0, 0)
+
+    if area is not None:
+        try:
+            width, height = area.size
+        except AttributeError:
+            width, height = area[2], area[3]
+    else:
+        width, height = surface.get_size()
+
+    if isinstance(dest, pygame.Rect):
+        return pygame.Rect(dest.left, dest.top, width, height)
+
+    return pygame.Rect(int(dest[0]), int(dest[1]), width, height)
+
+
+def _surface_blit_visible(target, surface, dest, area=None):
+    if target is None or surface is None:
+        return False
+    return target.get_rect().colliderect(
+        _blit_destination_rect(surface, dest, area=area)
+    )
+
+
 class RenderCommandBatch:
     """Collects surface blit operations and flushes them to a target later."""
 
+    __slots__ = ("_commands", "last_culled_count")
+
     def __init__(self):
         self._commands = []
+        self.last_culled_count = 0
 
     def add_surface(self, surface, dest, area=None, alpha=None):
         if surface is None:
+            return
+        if alpha is not None and int(alpha) <= 0:
             return
         self._commands.append((surface, dest, area, alpha))
 
     def clear(self):
         self._commands.clear()
+        self.last_culled_count = 0
 
-    def flush(self, target):
-        if target is None:
-            return
+    def flush(self, target, before_blit=None):
+        count = len(self._commands)
+        if target is None or count <= 0:
+            self.clear()
+            return 0
+        drawn = 0
+        culled = 0
         for surface, dest, area, alpha in self._commands:
+            if not _surface_blit_visible(target, surface, dest, area=area):
+                culled += 1
+                continue
+            if before_blit is not None:
+                before_blit(surface)
             blit_surface_with_alpha(target, surface, dest, area=area, alpha=alpha)
-        self.clear()
+            drawn += 1
+        self._commands.clear()
+        self.last_culled_count = culled
+        return drawn
 
     def __len__(self):
         return len(self._commands)
@@ -50,15 +94,64 @@ def blit_surface_with_alpha(target, surface, dest, area=None, alpha=None):
 class RenderBackend:
     """Small rendering abstraction that keeps the gameplay code backend-agnostic."""
 
+    name = "pygame"
+    gpu_available = False
+
     def __init__(self, target_surface: Optional[pygame.Surface] = None):
         self.target_surface = target_surface
+        self._batch = RenderCommandBatch()
+        self._surface_tokens = {}
+        self._frame_surface_tokens = set()
+        self._next_surface_token = 1
+        self.surface_registry_limit = 4096
+        self.registered_surface_count = 0
+        self.last_flush_count = 0
+        self.last_unique_surface_count = 0
+        self.last_culled_count = 0
+        self.last_direct_culled_count = 0
+
+    def set_target_surface(self, target_surface: Optional[pygame.Surface]):
+        self.target_surface = target_surface
+        self._batch.clear()
+        self.begin_frame()
+
+    def begin_frame(self):
+        self._frame_surface_tokens.clear()
+        self.last_flush_count = 0
+        self.last_unique_surface_count = 0
+        self.last_culled_count = 0
+        self.last_direct_culled_count = 0
 
     def clear(self, color=(0, 0, 0, 0)):
         if self.target_surface is None:
             return
         self.target_surface.fill(color)
 
+    def _register_surface(self, surface):
+        if surface is None:
+            return 0
+        key = id(surface)
+        size = surface.get_size()
+        cached = self._surface_tokens.get(key)
+        if cached is not None and cached[1] == size:
+            return cached[0]
+
+        if len(self._surface_tokens) >= self.surface_registry_limit:
+            self._surface_tokens.clear()
+            self._next_surface_token = 1
+
+        token = self._next_surface_token
+        self._next_surface_token += 1
+        self._surface_tokens[key] = (token, size)
+        self.registered_surface_count = len(self._surface_tokens)
+        return token
+
     def blit_surface(self, surface, dest, area=None, alpha=None):
+        if not _surface_blit_visible(self.target_surface, surface, dest, area=area):
+            self.last_direct_culled_count += 1
+            self.last_culled_count += 1
+            return
+        self._register_surface(surface)
         blit_surface_with_alpha(
             self.target_surface,
             surface,
@@ -68,22 +161,42 @@ class RenderBackend:
         )
 
     def create_batch(self):
-        return RenderCommandBatch()
+        self._batch.clear()
+        return self._batch
 
     def flush_batch(self, batch):
         if batch is None:
-            return
-        batch.flush(self.target_surface)
+            self.last_flush_count = 0
+            self.last_unique_surface_count = 0
+            self.last_culled_count = 0
+            self.last_direct_culled_count = 0
+            return 0
+        self._frame_surface_tokens.clear()
+
+        def register(surface):
+            token = self._register_surface(surface)
+            if token:
+                self._frame_surface_tokens.add(token)
+
+        self.last_flush_count = batch.flush(
+            self.target_surface,
+            before_blit=register
+        )
+        self.last_unique_surface_count = len(self._frame_surface_tokens)
+        self.last_culled_count += getattr(batch, "last_culled_count", 0)
+        return self.last_flush_count
 
     def present(self):
         return None
 
 
 class PygameRenderBackend(RenderBackend):
-    pass
+    name = "pygame"
 
 
 class ModernGLRenderBackend(RenderBackend):
+    name = "moderngl"
+
     def __init__(self, target_surface: Optional[pygame.Surface] = None):
         super().__init__(target_surface)
         self._enabled = False
@@ -149,8 +262,10 @@ class ModernGLRenderBackend(RenderBackend):
                 "in_uv",
             )
             self._enabled = True
+            self.gpu_available = True
         except Exception:
             self._enabled = False
+            self.gpu_available = False
             self._ctx = None
 
     def _pack_vertices(self):

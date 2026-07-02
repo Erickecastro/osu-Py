@@ -9,6 +9,7 @@ from core.performance import (
     AUTO_FPS_MIN,
     AUTO_FPS_MULTIPLIER,
     DEBUG_PERFORMANCE,
+    FULLSCREEN_MODE,
     MAX_FRAME_DT,
     MIXER_BUFFER,
     MIXER_CHANNELS,
@@ -62,6 +63,7 @@ class Game:
         # DISPLAY
         # -------------------------
         self.fullscreen = True
+        self.window_mode = "unknown"
 
         self.create_window()
         self.display_refresh_rate = self._detect_display_refresh_rate()
@@ -182,17 +184,44 @@ class Game:
     # -------------------------
     # CREATE WINDOW
     # -------------------------
+    def _fullscreen_mode(self):
+        if FULLSCREEN_MODE in {"exclusive", "desktop", "borderless"}:
+            return FULLSCREEN_MODE
+        return "desktop"
+
+    def _desktop_size(self):
+        getter = getattr(pygame.display, "get_desktop_sizes", None)
+        if callable(getter):
+            try:
+                sizes = getter()
+            except (pygame.error, TypeError, ValueError):
+                sizes = []
+            if sizes:
+                width, height = sizes[0]
+                if width > 0 and height > 0:
+                    return int(width), int(height)
+
+        info = pygame.display.Info()
+        width = int(getattr(info, "current_w", 0) or 1280)
+        height = int(getattr(info, "current_h", 0) or 720)
+        return width, height
+
     def create_window(self):
         flags = pygame.DOUBLEBUF | pygame.HWSURFACE
 
         if self.fullscreen:
-
-            flags |= pygame.FULLSCREEN
-            size = (0, 0)
-
+            mode = self._fullscreen_mode()
+            if mode == "exclusive":
+                flags |= pygame.FULLSCREEN
+                size = (0, 0)
+                self.window_mode = "exclusive"
+            else:
+                flags |= pygame.NOFRAME
+                size = self._desktop_size()
+                self.window_mode = "borderless"
         else:
-
             size = (1280, 720)
+            self.window_mode = "windowed"
 
         try:
             self.screen = pygame.display.set_mode(
@@ -219,6 +248,7 @@ class Game:
         self.fullscreen = not self.fullscreen
 
         self.create_window()
+        self._sync_render_backend_target()
         self.display_refresh_rate = self._detect_display_refresh_rate()
         self.FPS = self._resolve_target_fps()
         self.mouse_pos = self._clamp_mouse_pos(self.mouse_pos)
@@ -276,6 +306,15 @@ class Game:
         target = int(round(refresh * AUTO_FPS_MULTIPLIER))
         return max(AUTO_FPS_MIN, min(AUTO_FPS_MAX, target))
 
+    def _sync_render_backend_target(self):
+        backend = getattr(self, "render_backend", None)
+        if backend is not None:
+            setter = getattr(backend, "set_target_surface", None)
+            if callable(setter):
+                setter(self.screen)
+            else:
+                backend.target_surface = self.screen
+
     def _notify_resize(self):
         if hasattr(self.scene_manager, "on_resize"):
             self.scene_manager.on_resize()
@@ -305,6 +344,7 @@ class Game:
             return
 
         self.WIDTH, self.HEIGHT = size
+        self._sync_render_backend_target()
         self.mouse_pos = self._clamp_mouse_pos(self.mouse_pos)
         self.ui_manager = pygame_gui.UIManager(size)
         self._notify_resize()
@@ -502,6 +542,8 @@ class Game:
             self.dt = min(MAX_FRAME_DT, elapsed_ms / 1000.0)
 
             profiler_enabled = self.profiler.enabled
+            if profiler_enabled:
+                self.profiler.add("pacer", elapsed_ms)
             if profiler_enabled:
                 self.profiler.begin_frame()
 
@@ -723,6 +765,12 @@ class Game:
                 lambda: False
             )()
         )
+        backend = getattr(self, "render_backend", None)
+        if backend is not None:
+            begin_frame = getattr(backend, "begin_frame", None)
+            if callable(begin_frame):
+                begin_frame()
+
         if clear_for_transition:
             self.screen.fill((0, 0, 0))
 
@@ -731,8 +779,17 @@ class Game:
         self.scene_manager.render(
             self.screen
         )
-        if getattr(self, "render_backend", None) is not None:
-            self.render_backend.present()
+        if backend is not None:
+            backend.present()
+            if profiler_enabled:
+                self.profiler.set_metric("backend", getattr(backend, "name", "pygame"))
+                self.profiler.set_metric("gpu", int(bool(getattr(backend, "gpu_available", False))))
+                self.profiler.set_metric("batch", getattr(backend, "last_flush_count", 0))
+                self.profiler.set_metric("surfaces", getattr(backend, "last_unique_surface_count", 0))
+                self.profiler.set_metric("culled", getattr(backend, "last_culled_count", 0))
+                self.profiler.set_metric("hz", self.display_refresh_rate or 0)
+                self.profiler.set_metric("target", self.FPS)
+                self.profiler.set_metric("mode", self.window_mode)
         if profiler_enabled:
             self.profiler.end("scene_render")
 

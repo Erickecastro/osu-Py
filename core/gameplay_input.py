@@ -37,9 +37,11 @@ class GameplayInputController:
 
         if event.key in self._hit_keys():
             self.scene.hit_keys_held.add(event.key)
+            event_tick = self.scene.event_tick(event)
             self.scene._try_hit_at(
                 self._hit_position_now(),
-                input_time=self.scene.event_music_time(event)
+                input_time=self.scene.music_time_from_tick(event_tick),
+                input_tick_ms=event_tick
             )
             return True
 
@@ -61,9 +63,11 @@ class GameplayInputController:
                 self.scene.hit_mouse_buttons_held.discard(event.button)
                 return True
             self.scene.hit_mouse_buttons_held.add(event.button)
+            event_tick = self.scene.event_tick(event)
             self.scene._try_hit_at(
                 self._hit_position_now(),
-                input_time=self.scene.event_music_time(event)
+                input_time=self.scene.music_time_from_tick(event_tick),
+                input_tick_ms=event_tick
             )
             return True
         return False

@@ -161,6 +161,7 @@ $env:PYOSU_DEBUG_PERFORMANCE="1"
 $env:PYOSU_TARGET_FPS="1000"
 $env:PYOSU_AUTO_FPS_MULTIPLIER="4.0"
 $env:PYOSU_BUSY_FRAME_PACER="1"
+$env:PYOSU_FULLSCREEN_MODE="desktop"
 py -3.12 main.py
 ```
 
@@ -172,8 +173,10 @@ py -3.12 main.py
 - `PYOSU_AUTO_FPS_MULTIPLIER`: multiplier used by the automatic refresh-rate target. The default is `4.0`.
 - `PYOSU_AUTO_FPS_MIN` / `PYOSU_AUTO_FPS_MAX`: clamps the automatic frame target. Defaults are `480` and `1200`.
 - `PYOSU_BUSY_FRAME_PACER=1`: uses `tick_busy_loop`, reducing frame-time variance at the cost of higher CPU usage.
+- `PYOSU_FULLSCREEN_MODE`: controls fullscreen presentation. The default is `desktop`/borderless, which keeps the monitor desktop refresh mode. Use `exclusive` only when you explicitly want SDL to switch display modes.
 - `PYOSU_LOW_LATENCY_RENDER=1`: enables the low-latency render path and keeps the frame pipeline lighter.
 - `PYOSU_FORCE_MODERNGL=1`: forces the optional ModernGL backend when the OpenGL context is available.
+- `PYOSU_DISABLE_MODERNGL=1`: forces the safe Pygame backend for diagnostics.
 
 ## Building the Windows Executable
 

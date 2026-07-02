@@ -6,6 +6,7 @@ TARGET_FPS = int(TARGET_FPS_OVERRIDE) if TARGET_FPS_OVERRIDE else 0
 AUTO_FPS_MULTIPLIER = float(os.environ.get("PYOSU_AUTO_FPS_MULTIPLIER", "4.0"))
 AUTO_FPS_MIN = int(os.environ.get("PYOSU_AUTO_FPS_MIN", "480"))
 AUTO_FPS_MAX = int(os.environ.get("PYOSU_AUTO_FPS_MAX", "1200"))
+FULLSCREEN_MODE = os.environ.get("PYOSU_FULLSCREEN_MODE", "desktop").strip().lower()
 USE_BUSY_FRAME_PACER = os.environ.get("PYOSU_BUSY_FRAME_PACER", "1") == "1"
 DEBUG_PERFORMANCE = os.environ.get("PYOSU_DEBUG_PERFORMANCE", "0") == "1"
 MAX_FRAME_DT = 1 / 30

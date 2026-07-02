@@ -14,15 +14,26 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Precompute initial slider geometry before active gameplay.
 - [x] Queue critical slider surfaces before music start.
 - [x] Queue critical slider reveal surfaces during the Ready/loading window.
+- [x] Keep heavy cache warmup out of active/near-visible gameplay frames.
+- [x] Keep background warmup out of active gameplay frames.
 - [ ] Remove remaining render-time geometry fallbacks after profiler confirms all slider caches are ready.
-- [ ] Add profiler counters for missed slider cache and render-time surface creation.
+- [x] Expose render-time slider geometry fallback in profiler output.
+- [x] Expose render-time slider surface fallback in profiler output.
+- [x] Add per-frame counters for missed slider cache and render-time surface creation.
+- [x] Prewarm spinner approach/rotation textures before active spinner frames.
+- [x] Smooth spinner approach-circle scale buckets without reintroducing render-time scale spikes.
+- [x] Make spinner approach-circle start larger and shrink immediately from spawn.
 - [ ] Expand object pooling for short-lived gameplay effects.
 
 ## Render Pipeline
 
 - [x] Add a backend abstraction and render command batch.
+- [x] Reuse render command batches per backend to avoid per-frame batch allocation.
 - [x] Keep Pygame blits authoritative while ModernGL parity is incomplete.
 - [ ] Convert HUD/text drawing to persistent cached surfaces everywhere.
+- [x] Add backend surface-token registry to prepare atlas/sprite batching diagnostics.
+- [x] Cull fully offscreen batched blits before they reach the active renderer.
+- [x] Cull fully offscreen direct backend blits and expose the count in profiler metrics.
 - [ ] Add sprite atlas generation for skin assets and HUD sprites.
 - [ ] Batch sprite commands by texture/atlas.
 - [ ] Move cursor, HUD, followpoints, and hitobject sprites to a GPU sprite path.
@@ -33,14 +44,22 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Try ModernGL by default when available.
 - [x] Fall back silently to Pygame when ModernGL is unavailable or unsupported.
 - [x] Support `PYOSU_DISABLE_MODERNGL=1` for diagnostics.
-- [ ] Add a settings/debug label showing active render backend.
+- [x] Add profiler/debug metrics showing active render backend, GPU availability, display Hz, FPS target, and presentation mode.
+- [x] Add profiler counters for render batch command count and backend name.
 - [ ] Add visual parity screenshots comparing Pygame and ModernGL output.
 - [ ] Enable real ModernGL sprite drawing only after destination/alpha parity is verified.
 
+## Presentation / Refresh
+
+- [x] Prefer desktop borderless fullscreen by default to avoid hidden 60 Hz exclusive-mode switches.
+- [ ] Add in-game video setting for borderless/exclusive/windowed presentation.
+- [ ] Validate detected refresh rate on 60 Hz, 80 Hz, 144 Hz, and high-refresh monitors.
+
 ## Latency and Frame-Time Validation
 
-- [ ] Track p50/p95/p99 frame time per scene.
-- [ ] Track input-to-hit judgment latency in gameplay.
+- [x] Track p50/p95/p99 frame time per scene.
+- [x] Track frame pacer interval so refresh/pacing issues are visible in profiler output.
+- [x] Track input-to-hit judgment latency in gameplay.
 - [ ] Validate high polling-rate mouse behavior without event queue buildup.
 - [ ] Validate tablet absolute input without sensitivity or smoothing interference.
 - [ ] Add a repeatable stress beatmap/profile scenario for complex sliders and dense streams.
