@@ -1,4 +1,22 @@
 import csv
+import re
+
+
+def parse_file_format_version(lines):
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = re.match(r"osu file format v(\d+)", stripped, re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return 14
+        if stripped.startswith("["):
+            break
+
+    return 14
 
 
 def read_osu_lines(osu_file):

@@ -14,8 +14,10 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Precompute initial slider geometry before active gameplay.
 - [x] Queue critical slider surfaces before music start.
 - [x] Queue critical slider reveal surfaces during the Ready/loading window.
+- [x] Increase critical slider reveal warmup budget before music start.
 - [x] Keep heavy cache warmup out of active/near-visible gameplay frames.
 - [x] Keep background warmup out of active gameplay frames.
+- [x] Warm only the active gameplay background size during scene startup.
 - [ ] Remove remaining render-time geometry fallbacks after profiler confirms all slider caches are ready.
 - [x] Expose render-time slider geometry fallback in profiler output.
 - [x] Expose render-time slider surface fallback in profiler output.
@@ -24,6 +26,15 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Smooth spinner approach-circle scale buckets without reintroducing render-time scale spikes.
 - [x] Make spinner approach-circle start larger and shrink immediately from spawn.
 - [ ] Expand object pooling for short-lived gameplay effects.
+
+## Gameplay Visual Fidelity
+
+- [x] Parse and preserve `.osu` file format version for stacking compatibility.
+- [x] Replace simplified object stacking with osu!lazer-style stack heights.
+- [x] Support slider-end negative stack offsets for overlapping objects.
+- [x] Enlarge approach-circle spawn radius while preserving hit-time contact.
+- [x] Add lightweight score count-up and combo pop animations.
+- [ ] Visually compare stacked notes and approach-circle size against osu!lazer.
 
 ## Render Pipeline
 

@@ -3,6 +3,7 @@ import unittest
 from core.osu_hitobjects import parse_hitobjects_section
 from core.osu_sections import (
     parse_difficulty_section,
+    parse_file_format_version,
     parse_general_section,
     parse_metadata_section,
     parse_timing_points_section,
@@ -12,6 +13,8 @@ from core.osu_sections import (
 class OsuParserTests(unittest.TestCase):
     def test_sections_and_hitobjects_parse_core_fields(self):
         lines = [
+            "osu file format v14\n",
+            "\n",
             "[General]\n",
             "AudioFilename: audio.mp3\n",
             "AudioLeadIn: 250\n",
@@ -46,9 +49,11 @@ class OsuParserTests(unittest.TestCase):
         general = parse_general_section(lines)
         metadata = parse_metadata_section(lines)
         difficulty = parse_difficulty_section(lines)
+        format_version = parse_file_format_version(lines)
         timing_points = parse_timing_points_section(lines)
         notes = parse_hitobjects_section(lines, fake_slider_path)
 
+        self.assertEqual(format_version, 14)
         self.assertEqual(general["AudioFilename"], "audio.mp3")
         self.assertEqual(general["AudioLeadIn"], 250)
         self.assertEqual(metadata["Title"], "Test Song")

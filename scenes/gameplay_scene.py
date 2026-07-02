@@ -68,7 +68,9 @@ class GameplayScene(BaseScene):
     HITOBJECT_VISUAL_ALPHA_SCALE = 0.82
     HITCIRCLE_ALPHA_BOOST = 1.23
     FOLLOWPOINT_THICKNESS_SCALE = 0.85
-    HITOBJECT_FADE_IN_DURATION_SCALE = 0.50
+    HITOBJECT_FADE_IN_DURATION_SCALE = 0.42
+    APPROACH_RADIUS_EXTRA_SCALE = 3.35
+    STACK_DISTANCE_OSU = 3.0
 
     MAX_SLIDER_SURFACE_SIZE = 4096
     MAX_SLIDER_POINTS = 4000
@@ -170,6 +172,15 @@ class GameplayScene(BaseScene):
             54.4 - (4.48 * self.cs)
         )
         self.object_alpha_scale = self.GAMEPLAY_OBJECT_ALPHA_SCALE
+        self.slider_multiplier = (
+            self.beatmap["difficulty"].get(
+                "SliderMultiplier",
+                1.4
+            )
+        )
+        self.timing_points = (
+            self.beatmap.get("timing_points", [])
+        )
 
         if self.ar < 5:
 
@@ -273,9 +284,6 @@ class GameplayScene(BaseScene):
             self.playfield_height * self.scale
         )
         self.overlay_dirty_rect = self._build_overlay_dirty_rect()
-        self._precompute_note_positions()
-        self._apply_stack_offsets()
-        self._precompute_stream_readability()
 
         self.music_path = find_audio_file(
             self.beatmap["path"],
@@ -286,16 +294,6 @@ class GameplayScene(BaseScene):
         self._load_background_surface()
         # Warmup background early (during initialization)
         self._warm_background_surface()
-
-        self.slider_multiplier = (
-            self.beatmap["difficulty"].get(
-                "SliderMultiplier",
-                1.4
-            )
-        )
-        self.timing_points = (
-            self.beatmap.get("timing_points", [])
-        )
 
         self.hit_window_300 = max(0.0, 79.5 - (6.0 * self.od))
         self.hit_window_100 = max(0.0, 139.5 - (8.0 * self.od))
@@ -327,6 +325,9 @@ class GameplayScene(BaseScene):
             self.timing_points,
             self.slider_multiplier
         )
+        self._precompute_note_positions()
+        self._apply_stack_offsets()
+        self._precompute_stream_readability()
         self.first_object_visual_time = min(
             (
                 note.get("start_time", note["time"] - self.approach_time)
@@ -369,8 +370,8 @@ class GameplayScene(BaseScene):
             max_items=160
         )
         self._warm_slider_reveal_cache(
-            max_ms=3.2,
-            max_items=42,
+            max_ms=5.0,
+            max_items=72,
             horizon_ms=self.initial_slider_cache_horizon_ms
         )
 
@@ -1281,7 +1282,7 @@ class GameplayScene(BaseScene):
 
         return min(
             1.0,
-            0.14 + (0.86 * self._smootherstep(progress))
+            0.20 + (0.80 * self._smootherstep(progress))
         )
 
     def _note_alpha(self, note):
@@ -2999,7 +3000,7 @@ class GameplayScene(BaseScene):
             min_radius = int(self._approach_contact_radius())
             max_radius = int(
                 self._approach_contact_radius()
-                + (self.note_visual_radius * 2.82)
+                + (self.note_visual_radius * self.APPROACH_RADIUS_EXTRA_SCALE)
             )
             min_diameter = self._quantized_diameter(min_radius * 2, quantum=4)
             max_diameter = self._quantized_diameter(max_radius * 2, quantum=4)
@@ -3688,8 +3689,6 @@ class GameplayScene(BaseScene):
             return sizes
 
         sizes.append((width, height))
-        sizes.append((max(1, int(width * 0.75)), max(1, int(height * 0.75))))
-        sizes.append((max(1, int(width * 0.5)), max(1, int(height * 0.5))))
         return sizes
 
     def _scaled_background(self, screen_size):
@@ -3952,8 +3951,8 @@ class GameplayScene(BaseScene):
                     horizon_ms=self.approach_time + 9000
                 )
                 self._warm_slider_reveal_cache(
-                    max_ms=3.2,
-                    max_items=28,
+                    max_ms=5.0,
+                    max_items=54,
                     horizon_ms=self.approach_time + 9000
                 )
             if ready_elapsed >= 650:
@@ -4003,8 +4002,8 @@ class GameplayScene(BaseScene):
                     horizon_ms=critical_slider_horizon
                 )
                 self._warm_slider_reveal_cache(
-                    max_ms=5.5,
-                    max_items=48,
+                    max_ms=8.0,
+                    max_items=86,
                     horizon_ms=critical_slider_horizon
                 )
                 self._warm_skin_image_cache(max_ms=2, max_items=16)
@@ -4037,8 +4036,8 @@ class GameplayScene(BaseScene):
                             horizon_ms=self.approach_time + 11000
                         )
                         self._warm_slider_reveal_cache(
-                            max_ms=3.8,
-                            max_items=32,
+                            max_ms=6.0,
+                            max_items=64,
                             horizon_ms=self.approach_time + 11000
                         )
                         self._warm_followpoint_connections(max_ms=2, max_items=96)
@@ -4183,53 +4182,164 @@ class GameplayScene(BaseScene):
                 self.object_offset_y + (note["y"] * self.object_scale)
             )
 
-    def _apply_stack_offsets(self):
-        stackable = {"circle", "slider"}
-        stack_leniency = self.beatmap["difficulty"].get("StackLeniency", 0.7)
-        time_limit = self.approach_time * stack_leniency
-        # Stack offset per stack is circle radius / 10, then scaled to screen size
-        circle_radius_osu = 54.4 - (4.48 * self.cs)
-        offset_step_unscaled = circle_radius_osu / 10
-        offset_step = offset_step_unscaled * self.scale
-        distance_limit = 3 * self.scale  # STACK_DISTANCE = 3 osu! pixels, scaled
-        
-        # First pass: calculate stack counts in reverse order like peppy's algorithm
-        for index in reversed(range(len(self.notes))):
-            note = self.notes[index]
+    def _stackable_note(self, note):
+        return note.get("type") in {"circle", "slider"}
+
+    def _note_osu_pos(self, note):
+        return float(note.get("x", 0.0)), float(note.get("y", 0.0))
+
+    def _slider_end_osu_pos(self, note):
+        points = note.get("curve_points") or ()
+        if points:
+            point = points[-1]
+            return float(point.get("x", note["x"])), float(point.get("y", note["y"]))
+        return self._note_osu_pos(note)
+
+    def _note_end_time_for_stack(self, note):
+        if note.get("type") == "slider":
+            return float(
+                note.get(
+                    "time",
+                    0.0
+                )
+                + note.get("slider_total_duration", 0.0)
+            )
+        return float(note.get("end_time", note.get("time", 0.0)))
+
+    def _osu_distance_sq(self, a, b):
+        dx = float(a[0]) - float(b[0])
+        dy = float(a[1]) - float(b[1])
+        return (dx * dx) + (dy * dy)
+
+    def _reset_stack_offsets(self):
+        for note in self.notes:
             note["stack_count"] = 0
+            note["stack_height"] = 0
             note["stack_offset"] = (0.0, 0.0)
-            if note["type"] not in stackable:
+            note["scaled_pos"] = (
+                self.object_offset_x + (note["x"] * self.object_scale),
+                self.object_offset_y + (note["y"] * self.object_scale)
+            )
+
+    def _apply_stack_offsets(self):
+        self._reset_stack_offsets()
+
+        format_version = int(self.beatmap.get("format_version", 14) or 14)
+        if format_version < 6:
+            self._apply_legacy_stack_heights()
+        else:
+            self._apply_lazer_stack_heights()
+
+        circle_radius_osu = 54.4 - (4.48 * self.cs)
+        offset_step = (circle_radius_osu / 10.0) * self.scale
+        for note in self.notes:
+            if not self._stackable_note(note):
                 continue
 
-            lookback = index - 1
-            while lookback >= 0:
-                previous = self.notes[lookback]
-                if note["time"] - previous["time"] > time_limit:
-                    break
-                if previous["type"] in stackable:
-                    # Calculate distance in osu! coordinates (not scaled)
-                    dx_osu = note["x"] - previous["x"]
-                    dy_osu = note["y"] - previous["y"]
-                    distance_osu = (dx_osu ** 2 + dy_osu ** 2) ** 0.5
-                    if distance_osu <= 3:  # STACK_DISTANCE = 3 osu! pixels
-                        previous["stack_count"] = note["stack_count"] + 1
-                        note = previous
-                lookback -= 1
-        
-        # Second pass: apply offsets
-        for note in self.notes:
-            if note["type"] not in stackable or note["stack_count"] <= 0:
+            stack_height = int(note.get("stack_height", note.get("stack_count", 0)))
+            note["stack_count"] = stack_height
+            if stack_height == 0:
                 continue
-            
-            base_x, base_y = note["scaled_pos"]
-            stack_count = note["stack_count"]
-            # Stack in osu! is (-StackOffset, -StackOffset) direction
-            shift = offset_step * stack_count
+
+            shift = offset_step * stack_height
             note["stack_offset"] = (-shift, -shift)
+            base_x = self.object_offset_x + (note["x"] * self.object_scale)
+            base_y = self.object_offset_y + (note["y"] * self.object_scale)
             note["scaled_pos"] = (
                 base_x - shift,
                 base_y - shift
             )
+
+    def _apply_lazer_stack_heights(self):
+        stack_leniency = self.beatmap["difficulty"].get("StackLeniency", 0.7)
+        time_limit = float(self.approach_time) * float(stack_leniency)
+        distance_limit_sq = self.STACK_DISTANCE_OSU * self.STACK_DISTANCE_OSU
+
+        for i in range(len(self.notes) - 1, -1, -1):
+            object_i = self.notes[i]
+            if (
+                not self._stackable_note(object_i)
+                or object_i.get("stack_height", 0) != 0
+            ):
+                continue
+
+            n = i
+            j = i - 1
+            while j >= 0:
+                object_j = self.notes[j]
+                if object_i["time"] - self._note_end_time_for_stack(object_j) > time_limit:
+                    break
+
+                if not self._stackable_note(object_j):
+                    j -= 1
+                    continue
+
+                object_i_pos = self._note_osu_pos(object_i)
+                object_j_pos = self._note_osu_pos(object_j)
+
+                if (
+                    object_j.get("type") == "slider"
+                    and self._osu_distance_sq(
+                        self._slider_end_osu_pos(object_j),
+                        object_i_pos
+                    ) < distance_limit_sq
+                ):
+                    offset = (
+                        int(object_i.get("stack_height", 0))
+                        - int(object_j.get("stack_height", 0))
+                        + 1
+                    )
+                    slider_end = self._slider_end_osu_pos(object_j)
+                    for k in range(j + 1, n + 1):
+                        object_k = self.notes[k]
+                        if (
+                            self._stackable_note(object_k)
+                            and self._osu_distance_sq(
+                                slider_end,
+                                self._note_osu_pos(object_k)
+                            ) < distance_limit_sq
+                        ):
+                            object_k["stack_height"] = (
+                                int(object_k.get("stack_height", 0)) - offset
+                            )
+                    n = j
+                    object_i = object_j
+                    j -= 1
+                    continue
+
+                if self._osu_distance_sq(object_j_pos, object_i_pos) < distance_limit_sq:
+                    object_j["stack_height"] = int(object_i.get("stack_height", 0)) + 1
+                    object_i = object_j
+
+                j -= 1
+
+    def _apply_legacy_stack_heights(self):
+        stack_leniency = self.beatmap["difficulty"].get("StackLeniency", 0.7)
+        time_limit = float(self.approach_time) * float(stack_leniency)
+        distance_limit_sq = self.STACK_DISTANCE_OSU * self.STACK_DISTANCE_OSU
+
+        for i, object_i in enumerate(self.notes):
+            if (
+                not self._stackable_note(object_i)
+                or object_i.get("stack_height", 0) != 0
+            ):
+                continue
+
+            for j in range(i + 1, len(self.notes)):
+                object_j = self.notes[j]
+                if object_j["time"] - self._note_end_time_for_stack(object_i) > time_limit:
+                    break
+                if not self._stackable_note(object_j):
+                    continue
+
+                if (
+                    self._osu_distance_sq(
+                        self._note_osu_pos(object_i),
+                        self._note_osu_pos(object_j)
+                    ) < distance_limit_sq
+                ):
+                    object_j["stack_height"] = int(object_i.get("stack_height", 0)) + 1
+                    object_i = object_j
 
     def _precompute_stream_readability(self):
         stackable = {"circle", "slider"}
@@ -4485,7 +4595,7 @@ class GameplayScene(BaseScene):
                 + (
                     progress
                     * scaled_hit_radius
-                    * 2.82
+                    * self.APPROACH_RADIUS_EXTRA_SCALE
                 )
             )
 

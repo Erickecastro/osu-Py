@@ -10,6 +10,58 @@ from scenes.gameplay_scene import GameplayScene
 
 
 class TimingAndObjectTests(unittest.TestCase):
+    def _stack_scene(self, notes, format_version=14):
+        scene = object.__new__(GameplayScene)
+        scene.notes = notes
+        scene.beatmap = {
+            "format_version": format_version,
+            "difficulty": {
+                "StackLeniency": 0.7,
+            }
+        }
+        scene.approach_time = 600.0
+        scene.cs = 4.0
+        scene.scale = 1.0
+        scene.object_scale = 1.0
+        scene.object_offset_x = 0.0
+        scene.object_offset_y = 0.0
+        scene._precompute_note_positions()
+        scene._apply_stack_offsets()
+        return scene
+
+    def test_lazer_stack_offsets_same_position_notes(self):
+        notes = [
+            {"type": "circle", "x": 256, "y": 192, "time": 1000, "end_time": 1000},
+            {"type": "circle", "x": 256, "y": 192, "time": 1100, "end_time": 1100},
+            {"type": "circle", "x": 256, "y": 192, "time": 1200, "end_time": 1200},
+        ]
+
+        self._stack_scene(notes)
+
+        self.assertEqual([note["stack_height"] for note in notes], [2, 1, 0])
+        self.assertLess(notes[0]["scaled_pos"][0], notes[1]["scaled_pos"][0])
+        self.assertLess(notes[1]["scaled_pos"][0], notes[2]["scaled_pos"][0])
+
+    def test_lazer_stack_offsets_slider_end_negative_stack(self):
+        notes = [
+            {
+                "type": "slider",
+                "x": 100,
+                "y": 100,
+                "time": 1000,
+                "end_time": 2000,
+                "slider_total_duration": 1000,
+                "curve_points": [{"x": 100, "y": 100}, {"x": 200, "y": 100}],
+            },
+            {"type": "circle", "x": 200, "y": 100, "time": 1500, "end_time": 1500},
+        ]
+
+        self._stack_scene(notes)
+
+        self.assertEqual(notes[0]["stack_height"], 0)
+        self.assertEqual(notes[1]["stack_height"], -1)
+        self.assertGreater(notes[1]["scaled_pos"][0], notes[1]["x"])
+
     def test_inherited_timing_controls_slider_velocity(self):
         timing_points = [
             {"time": 0.0, "ms_per_beat": 500.0, "uninherited": 1, "effects": 0},

@@ -18,6 +18,14 @@ class GameplayHUDRenderer:
         self.fade_surface = None
         self.fade_surface_size = None
         self._hud_surface_cache = {}
+        self.display_score = 0.0
+        self.score_anim_start_value = 0.0
+        self.score_anim_target = 0
+        self.score_anim_start_time = 0.0
+        self.score_anim_duration = 160.0
+        self.combo_anim_value = None
+        self.combo_anim_start_time = 0.0
+        self.combo_pop_duration = 140.0
 
     def _load_health_bar_image(self):
         return load_image("scorebar-colour.png", "HP")
@@ -55,6 +63,56 @@ class GameplayHUDRenderer:
             surface = surface.convert_alpha()
         self.dynamic_text_cache[slot] = (key, surface)
         return surface
+
+    def _clamp01(self, value):
+        return max(0.0, min(1.0, float(value)))
+
+    def _ease_out_quart(self, value):
+        value = self._clamp01(value)
+        return 1.0 - ((1.0 - value) ** 4)
+
+    def _animated_score(self, score, current_time):
+        score = int(score)
+        now = float(current_time)
+        if score != self.score_anim_target:
+            self.score_anim_start_value = float(self.display_score)
+            self.score_anim_target = score
+            self.score_anim_start_time = now
+
+        progress = self._ease_out_quart(
+            (now - self.score_anim_start_time)
+            / max(1.0, self.score_anim_duration)
+        )
+        self.display_score = (
+            self.score_anim_start_value
+            + ((self.score_anim_target - self.score_anim_start_value) * progress)
+        )
+        if progress >= 1.0:
+            self.display_score = float(self.score_anim_target)
+
+        return int(round(self.display_score))
+
+    def _combo_scale(self, combo, current_time):
+        combo = int(combo)
+        now = float(current_time)
+        if self.combo_anim_value is None:
+            self.combo_anim_value = combo
+            self.combo_anim_start_time = now
+            return 1.0
+
+        if combo != self.combo_anim_value:
+            if combo > self.combo_anim_value:
+                self.combo_anim_start_time = now
+            self.combo_anim_value = combo
+
+        progress = self._clamp01(
+            (now - self.combo_anim_start_time)
+            / max(1.0, self.combo_pop_duration)
+        )
+        if combo <= 0 or progress >= 1.0:
+            return 1.0
+
+        return 1.0 + (0.18 * (1.0 - self._ease_out_quart(progress)))
 
     def draw(
         self,
@@ -131,9 +189,12 @@ class GameplayHUDRenderer:
         hit_window_50=150,
         batch=None,
     ):
+        display_score = self._animated_score(score, current_time)
+        combo_scale = self._combo_scale(combo, current_time)
+
         score_text = self.dynamic_text_surface(
             "score",
-            f"{score:08d}",
+            f"{display_score:08d}",
             (255, 255, 255)
         )
         accuracy_text = self.dynamic_text_surface(
@@ -146,51 +207,38 @@ class GameplayHUDRenderer:
             f"{combo}x",
             (255, 255, 255)
         )
+        combo_draw_surface = combo_text
+        if combo_scale > 1.001:
+            scaled_size = (
+                max(1, int(round(combo_text.get_width() * combo_scale))),
+                max(1, int(round(combo_text.get_height() * combo_scale)))
+            )
+            combo_draw_surface = pygame.transform.smoothscale(
+                combo_text,
+                scaled_size
+            )
+
+        score_pos = (
+            screen.get_width() - score_text.get_width() - 20,
+            20
+        )
+        accuracy_pos = (
+            screen.get_width() - accuracy_text.get_width() - 20,
+            60
+        )
+        combo_pos = (
+            20,
+            screen.get_height() - combo_draw_surface.get_height() - 20
+        )
 
         if batch is not None:
-            batch.add_surface(
-                score_text,
-                (
-                    screen.get_width() - score_text.get_width() - 20,
-                    20
-                )
-            )
-            batch.add_surface(
-                accuracy_text,
-                (
-                    screen.get_width() - accuracy_text.get_width() - 20,
-                    60
-                )
-            )
-            batch.add_surface(
-                combo_text,
-                (
-                    20,
-                    screen.get_height() - combo_text.get_height() - 20
-                )
-            )
+            batch.add_surface(score_text, score_pos)
+            batch.add_surface(accuracy_text, accuracy_pos)
+            batch.add_surface(combo_draw_surface, combo_pos)
         else:
-            screen.blit(
-                score_text,
-                (
-                    screen.get_width() - score_text.get_width() - 20,
-                    20
-                )
-            )
-            screen.blit(
-                accuracy_text,
-                (
-                    screen.get_width() - accuracy_text.get_width() - 20,
-                    60
-                )
-            )
-            screen.blit(
-                combo_text,
-                (
-                    20,
-                    screen.get_height() - combo_text.get_height() - 20
-                )
-            )
+            screen.blit(score_text, score_pos)
+            screen.blit(accuracy_text, accuracy_pos)
+            screen.blit(combo_draw_surface, combo_pos)
 
         self.draw_health_bar(screen, health, batch=batch)
         self.draw_hit_error_bar(
