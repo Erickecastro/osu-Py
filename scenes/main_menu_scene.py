@@ -1148,8 +1148,13 @@ class MainMenuScene(BaseScene):
         if self.music_paused:
             return self.music_paused_at_ms
 
-        music_pos = pygame.mixer.music.get_pos()
-        if music_pos < 0:
+        try:
+            from core.audio import get_playback_time_ms
+            music_pos = get_playback_time_ms()
+        except Exception:
+            music_pos = pygame.mixer.music.get_pos()
+
+        if music_pos is None or music_pos < 0:
             return pygame.time.get_ticks() - self.music_started_ticks
         return music_pos
 

@@ -304,17 +304,15 @@ class ModernGLRenderBackend(RenderBackend):
                 vertex_shader=vertex_shader,
                 fragment_shader=fragment_shader,
             )
-            self._vbo = self._ctx.buffer(
-                self._pack_vertices()
-            )
-            self._vao = self._ctx.simple_vertex_array(
-                self._program,
-                self._vbo,
-                "in_position",
-                "in_uv",
-            )
+            # dynamic vbo will be created on demand; create an empty buffer reserve
+            self._vbo = self._ctx.buffer(reserve=4 * 1024)
+            # vao will be created per-draw or reused when possible
+            self._vao = None
             self._enabled = True
             self.gpu_available = True
+            self._textures = {}
+            # keep module reference for enum/consts
+            self._moderngl = moderngl
         except Exception:
             self._enabled = False
             self.gpu_available = False
@@ -328,12 +326,102 @@ class ModernGLRenderBackend(RenderBackend):
             1.0, 1.0, 1.0, 1.0,
         ]
 
+    def _surface_to_texture(self, surface):
+        if self._ctx is None or surface is None:
+            return None
+        key = id(surface)
+        cached = self._textures.get(key)
+        w, h = surface.get_size()
+        if cached is not None:
+            tex, tw, th = cached
+            if tw == w and th == h:
+                return tex
+
+        try:
+            # Extract raw RGBA data from pygame surface
+            data = pygame.image.tostring(surface, "RGBA", False)
+            tex = self._ctx.texture((w, h), 4, data)
+            try:
+                tex.filter = (self._moderngl.LINEAR, self._moderngl.LINEAR)
+            except Exception:
+                pass
+            self._textures[key] = (tex, w, h)
+            return tex
+        except Exception:
+            return None
+
     def blit_surface(self, surface, dest, area=None, alpha=None):
-        # ModernGL is initialized by default as a capability probe and future
-        # upload path, but pygame blits remain authoritative until the sprite
-        # pipeline can draw destinations/areas with exact parity. This keeps the
-        # renderer opt-in-safe without changing gameplay visuals.
-        return super().blit_surface(surface, dest, area=area, alpha=alpha)
+        if not self._enabled or self._ctx is None:
+            return super().blit_surface(surface, dest, area=area, alpha=alpha)
+
+        # Try to draw via ModernGL. Fallback to pygame on any failure.
+        try:
+            screen_w, screen_h = self.target_surface.get_size()
+
+            # resolve dest rect and size
+            if isinstance(dest, pygame.Rect):
+                x, y = dest.left, dest.top
+            else:
+                x, y = int(dest[0]), int(dest[1])
+
+            # area cropping
+            if area is not None:
+                try:
+                    ax, ay, aw, ah = area.x, area.y, area.width, area.height
+                except Exception:
+                    ax, ay, aw, ah = area[0], area[1], area[2], area[3]
+                sub_surface = surface.subsurface((ax, ay, aw, ah)).copy()
+                draw_w, draw_h = aw, ah
+            else:
+                sub_surface = surface
+                draw_w, draw_h = surface.get_size()
+
+            tex = self._surface_to_texture(sub_surface)
+            if tex is None:
+                return super().blit_surface(surface, dest, area=area, alpha=alpha)
+
+            # compute normalized device coordinates
+            x0 = (x / screen_w) * 2.0 - 1.0
+            y0 = 1.0 - (y / screen_h) * 2.0
+            x1 = ((x + draw_w) / screen_w) * 2.0 - 1.0
+            y1 = 1.0 - ((y + draw_h) / screen_h) * 2.0
+
+            # UVs
+            u0, v0 = 0.0, 0.0
+            u1, v1 = 1.0, 1.0
+
+            # vertex order for triangle strip: (x0,y0),(x1,y0),(x0,y1),(x1,y1)
+            import struct
+            verts = struct.pack(
+                "ffffffff",
+                x0, y0, u0, v0,
+                x1, y0, u1, v0,
+                x0, y1, u0, v1,
+                x1, y1, u1, v1,
+            )
+
+            # update vbo and vao
+            if len(verts) > self._vbo.size:
+                self._vbo.orphan(len(verts))
+            self._vbo.write(verts)
+            self._vao = self._ctx.simple_vertex_array(
+                self._program,
+                self._vbo,
+                "in_position",
+                "in_uv",
+            )
+
+            tex.use(location=0)
+            try:
+                self._program["sampler"].value = 0
+            except Exception:
+                pass
+
+            self._vao.render(mode=self._ctx.TRIANGLE_STRIP)
+            self._gpu_commands_submitted = True
+            return
+        except Exception:
+            return super().blit_surface(surface, dest, area=area, alpha=alpha)
 
     def present(self):
         if (

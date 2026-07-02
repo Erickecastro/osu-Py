@@ -11,7 +11,8 @@ from core.audio import (
     find_audio_file,
     get_last_start_offset_ms,
     preload_music,
-    start_music
+    start_music,
+    get_playback_time_ms
 )
 from core.assets import asset_path, load_image
 from core.fonts import rounded_font
@@ -250,7 +251,7 @@ class GameplayScene(BaseScene):
                 self.slider_path_radius
             ) + 16
         )
-        
+
         # Precompute values that only change on resize
         self.approach_contact_padding = max(3.0, self.scaled_radius * 0.055)
         self.approach_contact_radius = (self.note_visual_radius * 1.12) + self.approach_contact_padding
@@ -399,7 +400,7 @@ class GameplayScene(BaseScene):
         self.surface_precache_jobs = self._build_gameplay_surface_precache_jobs()
         self.surface_precache_index = 0
         self.surface_precache_complete = not self.surface_precache_jobs
-        
+
         self.miss_indicators = []
         self.hit_result_indicators = []
         self.hit_error_markers = []
@@ -597,7 +598,7 @@ class GameplayScene(BaseScene):
         self.usable_height = self.playfield_height * self.scale
         self.object_scale = self.scale
         self.object_offset_x = self.offset_x
-        
+
         # Precompute values that only change on resize
         self.approach_contact_padding = max(3.0, self.scaled_radius * 0.055)
         self.approach_contact_radius = (self.note_visual_radius * 1.12) + self.approach_contact_padding
@@ -1008,7 +1009,16 @@ class GameplayScene(BaseScene):
         if not self.music_started:
             return None
 
-        mixer_pos = pygame.mixer.music.get_pos()
+        # Prefer playback clock from core.audio if available (higher-resolution)
+        try:
+            mixer_pos = get_playback_time_ms()
+        except Exception:
+            mixer_pos = None
+
+        if mixer_pos is None:
+            # fallback to pygame mixer position if available
+            mixer_pos = pygame.mixer.music.get_pos()
+
         if mixer_pos is None or mixer_pos < 0:
             return None
 
@@ -1820,7 +1830,7 @@ class GameplayScene(BaseScene):
 
         # Calculate diameter without aggressive quantization for better smoothness
         diameter = max(1, int(round(radius * 2)))
-        
+
         # NEW cache key to invalidate old caches!
         key = (id(image), diameter, "v2_high_quality_approach")
         cached = self.image_surface_cache.get(key)
@@ -2525,7 +2535,7 @@ class GameplayScene(BaseScene):
             state,
             current_reason
         )
-        
+
         # If already missed but player comes back, reset to allow continuing
         if not outside and note.get("slider_follow_missed"):
             note["slider_follow_missed"] = False
@@ -3723,7 +3733,8 @@ class GameplayScene(BaseScene):
         )
 
         from core.assets import scale_image_high_quality
-        scaled = scale_image_high_quality(source, target_size).convert()
+        # keep alpha and pixel fidelity by using convert_alpha()
+        scaled = scale_image_high_quality(source, target_size).convert_alpha()
         position = (
             (screen_w - target_size[0]) // 2,
             (screen_h - target_size[1]) // 2

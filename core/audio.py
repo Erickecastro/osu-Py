@@ -5,6 +5,8 @@ import pygame
 
 _LOADED_MUSIC_PATH = None
 _LAST_START_OFFSET_MS = 0
+_PLAYBACK_START_TICKS = None
+_MUSIC_PLAYING = False
 
 SOUND_EFFECT_NAME_PARTS = (
     "hitnormal",
@@ -70,16 +72,36 @@ def mark_music_loaded(music_path):
     global _LOADED_MUSIC_PATH, _LAST_START_OFFSET_MS
     _LOADED_MUSIC_PATH = _normalise_music_path(music_path)
     _LAST_START_OFFSET_MS = 0
+    global _PLAYBACK_START_TICKS, _MUSIC_PLAYING
+    _PLAYBACK_START_TICKS = None
+    _MUSIC_PLAYING = False
 
 
 def clear_loaded_music():
     global _LOADED_MUSIC_PATH, _LAST_START_OFFSET_MS
     _LOADED_MUSIC_PATH = None
     _LAST_START_OFFSET_MS = 0
+    global _PLAYBACK_START_TICKS, _MUSIC_PLAYING
+    _PLAYBACK_START_TICKS = None
+    _MUSIC_PLAYING = False
 
 
 def get_last_start_offset_ms():
     return _LAST_START_OFFSET_MS
+
+
+def get_playback_time_ms():
+    """Return the playback time in milliseconds based on a high-resolution tick clock.
+    Falls back to None if music isn't playing or not started.
+    """
+    global _PLAYBACK_START_TICKS, _MUSIC_PLAYING
+    if not _MUSIC_PLAYING or _PLAYBACK_START_TICKS is None:
+        return None
+    try:
+        import pygame
+        return int(pygame.time.get_ticks() - _PLAYBACK_START_TICKS)
+    except Exception:
+        return None
 
 
 def preload_music(music_path):
@@ -126,6 +148,13 @@ def start_music(music_path, start_ms=0):
             actual_start_ms = 0
             pygame.mixer.music.play()
         _LAST_START_OFFSET_MS = actual_start_ms
+        # record playback start tick for a high-resolution clock reference
+        try:
+            _PLAYBACK_START_TICKS = pygame.time.get_ticks() - actual_start_ms
+            _MUSIC_PLAYING = True
+        except Exception:
+            _PLAYBACK_START_TICKS = None
+            _MUSIC_PLAYING = False
         return pygame.time.get_ticks() - actual_start_ms
     except Exception as exc:
         _LOADED_MUSIC_PATH = None
