@@ -27,6 +27,7 @@ ACTIVE_SKIN_DIR = _resolve_env_path(
 )
 
 _IMAGE_CACHE = {}
+_ALPHA_BLEED_CACHE = {}
 
 _STARTUP_PRELOADS = (
     ("cursor.png", "cursor"),
@@ -82,8 +83,10 @@ def scale_image_high_quality(image, target_size):
     if image.get_width() == target_w and image.get_height() == target_h:
         return image
     
-    # First ensure we're working with an alpha surface for best results
-    scaled = image.convert_alpha()
+    # First ensure we're working with an alpha surface for best results.
+    # Fill transparent edge RGB in-memory before scaling so smoothscale cannot
+    # bleed hidden dark/bright pixels into visible sprite borders.
+    scaled = _alpha_bleed_source(image)
     current_w, current_h = scaled.get_size()
     
     # Multi-step scaling approach (always use power-of-2 steps for quality)
@@ -104,7 +107,10 @@ def scale_image_high_quality(image, target_size):
             next_h = max(int(current_h * 0.8), target_h)
         
         # Use smoothscale for the best possible quality
-        scaled = pygame.transform.smoothscale(scaled, (next_w, next_h))
+        scaled = pygame.transform.smoothscale(
+            scaled,
+            (next_w, next_h)
+        ).convert_alpha()
         current_w, current_h = next_w, next_h
         
         # Break if we've reached the target
@@ -112,6 +118,74 @@ def scale_image_high_quality(image, target_size):
             break
             
     return scaled
+
+
+def _alpha_bleed_source(image):
+    if image is None:
+        return None
+
+    size = image.get_size()
+    key = (id(image), size)
+    cached = _ALPHA_BLEED_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    try:
+        source = image.convert_alpha().copy()
+    except pygame.error:
+        source = image.copy()
+
+    width, height = size
+    if width <= 0 or height <= 0:
+        _ALPHA_BLEED_CACHE[key] = source
+        return source
+
+    source.lock()
+    try:
+        for _ in range(4):
+            updates = []
+            for y in range(height):
+                for x in range(width):
+                    pixel = source.get_at((x, y))
+                    if pixel.a != 0:
+                        continue
+
+                    red = green = blue = count = 0
+                    for ny in (y - 1, y, y + 1):
+                        if ny < 0 or ny >= height:
+                            continue
+                        for nx in (x - 1, x, x + 1):
+                            if nx < 0 or nx >= width or (nx == x and ny == y):
+                                continue
+                            neighbor = source.get_at((nx, ny))
+                            if neighbor.a <= 0:
+                                continue
+                            red += neighbor.r
+                            green += neighbor.g
+                            blue += neighbor.b
+                            count += 1
+
+                    if count:
+                        updates.append((
+                            x,
+                            y,
+                            red // count,
+                            green // count,
+                            blue // count
+                        ))
+
+            if not updates:
+                break
+
+            for x, y, red, green, blue in updates:
+                source.set_at((x, y), (red, green, blue, 0))
+    finally:
+        source.unlock()
+
+    if len(_ALPHA_BLEED_CACHE) > 256:
+        _ALPHA_BLEED_CACHE.clear()
+    _ALPHA_BLEED_CACHE[key] = source
+    return source
 
 
 def load_image(filename, *legacy_parts, alpha=True):

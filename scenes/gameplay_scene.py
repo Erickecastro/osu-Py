@@ -8,6 +8,7 @@ import pygame
 
 from scenes.base_scene import BaseScene
 from core.audio import (
+    adjust_playback_clock_for_pause,
     find_audio_file,
     get_last_start_offset_ms,
     preload_music,
@@ -74,6 +75,8 @@ class GameplayScene(BaseScene):
     FIRST_OBJECT_FADE_IN_MAX_MS = 420
     APPROACH_SUPERSAMPLE_SIZE = 768
     APPROACH_RADIUS_EXTRA_SCALE = 3.35
+    SLIDERBALL_ALPHA_THRESHOLD = 96
+    SLIDERBALL_VISIBLE_SCALE = 0.98
     STACK_DISTANCE_OSU = 3.0
 
     MAX_SLIDER_SURFACE_SIZE = 4096
@@ -131,6 +134,8 @@ class GameplayScene(BaseScene):
         self.tinted_surface_cache = {}
         self.overlay_surface = None
         self.overlay_surface_size = None
+        self.approach_overlay_surface = None
+        self.approach_overlay_surface_size = None
         self.overlay_full_clear_frames = 4
         self.background_path = None
         self.background_load_attempted = False
@@ -269,6 +274,7 @@ class GameplayScene(BaseScene):
         self.slider_follow_return_grace_ms = 350  # ms
         self.slider_follow_button_grace_ms = 90  # ms
         self.slider_follow_tail_leniency_ms = 520  # ms
+        self.slider_follow_visual_fade_ms = 325  # ms
 
         self.usable_width = (
             self.playfield_width * self.scale
@@ -428,6 +434,11 @@ class GameplayScene(BaseScene):
         self.hit_sound = self._load_hit_sound()
         self.fail_sound = self._load_fail_sound()
         self.sliderball_diameter = self._calculate_sliderball_diameter()
+        self.sliderball_visible_diameter = getattr(
+            self,
+            "sliderball_visible_diameter",
+            self.sliderball_diameter
+        )
         self.skin_cache_warm_jobs = self._build_skin_cache_warm_jobs()
         self.skin_cache_warm_index = 0
         self.skin_cache_warm_complete = not self.skin_cache_warm_jobs
@@ -701,6 +712,11 @@ class GameplayScene(BaseScene):
         self._reset_followpoint_connections()
         self._warm_followpoint_connections(max_ms=1, max_items=32)
         self.sliderball_diameter = self._calculate_sliderball_diameter()
+        self.sliderball_visible_diameter = getattr(
+            self,
+            "sliderball_visible_diameter",
+            self.sliderball_diameter
+        )
         self.skin_cache_warm_jobs = self._build_skin_cache_warm_jobs()
         self.skin_cache_warm_index = 0
         self.skin_cache_warm_complete = not self.skin_cache_warm_jobs
@@ -710,6 +726,8 @@ class GameplayScene(BaseScene):
 
         self.overlay_surface = None
         self.overlay_surface_size = None
+        self.approach_overlay_surface = None
+        self.approach_overlay_surface_size = None
         self.background_surface = None
         self.background_surface_size = None
         self.center_overlay_shade = None
@@ -1561,6 +1579,15 @@ class GameplayScene(BaseScene):
         except Exception:
             pass
 
+    def _register_slider_surface_atlas(self, cache_key, surface):
+        if cache_key is None or surface is None:
+            return
+        width, height = surface.get_size()
+        self._register_sprite_atlas(
+            surface,
+            ("slider", "path", cache_key, width, height)
+        )
+
     def _draw_aa_circle(
         self,
         target,
@@ -1690,6 +1717,57 @@ class GameplayScene(BaseScene):
         self.image_surface_cache[key] = rotated
         return rotated
 
+    def _alpha_bounds(self, image, threshold=16):
+        if image is None:
+            return pygame.Rect(0, 0, 0, 0)
+
+        threshold = max(1, min(255, int(threshold)))
+        key = ("alpha_bounds", id(image), threshold)
+        cached = self.image_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        min_x = image.get_width()
+        min_y = image.get_height()
+        max_x = -1
+        max_y = -1
+        width, height = image.get_size()
+        for y in range(height):
+            for x in range(width):
+                if image.get_at((x, y)).a >= threshold:
+                    min_x = min(min_x, x)
+                    min_y = min(min_y, y)
+                    max_x = max(max_x, x)
+                    max_y = max(max_y, y)
+
+        if max_x < min_x or max_y < min_y:
+            rect = pygame.Rect(0, 0, width, height)
+        else:
+            rect = pygame.Rect(
+                min_x,
+                min_y,
+                max_x - min_x + 1,
+                max_y - min_y + 1
+            )
+        self.image_surface_cache[key] = rect
+        return rect
+
+    def _skin_surface_diameter_for_visible_diameter(
+        self,
+        image,
+        visible_diameter,
+        threshold=16
+    ):
+        visible_diameter = max(1.0, float(visible_diameter))
+        if image is None:
+            return max(1, int(round(visible_diameter)))
+
+        bounds = self._alpha_bounds(image, threshold=threshold)
+        visible_source = max(1.0, float(max(bounds.width, bounds.height)))
+        source_extent = max(1.0, float(max(image.get_width(), image.get_height())))
+        diameter = visible_diameter * (source_extent / visible_source)
+        return max(1, int(round(diameter)))
+
     def _alpha_width(self, image, threshold=96):
         if image is None:
             return 0
@@ -1699,15 +1777,7 @@ class GameplayScene(BaseScene):
         if cached is not None:
             return cached
 
-        min_x = image.get_width()
-        max_x = -1
-        for y in range(image.get_height()):
-            for x in range(image.get_width()):
-                if image.get_at((x, y)).a >= threshold:
-                    min_x = min(min_x, x)
-                    max_x = max(max_x, x)
-
-        width = 0 if max_x < min_x else max_x - min_x + 1
+        width = self._alpha_bounds(image, threshold=threshold).width
         self.image_surface_cache[key] = width
         return width
 
@@ -1716,25 +1786,23 @@ class GameplayScene(BaseScene):
             1.0,
             self.slider_path_radius - max(3.0, self.slider_path_radius * 0.11)
         )
-        sliderball_visible_diameter = max(1.0, body_radius * 2.0 * 0.985)
+        sliderball_visible_diameter = max(
+            1.0,
+            body_radius * 2.0 * self.SLIDERBALL_VISIBLE_SCALE
+        )
+        self.sliderball_visible_diameter = sliderball_visible_diameter
         sliderball_image = self.skin_images.get("sliderball")
         if sliderball_image is None:
             return sliderball_visible_diameter
 
-        opaque_width = self._alpha_width(
+        return self._skin_surface_diameter_for_visible_diameter(
             sliderball_image,
-            threshold=32
-        )
-        if opaque_width <= 0:
-            return sliderball_visible_diameter
-
-        return sliderball_visible_diameter * (
-            sliderball_image.get_width()
-            / opaque_width
+            sliderball_visible_diameter,
+            threshold=self.SLIDERBALL_ALPHA_THRESHOLD
         )
 
     def _slider_scorepoint_diameter(self):
-        return max(6, int(round(self.slider_path_radius * 0.50)))
+        return max(6, int(round(self.slider_path_radius * 0.45)))
 
     def _cropped_alpha_image(self, image):
         if image is None:
@@ -1888,12 +1956,20 @@ class GameplayScene(BaseScene):
         image,
         center,
         diameter=None,
-        alpha=255
+        alpha=255,
+        visible_diameter=None,
+        alpha_threshold=16
     ):
         if image is None:
             return False
 
         surface = image
+        if visible_diameter is not None:
+            diameter = self._skin_surface_diameter_for_visible_diameter(
+                image,
+                visible_diameter,
+                threshold=alpha_threshold
+            )
         if diameter is not None:
             surface = self._scaled_square_image(
                 image,
@@ -1921,7 +1997,7 @@ class GameplayScene(BaseScene):
         if circle is None or overlay is None:
             return False
 
-        diameter = max(
+        visible_diameter = max(
             1,
             int(round(self.note_visual_radius * 2 * 1.12 * diameter_scale / 2.0)) * 2
         )
@@ -1933,14 +2009,15 @@ class GameplayScene(BaseScene):
             target,
             tinted,
             center,
-            diameter=diameter,
-            alpha=alpha
+            visible_diameter=visible_diameter,
+            alpha=alpha,
+            alpha_threshold=16
         )
         self._draw_image_centered(
             target,
             overlay,
             center,
-            diameter=diameter,
+            visible_diameter=visible_diameter,
             alpha=min(
                 255,
                 int(
@@ -1951,7 +2028,8 @@ class GameplayScene(BaseScene):
                         )
                     )
                 )
-            )
+            ),
+            alpha_threshold=16
         )
         return True
 
@@ -1973,7 +2051,12 @@ class GameplayScene(BaseScene):
         if image is None:
             return False
 
-        diameter = max(1, int(round(radius * 2)))
+        visible_diameter = max(1, int(round(radius * 2)))
+        diameter = self._skin_surface_diameter_for_visible_diameter(
+            image,
+            visible_diameter,
+            threshold=8
+        )
 
         scaled = self._scaled_approach_image(image, diameter)
 
@@ -2616,8 +2699,9 @@ class GameplayScene(BaseScene):
                 target,
                 image,
                 (pos[0] + offset_x, pos[1] + offset_y),
-                diameter=diameter,
-                alpha=point_alpha
+                visible_diameter=diameter,
+                alpha=point_alpha,
+                alpha_threshold=18
             )
 
     def _update_slider_follow_state(
@@ -3227,11 +3311,25 @@ class GameplayScene(BaseScene):
             for color in self.DEFAULT_COMBO_COLORS:
                 jobs.append(("tint", hitcircle, color))
                 for diameter in range(effect_min, effect_max + 1, 4):
-                    jobs.append(("scale_tinted", hitcircle, color, diameter))
+                    surface_diameter = (
+                        self._skin_surface_diameter_for_visible_diameter(
+                            hitcircle,
+                            diameter,
+                            threshold=16
+                        )
+                    )
+                    jobs.append(("scale_tinted", hitcircle, color, surface_diameter))
 
         if overlay is not None:
             for diameter in range(effect_min, effect_max + 1, 4):
-                jobs.append(("scale", overlay, diameter))
+                surface_diameter = (
+                    self._skin_surface_diameter_for_visible_diameter(
+                        overlay,
+                        diameter,
+                        threshold=16
+                    )
+                )
+                jobs.append(("scale", overlay, surface_diameter))
 
         if approach is not None:
             min_radius = int(self._approach_contact_radius())
@@ -3257,7 +3355,17 @@ class GameplayScene(BaseScene):
             for color in self.DEFAULT_COMBO_COLORS:
                 jobs.append(("approach_source", approach, color))
                 for diameter in sorted(warm_diameters):
-                    jobs.append(("approach_scale", approach, color, diameter))
+                    source = self._approach_render_source(approach, color)
+                    surface_diameter = diameter
+                    if source is not None:
+                        surface_diameter = (
+                            self._skin_surface_diameter_for_visible_diameter(
+                                source,
+                                diameter,
+                                threshold=8
+                            )
+                        )
+                    jobs.append(("approach_scale", approach, color, surface_diameter))
 
         for key, diameter in (
             ("hit100", self.scaled_radius * 1.28),
@@ -3269,6 +3377,12 @@ class GameplayScene(BaseScene):
         ):
             image = self.skin_images.get(key)
             if image is not None:
+                if key in {"sliderballfollow", "sliderscorepoint"}:
+                    diameter = self._skin_surface_diameter_for_visible_diameter(
+                        image,
+                        diameter,
+                        threshold=18
+                    )
                 jobs.append(("scale", image, diameter))
 
         digits = self.skin_images.get("combo_digits", {})
@@ -3623,9 +3737,14 @@ class GameplayScene(BaseScene):
                 if pixels is None:
                     self.slider_cache_failed.add(cache_key)
                 else:
+                    slider_surface = surface_from_track_pixels(size, pixels)
                     self.slider_surface_cache[cache_key] = (
-                        surface_from_track_pixels(size, pixels),
+                        slider_surface,
                         surface_pos
+                    )
+                    self._register_slider_surface_atlas(
+                        cache_key,
+                        slider_surface
                     )
 
                 self.slider_cache_futures.pop(cache_key, None)
@@ -4248,6 +4367,7 @@ class GameplayScene(BaseScene):
             return
 
         paused_duration = now - (self.pause_started_at or now)
+        frozen_time = self.pause_visual_time
         self.paused = False
         self.pause_visual_time = None
         self.pause_started_at = None
@@ -4256,7 +4376,11 @@ class GameplayScene(BaseScene):
         if self.pre_music_started_at is not None:
             self.pre_music_started_at += paused_duration
         self.ready_start_time += paused_duration
+        self.last_music_sync_check_ms = 0
+        if frozen_time is not None:
+            self.current_time = float(frozen_time)
         if self.music_started:
+            adjust_playback_clock_for_pause(paused_duration)
             pygame.mixer.music.unpause()
 
     def _skip_intro(self):
@@ -4906,15 +5030,29 @@ class GameplayScene(BaseScene):
             ).convert_alpha()
             self.overlay_surface_size = screen_size
 
+        if (
+            self.approach_overlay_surface is None
+            or self.approach_overlay_surface_size != screen_size
+        ):
+            self.approach_overlay_surface = pygame.Surface(
+                screen_size,
+                pygame.SRCALPHA
+            ).convert_alpha()
+            self.approach_overlay_surface_size = screen_size
+
         overlay = self.overlay_surface
+        approach_overlay = self.approach_overlay_surface
         if self.overlay_full_clear_frames > 0:
             overlay.fill((0, 0, 0, 0))
+            approach_overlay.fill((0, 0, 0, 0))
             self.overlay_full_clear_frames -= 1
         else:
             overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
+            approach_overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
         fail_offset_y, fail_alpha_factor = self._fail_object_motion()
         return {
             "overlay": overlay,
+            "approach_overlay": approach_overlay,
             "fail_offset_y": fail_offset_y,
             "fail_alpha_factor": fail_alpha_factor,
         }
@@ -5002,6 +5140,7 @@ class GameplayScene(BaseScene):
         # Camada transparente para permitir alpha real (fade in/out suave).
         render_state = self._prepare_render_frame_state(screen)
         overlay = render_state["overlay"]
+        approach_overlay = render_state["approach_overlay"]
         fail_offset_y = render_state["fail_offset_y"]
         fail_alpha_factor = render_state["fail_alpha_factor"]
 
@@ -5430,30 +5569,57 @@ class GameplayScene(BaseScene):
 
                     follow_radius = self.slider_follow_radius
                     slider_end_time = note["time"] + slider_total_duration
+                    follow_break_time = note.get("slider_break_time")
+                    follow_break_elapsed = (
+                        self.current_time - follow_break_time
+                        if follow_break_time is not None
+                        else None
+                    )
+                    recent_follow_break = (
+                        note.get("slider_follow_missed")
+                        and follow_break_elapsed is not None
+                        and follow_break_elapsed <= self.slider_follow_visual_fade_ms
+                    )
                     show_slider_follow = (
                         self._slider_follow_active(note)
-                        and not note.get("slider_follow_missed")
                         and self.current_time <= slider_end_time
+                        and (
+                            not note.get("slider_follow_missed")
+                            or recent_follow_break
+                        )
                     )
 
                     outside_since = note.get("slider_follow_outside_since")
                     follow_alpha = slider_ball_alpha * 0.82
+                    if recent_follow_break:
+                        break_progress = self._clamp01(
+                            follow_break_elapsed
+                            / max(1.0, self.slider_follow_visual_fade_ms)
+                        )
+                        follow_alpha *= 1.0 - self._smoothstep(break_progress)
                     if outside_since is not None:
                         outside_elapsed = self.current_time - outside_since
                         follow_grace = self._slider_follow_grace_ms(
                             note.get("slider_follow_outside_reason")
                         )
-                        follow_alpha *= 1.0 - self._clamp01(
-                            outside_elapsed / follow_grace
+                        fade_window = max(
+                            1.0,
+                            follow_grace,
+                            self.slider_follow_visual_fade_ms
                         )
+                        follow_progress = self._clamp01(
+                            outside_elapsed / fade_window
+                        )
+                        follow_alpha *= 1.0 - self._smoothstep(follow_progress)
 
-                    if show_slider_follow:
+                    if show_slider_follow and follow_alpha > 1:
                         self._draw_image_centered(
                             overlay,
                             self.skin_images.get("sliderballfollow"),
                             ball_pos,
-                            diameter=follow_radius * 2,
-                            alpha=int(follow_alpha)
+                            visible_diameter=follow_radius * 2,
+                            alpha=int(follow_alpha),
+                            alpha_threshold=18
                         )
 
                     sliderball_image = self.skin_images.get("sliderball")
@@ -5462,8 +5628,13 @@ class GameplayScene(BaseScene):
                         overlay,
                         sliderball_image,
                         ball_pos,
-                        diameter=self.sliderball_diameter,
-                        alpha=slider_ball_alpha
+                        visible_diameter=getattr(
+                            self,
+                            "sliderball_visible_diameter",
+                            self.sliderball_diameter
+                        ),
+                        alpha=slider_ball_alpha,
+                        alpha_threshold=self.SLIDERBALL_ALPHA_THRESHOLD
                     ):
                         self._draw_aa_circle(
                             overlay,
@@ -5477,14 +5648,14 @@ class GameplayScene(BaseScene):
 
         for center, approach_radius, approach_alpha, approach_color in approach_draws:
             if not self._draw_approach_skin(
-                overlay,
+                approach_overlay,
                 center,
                 approach_radius,
                 alpha=approach_alpha,
                 color=approach_color
             ):
                 self._draw_aa_circle(
-                    overlay,
+                    approach_overlay,
                     center,
                     approach_radius,
                     outline_color=approach_color,
@@ -5602,12 +5773,29 @@ class GameplayScene(BaseScene):
                 "slider_base_fallbacks",
                 self.slider_base_fallbacks_frame
             )
+            profiler.set_metric(
+                "slider_cache",
+                len(self.slider_surface_cache)
+            )
+            profiler.set_metric(
+                "slider_cache_pending",
+                len(self.slider_cache_futures)
+            )
 
+        if profiler_enabled:
+            profiler.start("overlay_composite")
         screen.blit(
             overlay,
             self.overlay_dirty_rect,
             self.overlay_dirty_rect
         )
+        screen.blit(
+            approach_overlay,
+            self.overlay_dirty_rect,
+            self.overlay_dirty_rect
+        )
+        if profiler_enabled:
+            profiler.end("overlay_composite")
 
         self._draw_skip_button(screen)
         if self.paused:
@@ -5892,6 +6080,9 @@ class GameplayScene(BaseScene):
             self._publish_current_track_state()
         elif self.music_started and not self.failed:
             if self.paused:
+                now = pygame.time.get_ticks()
+                paused_duration = now - (self.pause_started_at or now)
+                adjust_playback_clock_for_pause(paused_duration)
                 pygame.mixer.music.unpause()
                 self.paused = False
             self._publish_current_track_state()

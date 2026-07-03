@@ -104,6 +104,17 @@ def get_playback_time_ms():
         return None
 
 
+def adjust_playback_clock_for_pause(paused_duration_ms):
+    """Exclude a pause duration from the high-resolution playback clock."""
+    global _PLAYBACK_START_TICKS
+    if _PLAYBACK_START_TICKS is None:
+        return
+    try:
+        _PLAYBACK_START_TICKS += int(max(0, paused_duration_ms or 0))
+    except Exception:
+        return
+
+
 def preload_music(music_path):
     global _LOADED_MUSIC_PATH, _LAST_START_OFFSET_MS
     global _PLAYBACK_START_TICKS, _MUSIC_PLAYING

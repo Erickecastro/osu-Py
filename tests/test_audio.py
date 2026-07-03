@@ -39,6 +39,25 @@ class AudioClockTests(unittest.TestCase):
         self.assertEqual(elapsed, 123)
         self.assertAlmostEqual(fake_music.play_start, 1.2)
 
+    def test_pause_clock_adjustment_excludes_paused_duration(self):
+        fake_music = FakeMusic()
+        with mock.patch.object(audio.pygame.mixer, "music", fake_music):
+            with mock.patch.object(
+                audio.pygame.time,
+                "get_ticks",
+                side_effect=(1000, 1000, 2500)
+            ):
+                audio.start_music("song.mp3")
+                before_pause_elapsed = audio.get_playback_time_ms()
+
+            audio.adjust_playback_clock_for_pause(3000)
+
+            with mock.patch.object(audio.pygame.time, "get_ticks", return_value=5600):
+                after_resume_elapsed = audio.get_playback_time_ms()
+
+        self.assertEqual(before_pause_elapsed, 1500)
+        self.assertEqual(after_resume_elapsed, 1600)
+
 
 if __name__ == "__main__":
     unittest.main()

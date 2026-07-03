@@ -443,6 +443,9 @@ class SliderRenderer:
             slider_surface,
             surface_pos
         )
+        registrar = getattr(self.scene, "_register_slider_surface_atlas", None)
+        if callable(registrar):
+            registrar(cache_key, slider_surface)
 
     def draw(
         self,
@@ -546,6 +549,13 @@ class SliderRenderer:
                 slider_surface,
                 surface_pos
             )
+            registrar = getattr(
+                self.scene,
+                "_register_slider_surface_atlas",
+                None
+            )
+            if callable(registrar):
+                registrar(cache_key, slider_surface)
 
         if slider_surface.get_alpha() != a:
             slider_surface.set_alpha(a)

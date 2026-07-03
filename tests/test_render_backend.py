@@ -8,8 +8,10 @@ from rendering.render_backend import (
     PygameRenderBackend,
     RenderCommandBatch,
     create_render_backend,
+    _gpu_sprites_enabled_by_default,
 )
 from rendering.sprite_atlas import SpriteAtlasRegistry
+from scenes.gameplay_scene import GameplayScene
 
 
 class FakeTexture:
@@ -198,6 +200,29 @@ class RenderBackendTests(unittest.TestCase):
         self.assertEqual(cache.last_upload_count, 2)
         self.assertEqual(len(ctx.textures), 2)
 
+    def test_gpu_sprite_path_is_enabled_by_default_with_disable_override(self):
+        previous_disable = os.environ.get("PYOSU_DISABLE_GPU_SPRITES")
+        previous_enable = os.environ.get("PYOSU_ENABLE_GPU_SPRITES")
+        previous_legacy = os.environ.get("PYOSU_GPU_SPRITES")
+        try:
+            os.environ.pop("PYOSU_DISABLE_GPU_SPRITES", None)
+            os.environ.pop("PYOSU_ENABLE_GPU_SPRITES", None)
+            os.environ.pop("PYOSU_GPU_SPRITES", None)
+            self.assertTrue(_gpu_sprites_enabled_by_default())
+
+            os.environ["PYOSU_DISABLE_GPU_SPRITES"] = "1"
+            self.assertFalse(_gpu_sprites_enabled_by_default())
+        finally:
+            for name, value in (
+                ("PYOSU_DISABLE_GPU_SPRITES", previous_disable),
+                ("PYOSU_ENABLE_GPU_SPRITES", previous_enable),
+                ("PYOSU_GPU_SPRITES", previous_legacy),
+            ):
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
     def test_batch_culls_fully_offscreen_surfaces(self):
         backend = PygameRenderBackend(pygame.Surface((8, 8), pygame.SRCALPHA))
         source = pygame.Surface((2, 2), pygame.SRCALPHA)
@@ -248,6 +273,20 @@ class RenderBackendTests(unittest.TestCase):
         self.assertEqual(backend.last_atlas_sprites, 1)
         self.assertEqual(backend.last_atlas_command_count, 1)
         self.assertEqual(backend.last_atlas_group_count, 1)
+
+    def test_gameplay_slider_surface_registration_uses_stable_atlas_key(self):
+        scene = GameplayScene.__new__(GameplayScene)
+        scene.render_backend = PygameRenderBackend(
+            pygame.Surface((32, 32), pygame.SRCALPHA)
+        )
+        slider_surface = pygame.Surface((8, 6), pygame.SRCALPHA)
+
+        scene._register_slider_surface_atlas(("slider", 4), slider_surface)
+
+        self.assertEqual(scene.render_backend.last_atlas_pages, 1)
+        self.assertEqual(scene.render_backend.last_atlas_sprites, 1)
+        key = ("slider", "path", ("slider", 4), 8, 6)
+        self.assertIn(key, scene.render_backend.sprite_atlas.entries)
 
     def test_disable_modern_gl_env_uses_pygame_backend(self):
         previous = os.environ.get("PYOSU_DISABLE_MODERNGL")

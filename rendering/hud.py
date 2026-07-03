@@ -19,7 +19,7 @@ class GameplayHUDRenderer:
         self.fade_surface_size = None
         self._hud_surface_cache = {}
         self.display_score = 0.0
-        self.score_anim_start_value = 0.0J
+        self.score_anim_start_value = 0.0
         self.score_anim_target = 0
         self.score_anim_start_time = 0.0
         self.score_anim_duration = 160.0
@@ -76,6 +76,10 @@ class GameplayHUDRenderer:
     def _animated_score(self, score, current_time):
         score = int(score)
         now = float(current_time)
+        try:
+            self.display_score = float(self.display_score)
+        except (TypeError, ValueError):
+            self.display_score = float(score)
         if score != self.score_anim_target:
             self.score_anim_start_value = float(self.display_score)
             self.score_anim_target = score
@@ -234,9 +238,27 @@ class GameplayHUDRenderer:
         )
 
         if batch is not None:
-            batch.add_surface(score_text, score_pos)
-            batch.add_surface(accuracy_text, accuracy_pos)
-            batch.add_surface(combo_draw_surface, combo_pos)
+            batch.add_surface(
+                score_text,
+                score_pos,
+                atlas_key=("hud", "score", display_score)
+            )
+            batch.add_surface(
+                accuracy_text,
+                accuracy_pos,
+                atlas_key=("hud", "accuracy", f"{accuracy:05.2f}")
+            )
+            batch.add_surface(
+                combo_draw_surface,
+                combo_pos,
+                atlas_key=(
+                    "hud",
+                    "combo",
+                    int(combo),
+                    combo_draw_surface.get_width(),
+                    combo_draw_surface.get_height()
+                )
+            )
         else:
             screen.blit(score_text, score_pos)
             screen.blit(accuracy_text, accuracy_pos)

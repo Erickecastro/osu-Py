@@ -6,6 +6,19 @@ from rendering.spinner import SpinnerRenderer
 
 
 class SpinnerRendererCacheTests(unittest.TestCase):
+    def test_spinner_center_uses_screen_midpoint(self):
+        class Game:
+            WIDTH = 1279
+            HEIGHT = 719
+
+        class Scene:
+            game = Game()
+
+        renderer = SpinnerRenderer.__new__(SpinnerRenderer)
+        renderer.scene = Scene()
+
+        self.assertEqual(renderer._spinner_center(), (640, 360))
+
     def test_trim_transparent_padding_keeps_visible_spinner_content(self):
         renderer = SpinnerRenderer.__new__(SpinnerRenderer)
         image = pygame.Surface((64, 64), pygame.SRCALPHA)

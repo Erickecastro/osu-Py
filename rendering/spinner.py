@@ -62,6 +62,12 @@ class SpinnerRenderer:
     def _spinner_circle_diameter(self):
         return int(self._spinner_radius() * self.circle_scale)
 
+    def _spinner_center(self):
+        return (
+            int(round(self.scene.game.WIDTH * 0.5)),
+            int(round(self.scene.game.HEIGHT * 0.5))
+        )
+
     def _build_prewarm_jobs(self, notes):
         if not any(note.get("type") == "spinner" for note in notes):
             return []
@@ -123,10 +129,7 @@ class SpinnerRenderer:
         if current < start or current > note.get("end_time", end):
             return
 
-        center = (
-            self.scene.game.WIDTH // 2,
-            self.scene.game.HEIGHT // 2
-        )
+        center = self._spinner_center()
         duration = max(1, end - start)
         radius = self._spinner_radius()
         progress = self.scene._clamp01((current - start) / duration)
@@ -291,11 +294,17 @@ class SpinnerRenderer:
         return cached
 
     def _prune_cache(self, protected_key=None):
-        if len(self.cache) <= self.cache_limit:
-            return
-
         scaled_keys = []
         rotated_keys = []
+        protected_is_scaled = (
+            isinstance(protected_key, tuple)
+            and len(protected_key) == 2
+            and isinstance(protected_key[1], int)
+        )
+        protected_is_rotated = (
+            isinstance(protected_key, tuple)
+            and protected_key[:1] == ("rotated",)
+        )
         for key in self.cache:
             if key == protected_key:
                 continue
@@ -308,10 +317,19 @@ class SpinnerRenderer:
             elif isinstance(key, tuple) and key[:1] == ("rotated",):
                 rotated_keys.append(key)
 
-        while len(rotated_keys) > self.rotated_cache_limit:
+        scaled_limit = max(
+            0,
+            self.scaled_cache_limit - (1 if protected_is_scaled else 0)
+        )
+        rotated_limit = max(
+            0,
+            self.rotated_cache_limit - (1 if protected_is_rotated else 0)
+        )
+
+        while len(rotated_keys) > rotated_limit:
             self.cache.pop(rotated_keys.pop(0), None)
 
-        while len(scaled_keys) > self.scaled_cache_limit:
+        while len(scaled_keys) > scaled_limit:
             self.cache.pop(scaled_keys.pop(0), None)
 
         for key in list(self.cache):

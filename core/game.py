@@ -794,7 +794,11 @@ class Game:
             self.screen
         )
         if backend is not None:
+            if profiler_enabled:
+                self.profiler.start("backend_present")
             backend.present()
+            if profiler_enabled:
+                self.profiler.end("backend_present")
             if profiler_enabled:
                 self.profiler.set_metric("backend", getattr(backend, "name", "pygame"))
                 self.profiler.set_metric("gpu", int(bool(getattr(backend, "gpu_available", False))))
@@ -811,6 +815,7 @@ class Game:
                 self.profiler.set_metric("gpu_flushes", getattr(backend, "last_gpu_flush_count", 0))
                 self.profiler.set_metric("gpu_uploads", getattr(backend, "last_gpu_texture_upload_count", 0))
                 self.profiler.set_metric("gpu_fallbacks", getattr(backend, "last_gpu_fallback_count", 0))
+                self.profiler.set_metric("gpu_sprite_path", int(bool(getattr(backend, "_gpu_sprite_enabled", False))))
                 self.profiler.set_metric("hz", self.display_refresh_rate or 0)
                 self.profiler.set_metric("target", self.FPS)
                 self.profiler.set_metric("mode", self.window_mode)
@@ -833,11 +838,13 @@ class Game:
                 if current_scene is not None
                 else "None"
             )
+            self.profiler.start("debug_render")
             self.profiler.draw_overlay(
                 self.screen,
                 scene_name,
                 self.clock.get_fps()
             )
+            self.profiler.end("debug_render")
 
         if not getattr(current_scene, "draws_own_cursor", False):
             if profiler_enabled:

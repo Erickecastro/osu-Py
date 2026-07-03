@@ -296,7 +296,7 @@ class ModernGLSpriteRenderer:
                 batch.clear()
             return 0
 
-        commands = list(batch._commands)
+        commands = batch._commands
         screen_w, screen_h = target.get_size()
         try:
             self.ctx.viewport = (0, 0, screen_w, screen_h)
@@ -676,10 +676,7 @@ class ModernGLRenderBackend(RenderBackend):
         self._gpu_sprite_enabled = (
             self._enabled
             and self._ctx is not None
-            and (
-                _env_flag_enabled("PYOSU_ENABLE_GPU_SPRITES")
-                or _env_flag_enabled("PYOSU_GPU_SPRITES")
-            )
+            and _gpu_sprites_enabled_by_default()
         )
         if self._gpu_sprite_enabled:
             try:
@@ -962,6 +959,21 @@ class ModernGLRenderBackend(RenderBackend):
 def _env_flag_enabled(name):
     value = os.environ.get(name, "")
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _env_flag_disabled(name):
+    value = os.environ.get(name, "")
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _gpu_sprites_enabled_by_default():
+    if _env_flag_disabled("PYOSU_DISABLE_GPU_SPRITES"):
+        return False
+    if _env_flag_enabled("PYOSU_ENABLE_GPU_SPRITES"):
+        return True
+    if _env_flag_enabled("PYOSU_GPU_SPRITES"):
+        return True
+    return True
 
 
 def create_render_backend(target_surface: Optional[pygame.Surface] = None):

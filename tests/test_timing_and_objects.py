@@ -1,4 +1,5 @@
 import unittest
+from unittest import mock
 
 from core.beatmap_timing import (
     effective_beat_length_at,
@@ -6,6 +7,7 @@ from core.beatmap_timing import (
     slider_velocity_multiplier_at,
 )
 from core.spinner import SpinnerScoring
+import scenes.gameplay_scene as gameplay_scene
 from scenes.gameplay_scene import GameplayScene
 
 
@@ -214,6 +216,88 @@ class TimingAndObjectTests(unittest.TestCase):
         scene.current_time = 300.0
 
         self.assertGreater(scene._fade_in_progress(note), 0.50)
+
+    def test_startup_cache_mask_blocks_until_critical_assets_are_ready(self):
+        scene = object.__new__(GameplayScene)
+        scene.first_object_cache_horizon_ms = 2000
+        scene.startup_critical_slider_notes = [{
+            "time": 1000,
+            "scaled_slider_points": None,
+            "scaled_slider_cumulative": None,
+            "scaled_slider_length": None,
+        }]
+        scene.spinner_renderer = type(
+            "Spinner",
+            (),
+            {"prewarm_complete": False}
+        )()
+        scene.skin_cache_warm_complete = False
+        scene.surface_precache_complete = True
+        scene.followpoint_prepare_complete = True
+        scene.background_path = "bg.jpg"
+        scene.background_source = None
+        scene.background_load_attempted = False
+        scene._critical_slider_cache_ready = lambda _horizon: False
+        scene._critical_slider_reveal_cache_ready = lambda _horizon, max_bucket=9: True
+
+        status = scene._startup_cache_status()
+        mask = scene._startup_cache_missing_mask(status)
+
+        self.assertFalse(scene._startup_cache_ready())
+        self.assertTrue(mask & 1)    # slider geometry
+        self.assertTrue(mask & 2)    # slider surface
+        self.assertTrue(mask & 8)    # spinner
+        self.assertTrue(mask & 16)   # skin
+        self.assertTrue(mask & 128)  # background
+
+        scene.startup_critical_slider_notes[0].update({
+            "scaled_slider_points": [(0, 0), (10, 0)],
+            "scaled_slider_cumulative": [0, 10],
+            "scaled_slider_length": 10,
+        })
+        scene.spinner_renderer.prewarm_complete = True
+        scene.skin_cache_warm_complete = True
+        scene.background_load_attempted = True
+        scene._critical_slider_cache_ready = lambda _horizon: True
+
+        self.assertTrue(scene._startup_cache_ready())
+
+    def test_pause_resume_keeps_gameplay_clock_frozen(self):
+        scene = object.__new__(GameplayScene)
+        scene.failed = False
+        scene.paused = True
+        scene.music_started = True
+        scene.pause_visual_time = 1234.0
+        scene.pause_started_at = 1000
+        scene.start_time = 700
+        scene.pre_music_started_at = 800
+        scene.ready_start_time = 900
+        scene.current_time = 9999.0
+        scene.last_music_sync_check_ms = 42
+
+        with mock.patch.object(
+            gameplay_scene.pygame.time,
+            "get_ticks",
+            return_value=4600
+        ), mock.patch.object(
+            gameplay_scene.pygame.mixer.music,
+            "unpause"
+        ) as unpause, mock.patch.object(
+            gameplay_scene,
+            "adjust_playback_clock_for_pause"
+        ) as adjust_clock:
+            scene._toggle_pause()
+
+        self.assertFalse(scene.paused)
+        self.assertIsNone(scene.pause_visual_time)
+        self.assertIsNone(scene.pause_started_at)
+        self.assertEqual(scene.start_time, 4300)
+        self.assertEqual(scene.pre_music_started_at, 4400)
+        self.assertEqual(scene.ready_start_time, 4500)
+        self.assertEqual(scene.current_time, 1234.0)
+        self.assertEqual(scene.last_music_sync_check_ms, 0)
+        adjust_clock.assert_called_once_with(3600)
+        unpause.assert_called_once()
 
     def test_spinner_pass_tolerance_distinguishes_near_pass_and_miss(self):
         scoring = SpinnerScoring()
