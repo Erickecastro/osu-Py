@@ -102,7 +102,8 @@ class SpinnerManager:
         dy = mouse_pos[1] - center[1]
         radius = math.hypot(dx, dy)
         hit_held = self.scene._is_hit_held()
-        if radius >= max(24.0, self.scene.scaled_radius * 0.55):
+        spinner_deadzone = max(3.0, min(8.0, self.scene.scaled_radius * 0.10))
+        if radius >= spinner_deadzone:
             angle = math.atan2(dy, dx)
             previous_angle = note.get("spinner_previous_angle", angle)
             delta = _angle_delta(angle, previous_angle)

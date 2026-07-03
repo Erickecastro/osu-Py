@@ -113,6 +113,7 @@ class Game:
         self.current_menu_music_title = None
         self.current_menu_music_timing_points = []
         self.current_menu_music_paused = False
+        self.current_selected_osu_file = None
 
         self.running = True
 
@@ -207,14 +208,20 @@ class Game:
         return width, height
 
     def create_window(self):
-        flags = pygame.DOUBLEBUF | pygame.HWSURFACE
+        previous_window_mode = getattr(self, "window_mode", "unknown")
+        flags = pygame.DOUBLEBUF
 
         if self.fullscreen:
+            flags |= pygame.HWSURFACE
             mode = self._fullscreen_mode()
             if mode == "exclusive":
                 flags |= pygame.FULLSCREEN
                 size = (0, 0)
                 self.window_mode = "exclusive"
+            elif mode == "desktop":
+                flags |= pygame.FULLSCREEN
+                size = self._desktop_size()
+                self.window_mode = "desktop"
             else:
                 flags |= pygame.NOFRAME
                 size = self._desktop_size()
@@ -222,6 +229,12 @@ class Game:
         else:
             size = (1280, 720)
             self.window_mode = "windowed"
+            if previous_window_mode != "windowed":
+                try:
+                    pygame.display.quit()
+                    pygame.display.init()
+                except pygame.error:
+                    pass
 
         try:
             self.screen = pygame.display.set_mode(
@@ -235,6 +248,7 @@ class Game:
                 size,
                 flags
             )
+        pygame.display.set_caption("PyOsu")
 
         self.WIDTH = self.screen.get_width()
 
@@ -791,6 +805,12 @@ class Game:
                 self.profiler.set_metric("atlas_sprites", getattr(backend, "last_atlas_sprites", 0))
                 self.profiler.set_metric("atlas_cmds", getattr(backend, "last_atlas_command_count", 0))
                 self.profiler.set_metric("atlas_groups", getattr(backend, "last_atlas_group_count", 0))
+                self.profiler.set_metric("atlas_runs", getattr(backend, "last_atlas_run_count", 0))
+                self.profiler.set_metric("batchable", getattr(backend, "last_batchable_command_count", 0))
+                self.profiler.set_metric("gpu_sprites", getattr(backend, "last_gpu_sprite_count", 0))
+                self.profiler.set_metric("gpu_flushes", getattr(backend, "last_gpu_flush_count", 0))
+                self.profiler.set_metric("gpu_uploads", getattr(backend, "last_gpu_texture_upload_count", 0))
+                self.profiler.set_metric("gpu_fallbacks", getattr(backend, "last_gpu_fallback_count", 0))
                 self.profiler.set_metric("hz", self.display_refresh_rate or 0)
                 self.profiler.set_metric("target", self.FPS)
                 self.profiler.set_metric("mode", self.window_mode)
@@ -828,7 +848,8 @@ class Game:
             self.cursor_renderer.draw(
                 self.screen,
                 self.mouse_pos,
-                draw_trail=not loading_transition
+                draw_trail=not loading_transition,
+                backend=backend
             )
             if profiler_enabled:
                 self.profiler.end("cursor_draw")

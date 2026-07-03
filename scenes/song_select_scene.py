@@ -234,7 +234,11 @@ class SongSelectScene(BaseScene):
         self.selected_index = 0
         self.browse_index = 0
         self.selected_info = None
-        self.selected_osu_file = None
+        self.selected_osu_file = getattr(
+            self.game,
+            "current_selected_osu_file",
+            None
+        )
         self.search_text = ""
         self.search_active = False
         self.sort_mode_index = 0
@@ -284,7 +288,12 @@ class SongSelectScene(BaseScene):
         self._apply_filter()
         initial_index = self._index_for_music_path(self.initial_music_path)
         if not self.initial_music_path:
-            initial_index = self._first_playable_index(initial_index)
+            restored_index = self._find_index_by_osu_file(self.selected_osu_file)
+            initial_index = (
+                restored_index
+                if restored_index is not None
+                else self._first_playable_index(initial_index)
+            )
         self._confirm_selection(initial_index, play_preview=self.initial_music_path is None)
         if self.initial_music_path and self.items:
             info = self.items[self.selected_index]["info"]
@@ -415,6 +424,7 @@ class SongSelectScene(BaseScene):
     def _remember_selected_info(self, info):
         self.selected_info = info
         self.selected_osu_file = str(info.osu_file) if info is not None else None
+        self.game.current_selected_osu_file = self.selected_osu_file
 
     def _find_index_by_osu_file(self, osu_file):
         if not osu_file:

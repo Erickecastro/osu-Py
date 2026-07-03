@@ -20,6 +20,7 @@ class _AtlasPage:
         self.cursor_y = 0
         self.row_height = 0
         self.used_area = 0
+        self.version = 0
 
     def try_add(self, source, padding):
         width, height = source.get_size()
@@ -46,6 +47,7 @@ class _AtlasPage:
         self.cursor_x += padded_width
         self.row_height = max(self.row_height, padded_height)
         self.used_area += width * height
+        self.version += 1
         return rect
 
 

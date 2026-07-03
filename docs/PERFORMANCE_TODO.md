@@ -11,6 +11,7 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 
 ## CPU and Gameplay Preprocessing
 
+- [x] Hold gameplay start longer when critical skin/surface/slider/followpoint caches are still warming.
 - [x] Precompute initial slider geometry before active gameplay.
 - [x] Queue critical slider surfaces before music start.
 - [x] Queue critical slider reveal surfaces during the Ready/loading window.
@@ -25,16 +26,30 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Prewarm spinner approach/rotation textures before active spinner frames.
 - [x] Smooth spinner approach-circle scale buckets without reintroducing render-time scale spikes.
 - [x] Make spinner approach-circle start larger and shrink immediately from spawn.
-- [ ] Expand object pooling for short-lived gameplay effects.
+- [x] Bound spinner approach/rotation cache so smooth buckets cannot exhaust memory.
+- [x] Trim transparent spinner-circle padding at load time so large spinner visuals do not require oversized source assets.
+- [x] Expand object pooling for short-lived gameplay effects.
+- [x] Prewarm first visible hitobject family by type before releasing the Ready screen.
+- [x] Add a startup-cache profiler row that reports the missing warmup category, not only a ready/not-ready flag.
+- [x] Add a render-time guard that never builds missing slider surfaces on an active gameplay frame.
+- [x] Continue scheduling upcoming slider surface/reveal caches asynchronously during active gameplay.
 
 ## Gameplay Visual Fidelity
 
+- [x] Let players reengage a sliderball/followcircle after missing the slider head.
+- [x] Make gameplay HUD fade in almost immediately, and delay it until skip intro disappears when skip is visible.
+- [x] Keep high-resolution music clock aligned after skip without double-counting the start offset.
+- [x] Add a longer post-skip visual lead so the first object can fade in instead of popping in.
+- [x] Gate the first hitobject fade so maps that start immediately do not pop the first object at high alpha.
 - [x] Parse and preserve `.osu` file format version for stacking compatibility.
 - [x] Replace simplified object stacking with osu!lazer-style stack heights.
 - [x] Support slider-end negative stack offsets for overlapping objects.
 - [x] Enlarge approach-circle spawn radius while preserving hit-time contact.
 - [x] Add lightweight score count-up and combo pop animations.
+- [x] Freeze gameplay object animations on fail while preserving visible objects and slow fall motion.
 - [ ] Visually compare stacked notes and approach-circle size against osu!lazer.
+- [x] Support slider reengage when the hit key was already held before entering the followcircle.
+- [ ] Validate slider reengage behavior against osu!lazer on missed heads, late ticks, and repeat sliders.
 
 ## Render Pipeline
 
@@ -48,11 +63,16 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Add CPU-side sprite atlas generation for cached HUD sprites.
 - [x] Expose sprite atlas page/sprite counts in profiler metrics.
 - [x] Expose atlas command/group counts as batching-readiness diagnostics.
+- [x] Expose atlas run and batchable-command counts for GPU batching readiness.
+- [x] Add GPU texture-cache plumbing for static surfaces and versioned atlas pages.
+- [x] Expose GPU sprite/upload/flush/fallback counters in profiler metrics.
 - [x] Cache combo pop scaled HUD surfaces instead of scaling every pop frame.
-- [ ] Extend sprite atlas registration to skin assets and followpoint/cursor sprites.
-- [ ] Batch sprite commands by texture/atlas.
+- [x] Extend sprite atlas registration to cursor sprites.
+- [x] Extend sprite atlas registration to skin assets and followpoint sprites.
+- [x] Batch sprite commands by texture/atlas behind a diagnostic ModernGL sprite path.
 - [ ] Move cursor, HUD, followpoints, and hitobject sprites to a GPU sprite path.
 - [ ] Move cached slider path textures to GPU-backed draw commands.
+- [ ] Add a read-only frame graph showing background, hitobjects, sliders, followpoints, HUD, cursor, and debug costs separately.
 
 ## ModernGL Rollout
 
@@ -62,11 +82,16 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Add profiler/debug metrics showing active render backend, GPU availability, display Hz, FPS target, and presentation mode.
 - [x] Add profiler counters for render batch command count and backend name.
 - [ ] Add visual parity screenshots comparing Pygame and ModernGL output.
-- [ ] Enable real ModernGL sprite drawing only after destination/alpha parity is verified.
+- [x] Enable real ModernGL sprite drawing behind `PYOSU_ENABLE_GPU_SPRITES=1` after destination/alpha parity scaffolding.
+- [x] Implement the first real ModernGL sprite path for cached/atlas sprites behind a diagnostic flag.
+- [ ] Promote cursor/followpoints to ModernGL after HUD parity passes.
+- [x] Add a backend smoke test that verifies GPU texture upload/reuse without enabling it in gameplay.
 
 ## Presentation / Refresh
 
 - [x] Prefer desktop borderless fullscreen by default to avoid hidden 60 Hz exclusive-mode switches.
+- [x] Keep windowed mode fixed-size with native minimize/close controls and no resizable maximize path.
+- [x] Restore fullscreen presentation so F11 fills the active display.
 - [ ] Add in-game video setting for borderless/exclusive/windowed presentation.
 - [ ] Validate detected refresh rate on 60 Hz, 80 Hz, 144 Hz, and high-refresh monitors.
 
@@ -78,3 +103,4 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [ ] Validate high polling-rate mouse behavior without event queue buildup.
 - [ ] Validate tablet absolute input without sensitivity or smoothing interference.
 - [ ] Add a repeatable stress beatmap/profile scenario for complex sliders and dense streams.
+- [ ] Add an automated startup-stutter scenario that asserts first-object frame time stays below target budget.

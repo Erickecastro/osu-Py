@@ -35,13 +35,13 @@ class GameplayEffectsRenderer:
         if not parts or any(part is None for part in parts):
             return None
 
-        key = ("image", text)
+        key = ("image", text, "digit-spacing-v2")
         cached = self.combo_number_surface_cache.get(key)
         if cached is not None:
             return cached
 
         height = max(part.get_height() for part in parts)
-        spacing = -max(1, int(height * 0.09775))
+        spacing = max(2, int(height * 0.045)) if len(parts) > 1 else 0
         width = (
             sum(part.get_width() for part in parts)
             + spacing * max(0, len(parts) - 1)

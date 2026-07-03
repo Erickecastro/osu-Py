@@ -130,8 +130,8 @@ class MenuOption:
         hover = ease_out_cubic(self.hover)
         hover_style = round(hover * 24.0) / 24.0
         slide = int((1.0 - visible) * -self.rect.width * 0.54)
-        expand_width = int(self.rect.width * (0.12 * hover_style))
-        expand_height = int(self.rect.height * (0.06 * hover_style))
+        expand_width = int(self.rect.width * (0.055 * hover_style))
+        expand_height = int(self.rect.height * (0.035 * hover_style))
         rect = pygame.Rect(
             self.rect.left + slide,
             self.rect.top - (expand_height // 2),
@@ -181,7 +181,11 @@ class MenuOption:
         text = self._text_surface(font, available_width)
         if text.get_alpha() != text_alpha:
             text.set_alpha(text_alpha)
-        text_rect = text.get_rect(center=body.center)
+        text_center_x = min(
+            body.right - (text.get_width() // 2) - int(body.height * 0.22),
+            body.centerx + int(body.height * 0.43)
+        )
+        text_rect = text.get_rect(center=(text_center_x, body.centery))
         layer.blit(text, text_rect)
 
         if len(self._surface_cache) > 56:
@@ -729,6 +733,7 @@ class MainMenuScene(BaseScene):
         self.settings_dragging = None
         self.settings_panel_t = 0.0
         self.settings_scroll = 0.0
+        self.settings_scroll_target = 0.0
         self.settings_content_height = 0.0
         self.settings_scroll_overshoot = 90.0
         self.settings_controls = {}
@@ -823,7 +828,7 @@ class MainMenuScene(BaseScene):
         self.footer_font = rounded_font(max(14, height // 64), bold=False)
         self.footer_cache.clear()
 
-        option_width = int(clamp(width * 0.380, 370, 676))
+        option_width = int(clamp(width * 0.318, 330, 566))
         option_height = int(clamp(height * 0.075, 56, 79))
         spacing = int(option_height * 1.24)
         open_circle_x = self.circle.center[0] - int(self.circle.base_radius * 0.48)
@@ -841,7 +846,7 @@ class MainMenuScene(BaseScene):
         if start_y + (spacing * (len(self.options) - 1)) > height - 70:
             start_y = height - 70 - (spacing * (len(self.options) - 1))
 
-        width_factors = [0.70, 0.84, 1.06, 0.90, 0.66]
+        width_factors = [0.72, 0.84, 1.02, 0.88, 0.64]
         for index, option in enumerate(self.options):
             option.set_layout(
                 left_x,
@@ -987,6 +992,9 @@ class MainMenuScene(BaseScene):
                         return
 
             if self.circle.contains(event.pos):
+                if self.menu_open and self.menu_t > 0.72:
+                    self._open_song_select()
+                    return
                 self.menu_open = True
                 self.circle.trigger_click()
                 for index, option in enumerate(self.options):
@@ -1171,6 +1179,7 @@ class MainMenuScene(BaseScene):
     def _open_settings(self):
         if not self.settings_open:
             self.settings_scroll = 0.0
+            self.settings_scroll_target = 0.0
         self.settings_open = True
         self.menu_open = True
         self.circle.trigger_click()
@@ -1182,8 +1191,8 @@ class MainMenuScene(BaseScene):
     def _scroll_settings(self, amount):
         max_scroll = self._settings_max_scroll()
         overshoot = self.settings_scroll_overshoot
-        self.settings_scroll = clamp(
-            self.settings_scroll + amount,
+        self.settings_scroll_target = clamp(
+            self.settings_scroll_target + amount,
             -overshoot,
             max_scroll + overshoot
         )
@@ -1191,18 +1200,27 @@ class MainMenuScene(BaseScene):
     def _update_settings_scroll(self, dt):
         if self.settings_panel_t <= 0.01 and not self.settings_open:
             self.settings_scroll = 0.0
+            self.settings_scroll_target = 0.0
             return
 
         max_scroll = self._settings_max_scroll()
-        target = clamp(self.settings_scroll, 0.0, max_scroll)
-        if abs(self.settings_scroll - target) > 0.01:
-            self.settings_scroll = lerp(
-                self.settings_scroll,
-                target,
-                1.0 - math.exp(-dt * 13.0)
+        clamped_target = clamp(self.settings_scroll_target, 0.0, max_scroll)
+        if abs(self.settings_scroll_target - clamped_target) > 0.01:
+            self.settings_scroll_target = lerp(
+                self.settings_scroll_target,
+                clamped_target,
+                1.0 - math.exp(-dt * 8.5)
             )
-            if abs(self.settings_scroll - target) < 0.35:
-                self.settings_scroll = target
+            if abs(self.settings_scroll_target - clamped_target) < 0.25:
+                self.settings_scroll_target = clamped_target
+
+        self.settings_scroll = lerp(
+            self.settings_scroll,
+            self.settings_scroll_target,
+            1.0 - math.exp(-dt * 11.0)
+        )
+        if abs(self.settings_scroll - self.settings_scroll_target) < 0.18:
+            self.settings_scroll = self.settings_scroll_target
 
     def _adjust_mouse_sensitivity(self, amount):
         self.game.set_mouse_sensitivity(

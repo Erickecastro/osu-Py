@@ -72,22 +72,24 @@ class CursorRenderer:
         if len(live_trail) > self.trail_max_points:
             del live_trail[:-self.trail_max_points]
 
-    def draw(self, screen, pos=None, draw_trail=True):
+    def draw(self, screen, pos=None, draw_trail=True, backend=None):
         if pos is not None:
             self.pos = pos
 
         if draw_trail:
-            self._draw_trail(screen)
+            self._draw_trail(screen, backend=backend)
 
         self._blit_centered(
             screen,
             self.cursor_image,
             self.pos,
             alpha=None,
-            scale=self.cursor_base_scale * self.user_scale
+            scale=self.cursor_base_scale * self.user_scale,
+            backend=backend,
+            atlas_key=("cursor", "main")
         )
 
-    def _draw_trail(self, screen):
+    def _draw_trail(self, screen, backend=None):
         for entry in self.trail:
             entry_pos, entry_age = entry
             progress = self._clamp01(
@@ -106,7 +108,9 @@ class CursorRenderer:
                 self.trail_image,
                 entry_pos,
                 alpha=alpha,
-                scale=self.trail_base_scale * self.user_scale * scale
+                scale=self.trail_base_scale * self.user_scale * scale,
+                backend=backend,
+                atlas_key=("cursor", "trail")
             )
 
     def _load_asset(self, filename):
@@ -121,7 +125,9 @@ class CursorRenderer:
         image,
         center,
         alpha=255,
-        scale=1.0
+        scale=1.0,
+        backend=None,
+        atlas_key=None
     ):
         if image is None:
             return
@@ -153,6 +159,22 @@ class CursorRenderer:
                 int(round(center[1]))
             )
         )
+        if backend is not None:
+            key = None
+            if atlas_key is not None:
+                key = (
+                    *atlas_key,
+                    render_image.get_width(),
+                    render_image.get_height()
+                )
+            backend.blit_surface(
+                render_image,
+                rect,
+                alpha=alpha,
+                atlas_key=key
+            )
+            return
+
         if alpha is None:
             target.blit(render_image, rect)
             return

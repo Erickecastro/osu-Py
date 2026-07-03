@@ -106,6 +106,7 @@ def get_playback_time_ms():
 
 def preload_music(music_path):
     global _LOADED_MUSIC_PATH, _LAST_START_OFFSET_MS
+    global _PLAYBACK_START_TICKS, _MUSIC_PLAYING
     normalized = _normalise_music_path(music_path)
     if not normalized:
         return False
@@ -118,17 +119,24 @@ def preload_music(music_path):
         pygame.mixer.music.load(normalized)
         _LOADED_MUSIC_PATH = normalized
         _LAST_START_OFFSET_MS = 0
+        _PLAYBACK_START_TICKS = None
+        _MUSIC_PLAYING = False
         return True
     except pygame.error:
         _LOADED_MUSIC_PATH = None
         _LAST_START_OFFSET_MS = 0
+        _PLAYBACK_START_TICKS = None
+        _MUSIC_PLAYING = False
         return False
 
 
 def start_music(music_path, start_ms=0):
     global _LOADED_MUSIC_PATH, _LAST_START_OFFSET_MS
+    global _PLAYBACK_START_TICKS, _MUSIC_PLAYING
     if not music_path:
         _LAST_START_OFFSET_MS = 0
+        _PLAYBACK_START_TICKS = None
+        _MUSIC_PLAYING = False
         return None
 
     try:
@@ -150,7 +158,7 @@ def start_music(music_path, start_ms=0):
         _LAST_START_OFFSET_MS = actual_start_ms
         # record playback start tick for a high-resolution clock reference
         try:
-            _PLAYBACK_START_TICKS = pygame.time.get_ticks() - actual_start_ms
+            _PLAYBACK_START_TICKS = pygame.time.get_ticks()
             _MUSIC_PLAYING = True
         except Exception:
             _PLAYBACK_START_TICKS = None
@@ -159,5 +167,7 @@ def start_music(music_path, start_ms=0):
     except Exception as exc:
         _LOADED_MUSIC_PATH = None
         _LAST_START_OFFSET_MS = 0
+        _PLAYBACK_START_TICKS = None
+        _MUSIC_PLAYING = False
         print(exc)
         return None

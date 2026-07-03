@@ -16,17 +16,40 @@ class SpinnerRenderer:
         self.prewarm_jobs = []
         self.prewarm_index = 0
         self.prewarm_complete = True
-        # 4 px buckets keep the spinner approach circle visually smooth while
-        # still allowing us to prewarm every scale before gameplay.
-        self.approach_quantize_step = 4
-        self.rotation_angle_step = 6
+        # Small buckets keep the spinner approach circle visually continuous.
+        # Cache pruning below prevents the old every-scale prewarm OOM.
+        self.approach_quantize_step = 8
+        self.cache_limit = 176
+        self.scaled_cache_limit = 72
+        self.rotated_cache_limit = 32
+        self.rotation_angle_step = 15
+        self.circle_scale = 0.686
         self.approach_start_scale = 3.68
         self.approach_end_scale = 0.16
         self.approach_curve_power = 1.12
 
     def _load_image(self, filename):
         img = load_image(filename, "spinner")
-        return img.convert_alpha() if img else None
+        if img is None:
+            return None
+        img = img.convert_alpha()
+        if filename == "spinner-circle.png":
+            return self._trim_transparent_padding(img, padding=4)
+        return img
+
+    def _trim_transparent_padding(self, image, padding=0):
+        bounds = image.get_bounding_rect()
+        if bounds.width <= 0 or bounds.height <= 0:
+            return image
+        padded = bounds.inflate(padding * 2, padding * 2)
+        padded.clamp_ip(image.get_rect())
+        if padded.size == image.get_size():
+            return image
+        trimmed = image.subsurface(padded).copy()
+        try:
+            return trimmed.convert_alpha()
+        except pygame.error:
+            return trimmed
 
     def reset_prewarm_jobs(self, notes):
         self.prewarm_jobs = self._build_prewarm_jobs(notes)
@@ -34,7 +57,10 @@ class SpinnerRenderer:
         self.prewarm_complete = not self.prewarm_jobs
 
     def _spinner_radius(self):
-        return int(min(self.scene.game.WIDTH, self.scene.game.HEIGHT) * 0.3705)
+        return int(min(self.scene.game.WIDTH, self.scene.game.HEIGHT) * 0.44)
+
+    def _spinner_circle_diameter(self):
+        return int(self._spinner_radius() * self.circle_scale)
 
     def _build_prewarm_jobs(self, notes):
         if not any(note.get("type") == "spinner" for note in notes):
@@ -45,7 +71,7 @@ class SpinnerRenderer:
         circle = self.images.get("circle")
         approach = self.images.get("approach")
 
-        circle_diameter = int(radius * 1.35)
+        circle_diameter = self._spinner_circle_diameter()
         if circle is not None:
             jobs.append(("scale", circle, circle_diameter, None))
             for angle in range(0, 360, self.rotation_angle_step):
@@ -55,7 +81,12 @@ class SpinnerRenderer:
             max_diameter = int(radius * self.approach_start_scale)
             min_diameter = max(1, int(radius * self.approach_end_scale))
             step = max(4, int(self.approach_quantize_step))
-            for diameter in range(max_diameter, min_diameter - 1, -step):
+            warm_diameters = {max_diameter, min_diameter}
+            for index in range(1, 23):
+                t = index / 23.0
+                diameter = max_diameter + ((min_diameter - max_diameter) * t)
+                warm_diameters.add(max(1, int(round(diameter / step)) * step))
+            for diameter in sorted(warm_diameters, reverse=True):
                 jobs.append(("scale", approach, diameter, step))
 
         return jobs
@@ -145,7 +176,7 @@ class SpinnerRenderer:
             target,
             self.images["circle"],
             center,
-            int(radius * 1.35),
+            self._spinner_circle_diameter(),
             visual_angle,
             alpha=alpha
         ):
@@ -222,8 +253,12 @@ class SpinnerRenderer:
             return cached
 
         scaled = self._scaled(image, diameter)
-        cached = pygame.transform.rotozoom(scaled, key[3], 1.0).convert_alpha()
+        try:
+            cached = pygame.transform.rotozoom(scaled, key[3], 1.0).convert_alpha()
+        except pygame.error:
+            cached = scaled
         self.cache[key] = cached
+        self._prune_cache(protected_key=key)
         return cached
 
     def _scaled(self, image, diameter, quantize_step=None):
@@ -238,6 +273,49 @@ class SpinnerRenderer:
         key = (id(image), diameter)
         cached = self.cache.get(key)
         if cached is None:
-            cached = pygame.transform.smoothscale(image, (diameter, diameter)).convert_alpha()
+            try:
+                cached = pygame.transform.smoothscale(
+                    image,
+                    (diameter, diameter)
+                ).convert_alpha()
+            except pygame.error:
+                try:
+                    cached = pygame.transform.scale(
+                        image,
+                        (diameter, diameter)
+                    ).convert_alpha()
+                except pygame.error:
+                    return image
             self.cache[key] = cached
+            self._prune_cache(protected_key=key)
         return cached
+
+    def _prune_cache(self, protected_key=None):
+        if len(self.cache) <= self.cache_limit:
+            return
+
+        scaled_keys = []
+        rotated_keys = []
+        for key in self.cache:
+            if key == protected_key:
+                continue
+            if (
+                isinstance(key, tuple)
+                and len(key) == 2
+                and isinstance(key[1], int)
+            ):
+                scaled_keys.append(key)
+            elif isinstance(key, tuple) and key[:1] == ("rotated",):
+                rotated_keys.append(key)
+
+        while len(rotated_keys) > self.rotated_cache_limit:
+            self.cache.pop(rotated_keys.pop(0), None)
+
+        while len(scaled_keys) > self.scaled_cache_limit:
+            self.cache.pop(scaled_keys.pop(0), None)
+
+        for key in list(self.cache):
+            if len(self.cache) <= self.cache_limit:
+                break
+            if key != protected_key:
+                self.cache.pop(key, None)

@@ -70,6 +70,9 @@ class GameplayScene(BaseScene):
     HITCIRCLE_ALPHA_BOOST = 1.23
     FOLLOWPOINT_THICKNESS_SCALE = 0.85
     HITOBJECT_FADE_IN_DURATION_SCALE = 0.42
+    FIRST_OBJECT_FADE_IN_MIN_MS = 260
+    FIRST_OBJECT_FADE_IN_MAX_MS = 420
+    APPROACH_SUPERSAMPLE_SIZE = 768
     APPROACH_RADIUS_EXTRA_SCALE = 3.35
     STACK_DISTANCE_OSU = 3.0
 
@@ -315,7 +318,6 @@ class GameplayScene(BaseScene):
         self.judged_objects = 0
         self.judgable_objects = len(self.notes)
         self.last_music_sync_check_ms = 0
-        self._apply_intro_lead_in()
 
         # Pré-computa o intervalo de visibilidade de cada objeto.
         # Isso permite desenhar com alpha/escala sem depender de "sumir instantâneo".
@@ -326,6 +328,7 @@ class GameplayScene(BaseScene):
             self.timing_points,
             self.slider_multiplier
         )
+        self._apply_intro_lead_in()
         self._precompute_note_positions()
         self._apply_stack_offsets()
         self._precompute_stream_readability()
@@ -333,9 +336,29 @@ class GameplayScene(BaseScene):
             (
                 note.get("start_time", note["time"] - self.approach_time)
                 for note in self.notes
-                if note["type"] != "spinner"
             ),
             default=0
+        )
+        self.first_object_time = min(
+            (
+                note["time"]
+                for note in self.notes
+            ),
+            default=0
+        )
+        self.first_object_cache_window_ms = max(
+            5600,
+            int(self.approach_time + 4200)
+        )
+        self.first_object_cache_horizon_ms = int(
+            self.first_object_time + self.first_object_cache_window_ms
+        )
+        self.first_object_fade_in_ms = max(
+            self.FIRST_OBJECT_FADE_IN_MIN_MS,
+            min(
+                self.FIRST_OBJECT_FADE_IN_MAX_MS,
+                int(self.approach_time * 0.30)
+            )
         )
 
         self.slider_renderer = SliderRenderer(self)
@@ -363,8 +386,19 @@ class GameplayScene(BaseScene):
         self.slider_reveal_prewarm_cursor = 0
         self.initial_slider_cache_horizon_ms = max(
             9000,
+            self.first_object_cache_horizon_ms,
             int(self.approach_time + 9000)
         )
+        self.startup_critical_notes = [
+            note
+            for note in self.notes
+            if note["time"] <= self.first_object_cache_horizon_ms
+        ]
+        self.startup_critical_slider_notes = [
+            note
+            for note in self.startup_critical_notes
+            if note["type"] == "slider"
+        ]
         self._prime_initial_slider_geometry_cache()
         self._queue_initial_slider_surface_cache(
             horizon_ms=self.initial_slider_cache_horizon_ms,
@@ -382,7 +416,7 @@ class GameplayScene(BaseScene):
         self.effects_renderer = GameplayEffectsRenderer(self)
         self.hud_renderer = GameplayHUDRenderer(self.font)
         self.hud_start_time = None
-        self.hud_fade_in_duration = 140
+        self.hud_fade_in_duration = 90
         self.skin_images = self._load_skin_images()
         self.button_image = self._load_image("button.png")
         self.button_surface_cache = {}
@@ -417,6 +451,7 @@ class GameplayScene(BaseScene):
         self.failed = False
         self.completed = False
         self.fail_time = None
+        self.fail_visual_time = None
         self.pause_visual_time = None
         self.fail_fall_duration_ms = 3600
         self.lose_overlay_delay_ms = 720
@@ -441,6 +476,7 @@ class GameplayScene(BaseScene):
         self.spinner_manager = SpinnerManager(self)
         self.spinner_renderer = SpinnerRenderer(self)
         self.spinner_renderer.reset_prewarm_jobs(self.notes)
+        self.startup_cache_warm_budget_ms = 9000
 
     def _tinted_button_image(self, tint_color, size, hover=0.0):
         image = self.button_image
@@ -693,15 +729,28 @@ class GameplayScene(BaseScene):
         if not self.notes:
             return
 
-        first_note_time = self.notes[0]["time"]
+        first_note = self.notes[0]
+        first_note_time = float(first_note["time"])
+        first_visual_time = float(
+            first_note.get(
+                "start_time",
+                first_note_time - self.approach_time
+            )
+        )
         minimum_lead_in = max(
             850,
             int(self.approach_time * 0.78)
         )
-        if first_note_time >= minimum_lead_in:
-            return
+        visual_lead_in = max(
+            0,
+            int(-first_visual_time)
+        )
+        hit_lead_in = max(
+            0,
+            int(minimum_lead_in - first_note_time)
+        )
 
-        self.pre_music_lead_in_ms = minimum_lead_in - first_note_time
+        self.pre_music_lead_in_ms = max(visual_lead_in, hit_lead_in)
 
     def _calculate_intro_skip_ms(self):
         if not self.notes:
@@ -716,7 +765,11 @@ class GameplayScene(BaseScene):
             "start_time",
             first_time - self.approach_time
         )
-        skip_to = max(0, int(first_visible_time - 350))
+        post_skip_visual_lead = max(
+            780,
+            min(1350, int(self.approach_time * 0.62))
+        )
+        skip_to = max(0, int(first_visible_time - post_skip_visual_lead))
         if skip_to < 1200:
             return 0
         return skip_to
@@ -748,6 +801,9 @@ class GameplayScene(BaseScene):
             note["head_hit_result"] = result
             note["head_hit_time"] = self.current_time
             if result > 0:
+                note["slider_follow_engaged"] = True
+                note["slider_follow_outside_since"] = None
+                note["slider_follow_outside_reason"] = None
                 note["slider_hit_sound_index"] = 1
 
         if result == 0:
@@ -787,24 +843,22 @@ class GameplayScene(BaseScene):
         self.score_ledger.advance_combo()
         self._sync_score_fields()
 
-    def _add_hit_result_indicator(self, note, result):
+    def _borrow_indicator_payload(self):
         if self._indicator_pool:
             payload = self._indicator_pool.pop()
-            payload.update({
-                "result": result,
-                "pos": self._note_screen_pos(note),
-                "show_time": self.current_time,
-                "start_time": self.current_time
-            })
-            self.hit_result_indicators.append(payload)
-            return
+            payload.clear()
+            return payload
+        return {}
 
-        self.hit_result_indicators.append({
+    def _add_hit_result_indicator(self, note, result):
+        payload = self._borrow_indicator_payload()
+        payload.update({
             "result": result,
             "pos": self._note_screen_pos(note),
             "show_time": self.current_time,
             "start_time": self.current_time
         })
+        self.hit_result_indicators.append(payload)
 
     def _add_hit_error_marker(self, note, result):
         if note["type"] not in ("circle", "slider"):
@@ -903,13 +957,15 @@ class GameplayScene(BaseScene):
             pass
 
     def _add_spinner_bonus_indicator(self, bonus_count, pos):
-        self.hit_result_indicators.append({
+        payload = self._borrow_indicator_payload()
+        payload.update({
             "result": "spinner_bonus",
             "bonus_count": bonus_count,
             "pos": pos,
             "show_time": self.current_time,
             "start_time": self.current_time
         })
+        self.hit_result_indicators.append(payload)
 
     def _update_health_target(self, result):
         self.target_health = apply_health_result(
@@ -1212,6 +1268,8 @@ class GameplayScene(BaseScene):
         )
 
         if best_note is None:
+            if self._try_reengage_slider_follow_at(pos):
+                return True
             clicked_note = self._note_at_pos(pos)
             if (
                 clicked_note is not None
@@ -1290,10 +1348,21 @@ class GameplayScene(BaseScene):
         if progress <= 0:
             return 0.0
 
-        return min(
+        fade = min(
             1.0,
             0.20 + (0.80 * self._smootherstep(progress))
         )
+        if (
+            note.get("hit_index") == 1
+            and self.current_time < start + self.first_object_fade_in_ms
+        ):
+            intro_progress = (
+                (self.current_time - start)
+                / max(1.0, self.first_object_fade_in_ms)
+            )
+            fade *= self._smootherstep(intro_progress)
+
+        return fade
 
     def _note_alpha(self, note):
         """Alpha suave: fade-in no approach e fade-out no fim do objeto."""
@@ -1482,6 +1551,15 @@ class GameplayScene(BaseScene):
             center,
             alpha=alpha
         )
+
+    def _register_sprite_atlas(self, surface, key):
+        backend = getattr(self, "render_backend", None)
+        if backend is None or surface is None:
+            return
+        try:
+            backend.register_sprite_surface(surface, key=key)
+        except Exception:
+            pass
 
     def _draw_aa_circle(
         self,
@@ -1726,10 +1804,12 @@ class GameplayScene(BaseScene):
                     # white ring. Use the sprite brightness as a mask so those
                     # pixels do not become colored shadows after combo tinting.
                     brightness = max(pixel.r, pixel.g, pixel.b)
-                    if brightness <= 132:
+                    if brightness <= 72:
                         continue
 
-                    strength = min(1.0, (brightness - 132) / 92.0)
+                    strength = self._smoothstep(
+                        min(1.0, max(0.0, (brightness - 72) / 150.0))
+                    )
                     final_alpha = int(alpha * strength)
                     if final_alpha > 0:
                         cleaned.set_at((x, y), (*rgb, final_alpha))
@@ -1739,6 +1819,68 @@ class GameplayScene(BaseScene):
 
         self.tinted_surface_cache[key] = cleaned
         return cleaned
+
+    def _approach_render_source(self, image, color):
+        image = self._clean_approach_image(
+            image,
+            color if color is not None else (255, 255, 255)
+        )
+        if image is None:
+            return None
+
+        base_w, base_h = image.get_size()
+        target_size = max(
+            base_w,
+            base_h,
+            self.APPROACH_SUPERSAMPLE_SIZE
+        )
+        if max(base_w, base_h) >= target_size:
+            return image
+
+        key = ("approach_supersource", id(image), target_size)
+        cached = self.image_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        scaled = None
+        for size in (target_size, 640, 512):
+            size = max(base_w, base_h, int(size))
+            try:
+                scaled = pygame.transform.smoothscale(
+                    image,
+                    (size, size)
+                ).convert_alpha()
+                target_size = size
+                break
+            except pygame.error:
+                continue
+        if scaled is None:
+            return image
+        self.image_surface_cache[key] = scaled
+        return scaled
+
+    def _scaled_approach_image(self, image, diameter):
+        diameter = max(1, int(round(diameter / 2.0)) * 2)
+        key = (id(image), diameter, "v4_supersampled_approach")
+        cached = self.image_surface_cache.get(key)
+        if cached is not None:
+            return cached
+
+        try:
+            scaled = pygame.transform.smoothscale(
+                image,
+                (diameter, diameter)
+            ).convert_alpha()
+        except pygame.error:
+            try:
+                scaled = pygame.transform.scale(
+                    image,
+                    (diameter, diameter)
+                ).convert_alpha()
+            except pygame.error:
+                return image
+        self.image_surface_cache[key] = scaled
+        return scaled
 
     def _draw_image_centered(
         self,
@@ -1823,23 +1965,17 @@ class GameplayScene(BaseScene):
         image = self.skin_images.get("approach")
         if image is None:
             return False
-        image = self._clean_approach_image(
+
+        image = self._approach_render_source(
             image,
             color if color is not None else (255, 255, 255)
         )
+        if image is None:
+            return False
 
-        # Calculate diameter without aggressive quantization for better smoothness
         diameter = max(1, int(round(radius * 2)))
 
-        # NEW cache key to invalidate old caches!
-        key = (id(image), diameter, "v2_high_quality_approach")
-        cached = self.image_surface_cache.get(key)
-        if cached is None:
-            from core.assets import scale_image_high_quality
-            scaled = scale_image_high_quality(image, (diameter, diameter)).convert_alpha()
-            self.image_surface_cache[key] = scaled
-        else:
-            scaled = cached
+        scaled = self._scaled_approach_image(image, diameter)
 
         self._blit_centered(
             target,
@@ -1850,7 +1986,8 @@ class GameplayScene(BaseScene):
         return True
 
     def _add_miss_indicator(self, pos, show_time=None):
-        self.miss_indicators.append({
+        payload = self._borrow_indicator_payload()
+        payload.update({
             "pos": pos,
             "show_time": (
                 self.current_time
@@ -1859,6 +1996,7 @@ class GameplayScene(BaseScene):
             ),
             "start_time": self.current_time
         })
+        self.miss_indicators.append(payload)
 
     def _register_slider_follow_miss(
         self,
@@ -1984,7 +2122,7 @@ class GameplayScene(BaseScene):
     def _update_slider_checkpoint_sounds(self, note):
         if (
             note["type"] != "slider"
-            or not note.get("head_hit")
+            or not self._slider_follow_active(note)
             or note.get("slider_follow_missed")
         ):
             return
@@ -2011,6 +2149,17 @@ class GameplayScene(BaseScene):
             next_index += 1
 
         note["slider_hit_sound_index"] = next_index
+
+    def _slider_follow_active(self, note):
+        return bool(
+            note.get("head_hit")
+            or note.get("slider_follow_engaged")
+        )
+
+    def _point_inside_slider_follow(self, cursor_pos, ball_pos):
+        dx = float(cursor_pos[0]) - float(ball_pos[0])
+        dy = float(cursor_pos[1]) - float(ball_pos[1])
+        return (dx * dx + dy * dy) ** 0.5 <= self.slider_follow_radius
 
     def _slider_motion_state(self, note):
         if note["type"] != "slider":
@@ -2306,10 +2455,10 @@ class GameplayScene(BaseScene):
         return partial, reveal
 
     def _cursor_inside_slider_follow(self, pos):
-        mouse_x, mouse_y = self.game.mouse_pos
-        dx = mouse_x - pos[0]
-        dy = mouse_y - pos[1]
-        return (dx * dx + dy * dy) ** 0.5 <= self.slider_follow_radius
+        return self._point_inside_slider_follow(
+            self.game.mouse_pos,
+            pos
+        )
 
     def _collect_slider_scorepoint(self, note, scorepoint):
         scorepoint["processed"] = True
@@ -2342,7 +2491,7 @@ class GameplayScene(BaseScene):
     def _update_slider_scorepoints(self, note, state=None):
         if (
             note["type"] != "slider"
-            or not note.get("head_hit")
+            or not self._slider_follow_active(note)
         ):
             return
 
@@ -2413,6 +2562,7 @@ class GameplayScene(BaseScene):
             return
         if (
             note.get("head_hit_result") == 0
+            and not note.get("slider_follow_engaged")
         ):
             return
 
@@ -2477,7 +2627,7 @@ class GameplayScene(BaseScene):
     ):
         if (
             note["type"] != "slider"
-            or not note.get("head_hit")
+            or not self._slider_follow_active(note)
         ):
             return
 
@@ -2576,6 +2726,78 @@ class GameplayScene(BaseScene):
 
         note["slider_follow_outside_since"] = None
         note["slider_follow_outside_reason"] = None
+
+    def _try_reengage_slider_follow_at(self, pos):
+        if not self._hit_input_held():
+            return False
+
+        best_note = None
+        best_state = None
+        best_distance_sq = None
+        for note in self.active_notes:
+            if (
+                note.get("type") != "slider"
+                or note.get("head_hit")
+                or note.get("slider_follow_engaged")
+                or note.get("head_hit_result") != 0
+            ):
+                continue
+
+            state = self._slider_motion_state(note)
+            if state is None:
+                continue
+            if self.current_time > state["slider_end_time"]:
+                continue
+
+            ball_pos = state["ball_pos"]
+            dx = float(pos[0]) - float(ball_pos[0])
+            dy = float(pos[1]) - float(ball_pos[1])
+            distance_sq = (dx * dx) + (dy * dy)
+            if distance_sq > self.slider_follow_radius * self.slider_follow_radius:
+                continue
+            if best_distance_sq is None or distance_sq < best_distance_sq:
+                best_note = note
+                best_state = state
+                best_distance_sq = distance_sq
+
+        if best_note is None or best_state is None:
+            return False
+
+        best_note["slider_follow_engaged"] = True
+        best_note["slider_follow_missed"] = False
+        best_note["slider_follow_outside_since"] = None
+        best_note["slider_follow_outside_reason"] = None
+
+        span_duration = float(best_state.get("span_duration", 0.0))
+        repeat_count = int(best_state.get("repeat_count", 1))
+        if span_duration > 0 and repeat_count > 0:
+            elapsed = max(0.0, self.current_time - best_note["time"])
+            next_checkpoint = int(elapsed / span_duration) + 1
+            best_note["slider_hit_sound_index"] = max(
+                1,
+                min(repeat_count + 1, next_checkpoint)
+            )
+
+        scorepoints = best_note.get("slider_scorepoints")
+        if scorepoints:
+            index = 0
+            while index < len(scorepoints):
+                scorepoint = scorepoints[index]
+                if self.current_time < scorepoint["time"]:
+                    break
+                scorepoint["processed"] = True
+                scorepoint["missed"] = True
+                scorepoint["processed_time"] = self.current_time
+                index += 1
+            best_note["slider_scorepoint_index"] = max(
+                int(best_note.get("slider_scorepoint_index", 0)),
+                index
+            )
+
+        return True
+
+    def _try_reengage_missed_slider_follow(self):
+        return self._try_reengage_slider_follow_at(self.game.mouse_pos)
 
     def _note_follow_anchor(self, note):
         if note["type"] == "slider":
@@ -2836,7 +3058,12 @@ class GameplayScene(BaseScene):
         frame = self._cropped_alpha_image(frames[-1])
         if frame is None:
             return None
-        return frame.copy().convert_alpha()
+        surface = frame.copy().convert_alpha()
+        self._register_sprite_atlas(
+            surface,
+            ("followpoint", "segment", surface.get_width(), surface.get_height())
+        )
+        return surface
 
     def _draw_followpoints(self, target):
         scaled = self.followpoint_segment_surface
@@ -3014,8 +3241,23 @@ class GameplayScene(BaseScene):
             )
             min_diameter = self._quantized_diameter(min_radius * 2, quantum=4)
             max_diameter = self._quantized_diameter(max_radius * 2, quantum=4)
-            for diameter in range(min_diameter, max_diameter + 1, 4):
-                jobs.append(("scale", approach, diameter))
+            warm_diameters = {
+                min_diameter,
+                max_diameter,
+            }
+            steps = 8
+            for step_index in range(1, steps):
+                t = step_index / steps
+                warm_diameters.add(
+                    self._quantized_diameter(
+                        min_diameter + (max_diameter - min_diameter) * t,
+                        quantum=8
+                    )
+                )
+            for color in self.DEFAULT_COMBO_COLORS:
+                jobs.append(("approach_source", approach, color))
+                for diameter in sorted(warm_diameters):
+                    jobs.append(("approach_scale", approach, color, diameter))
 
         for key, diameter in (
             ("hit100", self.scaled_radius * 1.28),
@@ -3053,10 +3295,41 @@ class GameplayScene(BaseScene):
             elif kind == "scale_tinted":
                 _, image, color, diameter = job
                 tinted = self._tinted_image(image, color)
-                self._scaled_square_image(tinted, diameter)
+                scaled = self._scaled_square_image(tinted, diameter)
+                self._register_sprite_atlas(
+                    scaled,
+                    (
+                        "skin",
+                        "tinted_scale",
+                        id(image),
+                        tuple(color[:3]),
+                        int(round(diameter))
+                    )
+                )
             elif kind == "scale":
                 _, image, diameter = job
-                self._scaled_square_image(image, diameter)
+                scaled = self._scaled_square_image(image, diameter)
+                self._register_sprite_atlas(
+                    scaled,
+                    ("skin", "scale", id(image), int(round(diameter)))
+                )
+            elif kind == "approach_source":
+                _, image, color = job
+                self._approach_render_source(image, color)
+            elif kind == "approach_scale":
+                _, image, color, diameter = job
+                source = self._approach_render_source(image, color)
+                if source is not None:
+                    scaled = self._scaled_approach_image(source, diameter)
+                    self._register_sprite_atlas(
+                        scaled,
+                        (
+                            "skin",
+                            "approach",
+                            tuple(color[:3]),
+                            int(round(diameter))
+                        )
+                    )
             elif kind == "combo_number":
                 _, text, _digits = job
                 self.effects_renderer.combo_number_image(text)
@@ -3429,6 +3702,178 @@ class GameplayScene(BaseScene):
                 return False
         return True
 
+    def _background_cache_ready(self):
+        return (
+            not self.background_path
+            or self.background_source is not None
+            or self.background_load_attempted
+        )
+
+    def _startup_cache_status(self, horizon_ms=None):
+        if horizon_ms is None:
+            horizon_ms = self.first_object_cache_horizon_ms
+
+        slider_geometry_ready = True
+        for note in self.startup_critical_slider_notes:
+            if note["time"] > horizon_ms:
+                break
+            if (
+                note.get("scaled_slider_points") is None
+                or note.get("scaled_slider_cumulative") is None
+                or note.get("scaled_slider_length") is None
+            ):
+                slider_geometry_ready = False
+                break
+
+        status = {
+            "slider_geometry": slider_geometry_ready,
+            "slider_surface": self._critical_slider_cache_ready(horizon_ms),
+            "slider_reveal": self._critical_slider_reveal_cache_ready(
+                horizon_ms,
+                max_bucket=9
+            ),
+            "spinner": getattr(
+                self.spinner_renderer,
+                "prewarm_complete",
+                True
+            ),
+            "skin": self.skin_cache_warm_complete,
+            "surface": self.surface_precache_complete,
+            "followpoints": self.followpoint_prepare_complete,
+            "background": self._background_cache_ready(),
+        }
+        return status
+
+    def _startup_cache_missing_mask(self, status):
+        bits = {
+            "slider_geometry": 1,
+            "slider_surface": 2,
+            "slider_reveal": 4,
+            "spinner": 8,
+            "skin": 16,
+            "surface": 32,
+            "followpoints": 64,
+            "background": 128,
+        }
+        mask = 0
+        for key, bit in bits.items():
+            if not status.get(key, True):
+                mask |= bit
+        return mask
+
+    def _startup_cache_ready(self, horizon_ms=None):
+        return self._startup_cache_missing_mask(
+            self._startup_cache_status(horizon_ms)
+        ) == 0
+
+    def _queue_slider_reveal_cache_for(self, note, max_bucket=9):
+        if self.slider_cache_executor is None:
+            return 0
+
+        self._prepare_slider_geometry(note)
+        slider_points = note.get("scaled_slider_points")
+        cumulative = note.get("scaled_slider_cumulative")
+        total_length = note.get("scaled_slider_length")
+        base_cache_key = note.get("render_index")
+        if (
+            not slider_points
+            or cumulative is None
+            or total_length is None
+            or base_cache_key is None
+        ):
+            return 0
+
+        queued = 0
+        max_bucket = max(1, min(9, int(max_bucket)))
+        for bucket in range(1, max_bucket + 1):
+            reveal_key = ("reveal", base_cache_key, bucket)
+            if (
+                reveal_key in self.slider_surface_cache
+                or reveal_key in self.slider_cache_futures
+                or reveal_key in self.slider_cache_failed
+            ):
+                continue
+
+            revealed_points, _ = self._revealed_slider_points(
+                note,
+                slider_points,
+                cumulative,
+                total_length,
+                reveal=bucket / 10.0
+            )
+            if not self._schedule_slider_surface_job(
+                reveal_key,
+                revealed_points
+            ):
+                continue
+
+            note.setdefault(
+                "slider_reveal_cache_keys",
+                set()
+            ).add(reveal_key)
+            self.slider_reveal_cache_keys.add(reveal_key)
+            queued += 1
+
+        return queued
+
+    def _warm_startup_critical_caches(self, horizon_ms, *, aggressive=False):
+        item_budget = 220 if aggressive else 96
+        self._warm_skin_image_cache(
+            max_ms=4 if aggressive else 2,
+            max_items=32 if aggressive else 18
+        )
+        self._warm_gameplay_surface_cache(
+            max_ms=5 if aggressive else 3,
+            max_items=32 if aggressive else 18
+        )
+        self._warm_followpoint_connections(
+            max_ms=2 if aggressive else 1,
+            max_items=160 if aggressive else 80
+        )
+        self._warm_spinner_cache(
+            max_ms=3.0 if aggressive else 2.0,
+            max_items=32 if aggressive else 18
+        )
+        self._warm_background_surface()
+
+        self._warm_slider_geometry_cache(
+            max_ms=6.0 if aggressive else 3.5,
+            max_items=item_budget,
+            horizon_ms=horizon_ms
+        )
+        self._warm_slider_cache(
+            max_ms=12 if aggressive else 7,
+            max_items=120 if aggressive else 48,
+            horizon_ms=horizon_ms
+        )
+
+        queued_reveals = 0
+        for note in self.startup_critical_slider_notes:
+            if note["time"] > horizon_ms:
+                break
+            self._prepare_slider_geometry(note)
+            if not self._slider_cache_ready(note):
+                if self.slider_cache_executor is not None:
+                    self._schedule_slider_cache_job(note)
+                else:
+                    self.slider_renderer.cache_full_surface(note)
+            queued_reveals += self._queue_slider_reveal_cache_for(
+                note,
+                max_bucket=9
+            )
+            if not aggressive and queued_reveals >= 36:
+                break
+
+        self._warm_slider_reveal_cache(
+            max_ms=8.0 if aggressive else 4.0,
+            max_items=96 if aggressive else 42,
+            horizon_ms=horizon_ms
+        )
+        self._collect_slider_cache_results(
+            max_ms=5.0 if aggressive else 2.5,
+            max_items=48 if aggressive else 18
+        )
+
     def _clear_slider_reveal_cache_for(self, note):
         keys = note.pop("slider_reveal_cache_keys", None)
         if not keys:
@@ -3665,6 +4110,25 @@ class GameplayScene(BaseScene):
         )
         return self.current_time < visual_time - margin_ms
 
+    def _warm_active_slider_caches(self):
+        if not self.slider_cache_notes:
+            return
+
+        self._collect_slider_cache_results(max_ms=0.14, max_items=2)
+        if self.slider_cache_executor is None:
+            return
+
+        self._warm_slider_cache(
+            max_ms=0.18,
+            max_items=2,
+            horizon_ms=self.approach_time + 14000
+        )
+        self._warm_slider_reveal_cache(
+            max_ms=0.08,
+            max_items=1,
+            horizon_ms=self.approach_time + 4200
+        )
+
     def _warm_background_surface(self):
         if (
             self.background_source is not None
@@ -3818,6 +4282,7 @@ class GameplayScene(BaseScene):
         self.next_note_index = 0
         self.active_notes.clear()
         self.intro_skip_used = True
+        self.hud_start_time = None
         self._publish_current_track_state()
 
     def _fail(self):
@@ -3826,6 +4291,7 @@ class GameplayScene(BaseScene):
         self.failed = True
         self.paused = False
         self.fail_time = pygame.time.get_ticks()
+        self.fail_visual_time = float(self.current_time)
         self.health = 0.0
         self.target_health = 0.0
         pygame.mixer.music.stop()
@@ -3850,6 +4316,7 @@ class GameplayScene(BaseScene):
         )
 
     def _quit_to_song_select(self):
+        self._publish_current_track_state()
         if len(self.game.scene_manager.scene_stack) > 1:
             self.game.scene_manager.pop_scene()
             return
@@ -3868,6 +4335,9 @@ class GameplayScene(BaseScene):
         self.game.current_menu_music_title = display_title or self.beatmap.get("name", "Menu music")
         self.game.current_menu_music_timing_points = self.beatmap.get("timing_points", [])
         self.game.current_menu_music_paused = False
+        osu_file = self.beatmap.get("osu_file")
+        if osu_file:
+            self.game.current_selected_osu_file = str(osu_file)
 
     def handle_event(self, event):
         if (
@@ -3979,9 +4449,10 @@ class GameplayScene(BaseScene):
 
             critical_slider_horizon = max(
                 5200,
-                int(self.approach_time + 7200)
+                int(self.approach_time + 7200),
+                self.first_object_cache_horizon_ms
             )
-            extra_slider_warm_budget = 2400
+            extra_slider_warm_budget = self.startup_cache_warm_budget_ms
             critical_slider_ready = self._critical_slider_cache_ready(
                 critical_slider_horizon
             )
@@ -3994,34 +4465,50 @@ class GameplayScene(BaseScene):
                 "prewarm_complete",
                 True
             )
+            critical_assets_ready = (
+                self.skin_cache_warm_complete
+                and self.surface_precache_complete
+            )
+            critical_followpoints_ready = self.followpoint_prepare_complete
+            startup_status = self._startup_cache_status(critical_slider_horizon)
+            startup_missing_mask = self._startup_cache_missing_mask(
+                startup_status
+            )
             if (
                 ready_elapsed < total_intro_delay + extra_slider_warm_budget
                 and not (
                     critical_slider_ready
                     and critical_reveal_ready
                     and critical_spinner_ready
+                    and critical_assets_ready
+                    and critical_followpoints_ready
+                    and startup_missing_mask == 0
                 )
             ):
-                self._warm_slider_geometry_cache(
-                    max_ms=5,
-                    max_items=220,
-                    horizon_ms=critical_slider_horizon
+                self._warm_startup_critical_caches(
+                    critical_slider_horizon,
+                    aggressive=ready_elapsed >= total_intro_delay + 900
                 )
-                self._warm_slider_cache(
-                    max_ms=10,
-                    max_items=96,
-                    horizon_ms=critical_slider_horizon
+                startup_status = self._startup_cache_status(
+                    critical_slider_horizon
                 )
-                self._warm_slider_reveal_cache(
-                    max_ms=8.0,
-                    max_items=86,
-                    horizon_ms=critical_slider_horizon
+                startup_missing_mask = self._startup_cache_missing_mask(
+                    startup_status
                 )
-                self._warm_skin_image_cache(max_ms=2, max_items=16)
-                self._warm_followpoint_connections(max_ms=1, max_items=64)
-                self._warm_spinner_cache(max_ms=2.5, max_items=24)
-                self._collect_slider_cache_results(max_ms=3.0, max_items=24)
+                if profiler_enabled:
+                    profiler.set_metric(
+                        "startup_ready",
+                        int(startup_missing_mask == 0)
+                    )
+                    profiler.set_metric(
+                        "startup_wait_mask",
+                        startup_missing_mask
+                    )
                 return
+
+            if profiler_enabled:
+                profiler.set_metric("startup_ready", 1)
+                profiler.set_metric("startup_wait_mask", 0)
 
             if self.pre_music_lead_in_ms > 0:
                 if self.pre_music_started_at is None:
@@ -4104,6 +4591,8 @@ class GameplayScene(BaseScene):
             self._warm_skin_image_cache(max_ms=0.12, max_items=1)
             self._warm_followpoint_connections(max_ms=0.18, max_items=4)
             self._warm_spinner_cache(max_ms=0.20, max_items=1)
+        else:
+            self._warm_active_slider_caches()
 
         if self.start_time is not None:
             self._update_music_sync()
@@ -4139,6 +4628,9 @@ class GameplayScene(BaseScene):
             self.hit_window_50,
             self._add_hit_result
         )
+
+        if self._hit_input_held():
+            self._try_reengage_missed_slider_follow()
 
         for note in self.active_notes:
             if note["type"] == "spinner":
@@ -4471,7 +4963,7 @@ class GameplayScene(BaseScene):
                 self._draw_pause_overlay(screen)
             return
 
-        if self.music_started:
+        if self._hud_should_draw():
             self._prune_hit_error_markers()
             if self.hud_start_time is None:
                 self.hud_start_time = self.current_time
@@ -4482,7 +4974,7 @@ class GameplayScene(BaseScene):
                     / max(1, self.hud_fade_in_duration)
                 )
             )
-            if self.current_time >= self.first_object_visual_time - 80:
+            if self.current_time >= self.first_object_visual_time - 160:
                 hud_alpha = 255
             if profiler_enabled:
                 profiler.start("hud_render")
@@ -4519,6 +5011,10 @@ class GameplayScene(BaseScene):
 
         approach_draws = self._approach_draws
         approach_draws.clear()
+        restore_current_time = None
+        if self.failed and self.fail_visual_time is not None:
+            restore_current_time = self.current_time
+            self.current_time = self.fail_visual_time
 
         for note in reversed(self.active_notes):
 
@@ -4611,8 +5107,10 @@ class GameplayScene(BaseScene):
             )
 
             draw_note_approach = not (
-                note["type"] == "slider"
-                and note.get("head_hit_result") is not None
+                (
+                    note["type"] == "slider"
+                    and note.get("head_hit_result") is not None
+                )
             )
 
             if alpha > 0 and draw_note_approach:
@@ -4634,7 +5132,7 @@ class GameplayScene(BaseScene):
                     (0, 150, 255)
                 )
 
-                hit_result = note.get("hit_result")
+                hit_result = None if self.failed else note.get("hit_result")
                 if hit_result == 0:
                     pop_alpha = self._object_alpha(self._miss_pop_alpha(note))
                     pop_alpha = int(pop_alpha * fail_alpha_factor)
@@ -4704,32 +5202,14 @@ class GameplayScene(BaseScene):
                     if slider_points is None:
                         continue
 
-                if shake_x or shake_y:
-                    render_slider_points = [
-                        (x + shake_x, y + shake_y)
-                        for x, y in slider_points
-                    ]
-                    slider_cache_key = None
-                else:
-                    render_slider_points = slider_points
-                    slider_cache_key = note.get("render_index")
-
+                render_slider_points = slider_points
+                slider_cache_key = note.get("render_index")
                 slider_draw_points = render_slider_points
                 reveal_progress = 1.0
-                slider_screen_offset = (0, 0)
-                if self.failed and fail_offset_y:
-                    slider_screen_offset = (0, fail_offset_y)
-                    render_slider_points = [
-                        (x, y + fail_offset_y)
-                        for x, y in render_slider_points
-                    ]
-                elif fail_offset_y:
-                    render_slider_points = [
-                        (x, y + fail_offset_y)
-                        for x, y in render_slider_points
-                    ]
-                    slider_draw_points = render_slider_points
-                    slider_cache_key = None
+                slider_screen_offset = (
+                    int(round(shake_x)),
+                    int(round(shake_y + fail_offset_y))
+                )
 
                 cumulative = note.get("scaled_slider_cumulative")
                 total_length = note.get("scaled_slider_length")
@@ -4740,42 +5220,66 @@ class GameplayScene(BaseScene):
                     note["scaled_slider_cumulative"] = cumulative
                     note["scaled_slider_length"] = total_length
 
-                if not self.failed:
-                    raw_reveal_progress = self._slider_path_reveal_progress(note)
-                    if raw_reveal_progress < 0.995:
-                        reveal_bucket_count = 10
-                        reveal_bucket = max(
-                            1,
-                            min(
-                                reveal_bucket_count - 1,
-                                int(math.ceil(raw_reveal_progress * reveal_bucket_count))
-                            )
+                raw_reveal_progress = self._slider_path_reveal_progress(note)
+                if raw_reveal_progress < 0.995:
+                    reveal_bucket_count = 10
+                    reveal_bucket = max(
+                        1,
+                        min(
+                            reveal_bucket_count - 1,
+                            int(math.ceil(raw_reveal_progress * reveal_bucket_count))
                         )
-                        bucketed_reveal = reveal_bucket / reveal_bucket_count
-                        revealed_points, reveal_progress = self._revealed_slider_points(
-                            note,
-                            render_slider_points,
-                            cumulative,
-                            total_length,
-                            reveal=bucketed_reveal
+                    )
+                    bucketed_reveal = reveal_bucket / reveal_bucket_count
+                    revealed_points, reveal_progress = self._revealed_slider_points(
+                        note,
+                        render_slider_points,
+                        cumulative,
+                        total_length,
+                        reveal=bucketed_reveal
+                    )
+                    slider_draw_points = revealed_points
+                    base_cache_key = note.get("render_index")
+                    if base_cache_key is not None:
+                        slider_cache_key = (
+                            "reveal",
+                            base_cache_key,
+                            reveal_bucket
                         )
-                        slider_draw_points = revealed_points
+                        note.setdefault(
+                            "slider_reveal_cache_keys",
+                            set()
+                        ).add(slider_cache_key)
+                        self.slider_reveal_cache_keys.add(slider_cache_key)
+                    else:
+                        slider_cache_key = None
+                elif not note.get("slider_reveal_cache_cleared"):
+                    self._clear_slider_reveal_cache_for(note)
+
+                if (
+                    slider_cache_key is not None
+                    and slider_cache_key not in self.slider_surface_cache
+                ):
+                    if (
+                        isinstance(slider_cache_key, tuple)
+                        and slider_cache_key[:1] == ("reveal",)
+                    ):
                         base_cache_key = note.get("render_index")
-                        if base_cache_key is not None and not (shake_x or shake_y):
-                            slider_cache_key = (
-                                "reveal",
-                                base_cache_key,
-                                reveal_bucket
-                            )
-                            note.setdefault(
-                                "slider_reveal_cache_keys",
-                                set()
-                            ).add(slider_cache_key)
-                            self.slider_reveal_cache_keys.add(slider_cache_key)
+                        if base_cache_key in self.slider_surface_cache:
+                            slider_cache_key = base_cache_key
+                            slider_draw_points = render_slider_points
+                            reveal_progress = 1.0
                         else:
-                            slider_cache_key = None
-                    elif not note.get("slider_reveal_cache_cleared"):
-                        self._clear_slider_reveal_cache_for(note)
+                            reveal_cache_key = slider_cache_key
+                            if reveal_cache_key not in self.slider_cache_failed:
+                                self._schedule_slider_cache_job(note)
+                                self._queue_slider_reveal_cache_for(note, max_bucket=9)
+                            slider_cache_key = base_cache_key
+                            slider_draw_points = render_slider_points
+                            reveal_progress = 1.0
+                    else:
+                        if slider_cache_key not in self.slider_cache_failed:
+                            self._schedule_slider_cache_job(note)
 
                 if profiler_enabled:
                     slider_start = time.perf_counter()
@@ -4799,8 +5303,12 @@ class GameplayScene(BaseScene):
                     ) * 1000.0
 
                 scorepoint_offset = (
-                    render_slider_points[0][0] - slider_points[0][0],
-                    render_slider_points[0][1] - slider_points[0][1]
+                    slider_screen_offset[0]
+                    + render_slider_points[0][0]
+                    - slider_points[0][0],
+                    slider_screen_offset[1]
+                    + render_slider_points[0][1]
+                    - slider_points[0][1]
                 )
                 self._draw_slider_scorepoints(
                     overlay,
@@ -4809,12 +5317,15 @@ class GameplayScene(BaseScene):
                     screen_offset=scorepoint_offset
                 )
 
-                head_result = note.get("head_hit_result")
+                head_result = None if self.failed else note.get("head_hit_result")
                 head_alpha = self._slider_head_alpha(
                     note,
                     self._boost_hitcircle_alpha(alpha)
                 )
-                slider_head_pos = render_slider_points[0]
+                slider_head_pos = (
+                    render_slider_points[0][0] + slider_screen_offset[0],
+                    render_slider_points[0][1] + slider_screen_offset[1]
+                )
 
                 if head_result is None and head_alpha > 0:
                     if not self._draw_hitcircle_skin(
@@ -4876,7 +5387,10 @@ class GameplayScene(BaseScene):
                     )
                 )
 
-                if time_since_hit >= 0 and slider_total_duration > 0:
+                if (
+                    time_since_hit >= 0
+                    and slider_total_duration > 0
+                ):
                     total_length = note.get("scaled_slider_length")
                     cumulative = note.get("scaled_slider_cumulative")
                     if total_length is None or cumulative is None:
@@ -4903,17 +5417,21 @@ class GameplayScene(BaseScene):
                             t if forward else (1.0 - t)
                         )
 
-                    ball_pos = self.slider_renderer.point_at_distance(
+                    ball_path_pos = self.slider_renderer.point_at_distance(
                         render_slider_points,
                         ball_dist,
                         cumulative,
                         total_length
                     )
+                    ball_pos = (
+                        ball_path_pos[0] + slider_screen_offset[0],
+                        ball_path_pos[1] + slider_screen_offset[1]
+                    )
 
                     follow_radius = self.slider_follow_radius
                     slider_end_time = note["time"] + slider_total_duration
                     show_slider_follow = (
-                        note.get("head_hit")
+                        self._slider_follow_active(note)
                         and not note.get("slider_follow_missed")
                         and self.current_time <= slider_end_time
                     )
@@ -4974,95 +5492,99 @@ class GameplayScene(BaseScene):
                     alpha=approach_alpha
                 )
 
-        if profiler_enabled:
-            profiler.start("followpoints_render")
-        self._draw_followpoints(overlay)
-        if profiler_enabled:
-            profiler.end("followpoints_render")
+        if restore_current_time is not None:
+            self.current_time = restore_current_time
 
-        active_miss = []
-        for indicator in self.miss_indicators:
-            if self.current_time < indicator["show_time"] + self.miss_indicator_duration:
-                active_miss.append(indicator)
-            else:
-                self._indicator_pool.append(indicator)
-        self.miss_indicators = active_miss
+        if not self.failed:
+            if profiler_enabled:
+                profiler.start("followpoints_render")
+            self._draw_followpoints(overlay)
+            if profiler_enabled:
+                profiler.end("followpoints_render")
 
-        active_results = []
-        for indicator in self.hit_result_indicators:
-            if self.current_time < indicator["show_time"] + self.miss_indicator_duration:
-                active_results.append(indicator)
-            else:
-                self._indicator_pool.append(indicator)
-        self.hit_result_indicators = active_results
+            active_miss = []
+            for indicator in self.miss_indicators:
+                if self.current_time < indicator["show_time"] + self.miss_indicator_duration:
+                    active_miss.append(indicator)
+                else:
+                    self._indicator_pool.append(indicator)
+            self.miss_indicators = active_miss
 
-        for indicators in (
-            self.miss_indicators,
-            self.hit_result_indicators
-        ):
-            for indicator in indicators:
-                if self.current_time < indicator["show_time"]:
-                    continue
+            active_results = []
+            for indicator in self.hit_result_indicators:
+                if self.current_time < indicator["show_time"] + self.miss_indicator_duration:
+                    active_results.append(indicator)
+                else:
+                    self._indicator_pool.append(indicator)
+            self.hit_result_indicators = active_results
 
-                elapsed = self.current_time - indicator["show_time"]
-                progress = self._clamp01(
-                    elapsed / self.miss_indicator_duration
-                )
-                eased = 1.0 - (progress ** 0.7)
-                alpha = int(255 * eased)
-                x, y = indicator["pos"]
-                y += int(elapsed * 0.03)
+            for indicators in (
+                self.miss_indicators,
+                self.hit_result_indicators
+            ):
+                for indicator in indicators:
+                    if self.current_time < indicator["show_time"]:
+                        continue
 
-                result = indicator.get("result", 0)
-                if result == "spinner_bonus":
-                    if self.spinner_bonus_text_surface is None:
-                        self.spinner_bonus_text_surface = self.medium_overlay_font.render(
-                            "+1000",
-                            True,
-                            (255, 232, 92)
+                    elapsed = self.current_time - indicator["show_time"]
+                    progress = self._clamp01(
+                        elapsed / self.miss_indicator_duration
+                    )
+                    eased = 1.0 - (progress ** 0.7)
+                    alpha = int(255 * eased)
+                    x, y = indicator["pos"]
+                    y += int(elapsed * 0.03)
+
+                    result = indicator.get("result", 0)
+                    if result == "spinner_bonus":
+                        if self.spinner_bonus_text_surface is None:
+                            self.spinner_bonus_text_surface = self.medium_overlay_font.render(
+                                "+1000",
+                                True,
+                                (255, 232, 92)
+                            )
+                        text = self.spinner_bonus_text_surface
+                        text.set_alpha(alpha)
+                        bonus_y = y - int(elapsed * 0.08)
+                        overlay.blit(
+                            text,
+                            text.get_rect(center=(int(x), int(bonus_y)))
                         )
-                    text = self.spinner_bonus_text_surface
-                    text.set_alpha(alpha)
-                    bonus_y = y - int(elapsed * 0.08)
-                    overlay.blit(
-                        text,
-                        text.get_rect(center=(int(x), int(bonus_y)))
-                    )
-                    continue
+                        continue
 
-                image = self.skin_images.get(
-                    "hit100" if result == 100
-                    else "hit50" if result == 50
-                    else "miss"
-                )
-                if image is not None:
-                    self._draw_image_centered(
+                    image = self.skin_images.get(
+                        "hit100" if result == 100
+                        else "hit50" if result == 50
+                        else "miss"
+                    )
+                    if image is not None:
+                        self._draw_image_centered(
+                            overlay,
+                            image,
+                            (x, y),
+                            diameter=self.scaled_radius * 1.28,
+                            alpha=alpha
+                        )
+                        continue
+
+                    size = int(self.scaled_radius * 0.30)
+                    half = max(1, size // 2)
+                    width = max(2, int(2 * eased))
+
+                    pygame.draw.line(
                         overlay,
-                        image,
-                        (x, y),
-                        diameter=self.scaled_radius * 1.28,
-                        alpha=alpha
+                        (255, 255, 255, alpha),
+                        (x - half, y - half),
+                        (x + half, y + half),
+                        width
                     )
-                    continue
-
-                size = int(self.scaled_radius * 0.30)
-                half = max(1, size // 2)
-                width = max(2, int(2 * eased))
-
-                pygame.draw.line(
-                    overlay,
-                    (255, 255, 255, alpha),
-                    (x - half, y - half),
-                    (x + half, y + half),
-                    width
-                )
-                pygame.draw.line(
-                    overlay,
-                    (255, 255, 255, alpha),
-                    (x - half, y + half),
-                    (x + half, y - half),
-                    width
-                )
+                    pygame.draw.line(
+                        overlay,
+                        (255, 255, 255, alpha),
+                        (x - half, y + half),
+                        (x + half, y - half),
+                        width
+                    )
 
         if profiler_enabled:
             profiler.end("hitobjects_render")
@@ -5113,16 +5635,26 @@ class GameplayScene(BaseScene):
         alpha = 1.0 - ((progress ** 1.4) * 0.72)
         return fall, max(0.20, alpha)
 
-    def _draw_skip_button(self, screen):
-        self.skip_button_rect = None
-        if (
+    def _skip_button_visible_now(self):
+        return not (
             self.intro_skip_used
             or self.intro_skip_ms <= 0
             or not self.music_started
             or self.current_time >= self.intro_skip_ms
             or self.paused
             or self.failed
-        ):
+        )
+
+    def _hud_should_draw(self):
+        gameplay_clock_active = (
+            self.music_started
+            or self.pre_music_started_at is not None
+        )
+        return gameplay_clock_active and not self._skip_button_visible_now()
+
+    def _draw_skip_button(self, screen):
+        self.skip_button_rect = None
+        if not self._skip_button_visible_now():
             return
 
         if self.skip_button_text_surface is None:

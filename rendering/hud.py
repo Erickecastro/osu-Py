@@ -19,7 +19,7 @@ class GameplayHUDRenderer:
         self.fade_surface_size = None
         self._hud_surface_cache = {}
         self.display_score = 0.0
-        self.score_anim_start_value = 0.0
+        self.score_anim_start_value = 0.0J
         self.score_anim_target = 0
         self.score_anim_start_time = 0.0
         self.score_anim_duration = 160.0
