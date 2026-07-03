@@ -217,6 +217,39 @@ class TimingAndObjectTests(unittest.TestCase):
 
         self.assertGreater(scene._fade_in_progress(note), 0.50)
 
+    def test_music_sync_drift_slews_without_large_visual_jump(self):
+        scene = object.__new__(GameplayScene)
+        scene.start_time = 0.0
+        scene.current_time = 1000.0
+        scene.music_started = True
+        scene.pre_music_lead_in_ms = 0.0
+        scene.music_sync_correction_ms = 0.0
+        scene.music_sync_target_correction_ms = 0.0
+        scene.music_sync_last_drift_ms = 0.0
+        scene.music_sync_last_update_tick_ms = 1000.0
+        scene.music_sync_slew_rate = 0.18
+        scene.music_sync_snap_threshold_ms = 240.0
+        scene.audio_offset_ms = 0.0
+        scene.music_playback_offset_ms = 0.0
+        scene.last_music_sync_check_ms = 0
+        scene.active_notes = [{"type": "circle"}]
+        scene.game = type("Game", (), {"profiler": None})()
+        scene._mixer_music_time = lambda: 1060.0
+
+        with mock.patch.object(
+            gameplay_scene.pygame.mixer.music,
+            "get_busy",
+            return_value=True
+        ):
+            scene._update_music_sync(tick_ms=1000.0)
+            self.assertLess(scene.music_sync_correction_ms, 1.0)
+            self.assertEqual(scene.music_sync_target_correction_ms, 60.0)
+            self.assertLess(scene.current_time, 1002.0)
+
+            scene._update_music_sync(tick_ms=1016.0)
+            self.assertLess(scene.music_sync_correction_ms, 5.0)
+            self.assertLess(scene.current_time, 1022.0)
+
     def test_startup_cache_mask_blocks_until_critical_assets_are_ready(self):
         scene = object.__new__(GameplayScene)
         scene.first_object_cache_horizon_ms = 2000

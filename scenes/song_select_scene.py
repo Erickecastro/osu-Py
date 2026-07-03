@@ -466,6 +466,28 @@ class SongSelectScene(BaseScene):
         self.score_manager.load()
         self.panel_surface_cache.clear()
         self.card_layer_cache.clear()
+        selected_osu_file = (
+            getattr(self.game, "current_selected_osu_file", None)
+            or self.selected_osu_file
+        )
+        if not selected_osu_file or not self.items:
+            return
+
+        index = self._find_index_by_osu_file(selected_osu_file)
+        if index is None and self.search_text:
+            self.search_text = ""
+            self.search_active = False
+            self._apply_filter()
+            index = self._find_index_by_osu_file(selected_osu_file)
+        if index is None:
+            return
+
+        self._confirm_selection(
+            index,
+            play_preview=False,
+            arm_play=False
+        )
+        self._center_selected_card()
 
     def refresh_beatmaps(self):
         selected_osu_file = self.selected_osu_file

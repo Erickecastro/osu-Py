@@ -19,6 +19,8 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Keep heavy cache warmup out of active/near-visible gameplay frames.
 - [x] Keep background warmup out of active gameplay frames.
 - [x] Warm only the active gameplay background size during scene startup.
+- [x] Move initial background/slider/reveal/followpoint warmups out of GameplayScene construction and into Ready-frame slices.
+- [x] Replace gameplay sprite multipass scaling with fast cached smoothscale to prevent first-use stalls.
 - [ ] Remove remaining render-time geometry fallbacks after profiler confirms all slider caches are ready.
 - [x] Expose render-time slider geometry fallback in profiler output.
 - [x] Expose render-time slider surface fallback in profiler output.
@@ -41,6 +43,7 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Make gameplay HUD fade in almost immediately, and delay it until skip intro disappears when skip is visible.
 - [x] Keep high-resolution music clock aligned after skip without double-counting the start offset.
 - [x] Keep high-resolution music clock aligned after pause/resume without counting paused time.
+- [x] Slew visual music-clock correction smoothly so mixer drift cannot jump hitobjects out of rhythm.
 - [x] Add a longer post-skip visual lead so the first object can fade in instead of popping in.
 - [x] Gate the first hitobject fade so maps that start immediately do not pop the first object at high alpha.
 - [x] Parse and preserve `.osu` file format version for stacking compatibility.
@@ -51,6 +54,17 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Freeze gameplay object animations on fail while preserving visible objects and slow fall motion.
 - [x] Isolate approach circles from the main gameplay overlay so translucent sprites do not tint each other.
 - [x] Clean transparent RGB in scaled skin copies to avoid dark/bright PNG edge halos.
+- [x] Prevent combo-colored hitcircle bodies from bleeding through white hitcircle overlay edges.
+- [x] Use cached supersampled approach-circle surfaces without multipass runtime scaling.
+- [x] Vectorize approach-circle skin cleanup so large skin PNGs do not freeze gameplay startup.
+- [x] Composite overlapping approach circles without additive alpha buildup.
+- [x] Draw approach circles behind hitobject PNG layers so they cannot tint notes, sliders, sliderballs, or followpoints.
+- [x] Expire approach circles on hit/start timing instead of letting judged notes freeze the ring on screen.
+- [x] Give approach circles an AR-aware fade-in/scale transform closer to osu!lazer's spawn behavior.
+- [x] Keep approach-circle shrink linear across the full AR preempt window so contact timing is uniform.
+- [x] Fully clear the approach-circle layer each frame so shrinking rings cannot leave stale pixels.
+- [x] Make followpoint fade timing deterministic after frame-time spikes so stale links cannot reappear.
+- [x] Preserve the active sliderball at full PNG opacity instead of inheriting hitobject alpha.
 - [ ] Visually compare stacked notes and approach-circle size against osu!lazer.
 - [x] Support slider reengage when the hit key was already held before entering the followcircle.
 - [ ] Validate slider reengage behavior against osu!lazer on missed heads, late ticks, and repeat sliders.
@@ -110,6 +124,7 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Track p50/p95/p99 frame time per scene.
 - [x] Track frame pacer interval so refresh/pacing issues are visible in profiler output.
 - [x] Track input-to-hit judgment latency in gameplay.
+- [x] Track gameplay music-sync drift/correction in profiler metrics.
 - [ ] Validate high polling-rate mouse behavior without event queue buildup.
 - [ ] Validate tablet absolute input without sensitivity or smoothing interference.
 - [ ] Add a repeatable stress beatmap/profile scenario for complex sliders and dense streams.

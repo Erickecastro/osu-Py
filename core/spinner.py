@@ -173,6 +173,13 @@ class SpinnerManager:
                 score_bank -= whole_points
             note["spinner_score_bank"] = score_bank
             if hit_held:
+                rpm = note.get("spinner_rpm", 0.0)
+                next_health_time = note.get("spinner_next_health_time", start)
+                if rpm > 45 and current_time >= next_health_time:
+                    self.scene._add_health_target(
+                        _clamp(rpm / 520.0, 0.08, 0.32) * 0.006
+                    )
+                    note["spinner_next_health_time"] = current_time + 130
                 self.effects.update_sounds(note, current_time)
             return
 
@@ -193,6 +200,7 @@ class SpinnerManager:
         note["spinner_visual_angle"] = 0.0
         note["spinner_bonus_count"] = 0
         note["spinner_score_bank"] = 0.0
+        note["spinner_next_health_time"] = note["spinner_start_time"]
         note["spinner_od"] = getattr(self.scene, "od", 5.0)
         note["spinner_required_rotations"] = self.scoring.required_rotations(note)
         note["spinner_pass_tolerance_rotations"] = (

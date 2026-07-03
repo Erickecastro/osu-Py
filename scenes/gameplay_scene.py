@@ -107,6 +107,11 @@ class GameplayScene(BaseScene):
         self.current_time = 0
         self.music_playback_offset_ms = 0.0
         self.music_sync_correction_ms = 0.0
+        self.music_sync_target_correction_ms = 0.0
+        self.music_sync_last_drift_ms = 0.0
+        self.music_sync_last_update_tick_ms = 0.0
+        self.music_sync_slew_rate = 0.18
+        self.music_sync_snap_threshold_ms = 240.0
         self.audio_offset_ms = float(AUDIO_OFFSET_MS)
         self.hit_error_display_offset_ms = float(HIT_ERROR_DISPLAY_OFFSET_MS)
         self.ready_start_time = pygame.time.get_ticks()
@@ -274,7 +279,7 @@ class GameplayScene(BaseScene):
         self.slider_follow_return_grace_ms = 350  # ms
         self.slider_follow_button_grace_ms = 90  # ms
         self.slider_follow_tail_leniency_ms = 520  # ms
-        self.slider_follow_visual_fade_ms = 325  # ms
+        self.slider_follow_visual_fade_ms = 900  # ms
 
         self.usable_width = (
             self.playfield_width * self.scale
@@ -302,8 +307,6 @@ class GameplayScene(BaseScene):
         self.music_preloaded = False
         self.audio_lead_in = int(self.beatmap.get("audio_lead_in", 0) or 0)
         self._load_background_surface()
-        # Warmup background early (during initialization)
-        self._warm_background_surface()
 
         self.hit_window_300 = max(0.0, 79.5 - (6.0 * self.od))
         self.hit_window_100 = max(0.0, 139.5 - (8.0 * self.od))
@@ -405,17 +408,6 @@ class GameplayScene(BaseScene):
             for note in self.startup_critical_notes
             if note["type"] == "slider"
         ]
-        self._prime_initial_slider_geometry_cache()
-        self._queue_initial_slider_surface_cache(
-            horizon_ms=self.initial_slider_cache_horizon_ms,
-            max_items=160
-        )
-        self._warm_slider_reveal_cache(
-            max_ms=5.0,
-            max_items=72,
-            horizon_ms=self.initial_slider_cache_horizon_ms
-        )
-
         self.circle_number_font = rounded_font(32, bold=True)
 
         self.circle_number_font = rounded_font(28, bold=True)
@@ -430,7 +422,6 @@ class GameplayScene(BaseScene):
             self._build_followpoint_segment_surface()
         )
         self._reset_followpoint_connections()
-        self._warm_followpoint_connections(max_ms=1, max_items=32)
         self.hit_sound = self._load_hit_sound()
         self.fail_sound = self._load_fail_sound()
         self.sliderball_diameter = self._calculate_sliderball_diameter()
@@ -995,6 +986,14 @@ class GameplayScene(BaseScene):
             self.health = 0.0
             self._fail()
 
+    def _add_health_target(self, amount):
+        if amount <= 0:
+            return
+        self.target_health = min(
+            1.0,
+            max(0.0, self.target_health + float(amount))
+        )
+
     def _finish_spinner(self, note, result):
         if note.get("judged"):
             return
@@ -1102,6 +1101,35 @@ class GameplayScene(BaseScene):
             + self.audio_offset_ms
         )
 
+    def _reset_music_sync_state(self):
+        self.music_sync_correction_ms = 0.0
+        self.music_sync_target_correction_ms = 0.0
+        self.music_sync_last_drift_ms = 0.0
+        self.music_sync_last_update_tick_ms = 0.0
+        self.last_music_sync_check_ms = 0
+
+    def _slew_music_sync_correction(self, tick_ms):
+        target = float(self.music_sync_target_correction_ms)
+        current = float(self.music_sync_correction_ms)
+        delta = target - current
+        if abs(delta) <= 0.001:
+            self.music_sync_correction_ms = target
+            self.music_sync_last_update_tick_ms = float(tick_ms)
+            return
+
+        previous_tick = float(self.music_sync_last_update_tick_ms or tick_ms)
+        elapsed = max(0.0, float(tick_ms) - previous_tick)
+        self.music_sync_last_update_tick_ms = float(tick_ms)
+
+        max_step = max(0.20, elapsed * self.music_sync_slew_rate)
+        if abs(delta) <= max_step:
+            self.music_sync_correction_ms = target
+            return
+
+        self.music_sync_correction_ms = current + (
+            max_step if delta > 0 else -max_step
+        )
+
     def _update_music_sync(self, tick_ms=None):
         if self.start_time is None or not self.music_started:
             return self.current_time
@@ -1122,27 +1150,38 @@ class GameplayScene(BaseScene):
         if should_check_mixer:
             self.last_music_sync_check_ms = tick_ms
             drift = mixer_time - clock_time
+            self.music_sync_last_drift_ms = drift
             abs_drift = abs(drift)
-            if abs_drift >= 56.0:
-                self.music_sync_correction_ms += drift
-            elif abs_drift >= 10.0:
-                correction_step = max(
-                    -12.0,
-                    min(12.0, drift * 0.28)
-                )
-                self.music_sync_correction_ms += correction_step
+            target = self.music_sync_correction_ms + drift
+            if (
+                abs_drift >= self.music_sync_snap_threshold_ms
+                and not self.active_notes
+            ):
+                self.music_sync_correction_ms = target
+                self.music_sync_target_correction_ms = target
             elif abs_drift >= 2.5:
-                correction_step = max(
-                    -3.5,
-                    min(3.5, drift * 0.08)
-                )
-                self.music_sync_correction_ms += correction_step
-            clock_time = self._clock_music_time_from_tick(tick_ms)
+                self.music_sync_target_correction_ms = target
 
-        self.current_time = max(
+        self._slew_music_sync_correction(tick_ms)
+        clock_time = self._clock_music_time_from_tick(tick_ms)
+
+        next_time = max(
             -float(self.pre_music_lead_in_ms),
             clock_time
         )
+        if self.music_started and next_time < self.current_time:
+            next_time = self.current_time
+        self.current_time = next_time
+        profiler = getattr(getattr(self, "game", None), "profiler", None)
+        if profiler is not None and getattr(profiler, "enabled", False):
+            profiler.set_metric(
+                "music_sync_drift",
+                round(float(self.music_sync_last_drift_ms), 2)
+            )
+            profiler.set_metric(
+                "music_sync_correction",
+                round(float(self.music_sync_correction_ms), 2)
+            )
         return self.current_time
 
     def _slider_end_time(self, note):
@@ -1449,6 +1488,60 @@ class GameplayScene(BaseScene):
         )
         return int(255 * a)
 
+    def _approach_visible_for_note(self, note):
+        note_type = note.get("type")
+        if note_type == "circle":
+            return note.get("hit_result") is None
+        if note_type == "slider":
+            return note.get("head_hit_result") is None
+        return False
+
+    def _approach_visual_state(self, note, scaled_hit_radius, fail_alpha_factor):
+        if not self._approach_visible_for_note(note):
+            return None
+
+        hit_time = float(note.get("time", self.current_time))
+        start_time = float(note.get("start_time", hit_time - self.approach_time))
+        preempt = max(1.0, hit_time - start_time)
+        elapsed = self.current_time - start_time
+        if elapsed < 0:
+            return None
+
+        progress = self._clamp01(elapsed / preempt)
+        radius = (
+            self._approach_contact_radius()
+            + (
+                (1.0 - progress)
+                * scaled_hit_radius
+                * self.APPROACH_RADIUS_EXTRA_SCALE
+            )
+        )
+
+        fade_fraction = 0.50 + (self._clamp01(self.ar / 10.0) * 0.30)
+        object_fade_duration = (
+            preempt
+            * fade_fraction
+            * self.HITOBJECT_FADE_IN_DURATION_SCALE
+        )
+        fade_in_duration = min(
+            preempt,
+            max(
+                100.0,
+                object_fade_duration * 2.0
+            )
+        )
+        alpha = self._smootherstep(elapsed / fade_in_duration) * 0.86
+
+        if self.current_time >= hit_time:
+            fade_out = self._smootherstep((self.current_time - hit_time) / 50.0)
+            alpha *= 1.0 - fade_out
+
+        alpha = int(255 * alpha * fail_alpha_factor)
+        if alpha <= 2:
+            return None
+
+        return radius, alpha
+
     def _slider_track_alpha(self, note):
         hit_time = note["time"]
         alpha_in = self._fade_in_progress(note)
@@ -1675,14 +1768,15 @@ class GameplayScene(BaseScene):
             max(1, int(round(size[0]))),
             max(1, int(round(size[1])))
         )
-        # NEW cache key to invalidate old caches!
-        key = (id(image), size, "v2_high_quality")
+        key = (id(image), size, "v3_fast_smoothscale")
         cached = self.image_surface_cache.get(key)
         if cached is not None:
             return cached
 
-        from core.assets import scale_image_high_quality
-        scaled = scale_image_high_quality(image, size).convert_alpha()
+        try:
+            scaled = pygame.transform.smoothscale(image, size).convert_alpha()
+        except pygame.error:
+            scaled = pygame.transform.scale(image, size).convert_alpha()
         self.image_surface_cache[key] = scaled
         return scaled
 
@@ -1856,6 +1950,31 @@ class GameplayScene(BaseScene):
         if cached is not None:
             return cached
 
+        try:
+            import numpy as np
+
+            source_rgb = pygame.surfarray.array3d(image)
+            source_alpha = pygame.surfarray.array_alpha(image).astype(np.float32)
+            brightness = source_rgb.max(axis=2).astype(np.float32)
+            strength = np.clip((brightness - 72.0) / 150.0, 0.0, 1.0)
+            strength = strength * strength * (3.0 - (2.0 * strength))
+            final_alpha = (source_alpha * strength).clip(0, 255).astype(np.uint8)
+
+            cleaned = pygame.Surface(image.get_size(), pygame.SRCALPHA).convert_alpha()
+            rgb_pixels = pygame.surfarray.pixels3d(cleaned)
+            alpha_pixels = pygame.surfarray.pixels_alpha(cleaned)
+            rgb_pixels[:, :, 0] = rgb[0]
+            rgb_pixels[:, :, 1] = rgb[1]
+            rgb_pixels[:, :, 2] = rgb[2]
+            alpha_pixels[:, :] = final_alpha
+            del rgb_pixels
+            del alpha_pixels
+
+            self.tinted_surface_cache[key] = cleaned
+            return cleaned
+        except Exception:
+            pass
+
         cleaned = pygame.Surface(image.get_size(), pygame.SRCALPHA).convert_alpha()
         width, height = image.get_size()
         image.lock()
@@ -1929,7 +2048,7 @@ class GameplayScene(BaseScene):
 
     def _scaled_approach_image(self, image, diameter):
         diameter = max(1, int(round(diameter / 2.0)) * 2)
-        key = (id(image), diameter, "v4_supersampled_approach")
+        key = (id(image), diameter, "v7_fast_supersampled_approach")
         cached = self.image_surface_cache.get(key)
         if cached is not None:
             return cached
@@ -2001,6 +2120,10 @@ class GameplayScene(BaseScene):
             1,
             int(round(self.note_visual_radius * 2 * 1.12 * diameter_scale / 2.0)) * 2
         )
+        body_visible_diameter = max(
+            1,
+            int(round((visible_diameter * 0.94) / 2.0)) * 2
+        )
         tinted = self._tinted_image(
             circle,
             color
@@ -2009,7 +2132,7 @@ class GameplayScene(BaseScene):
             target,
             tinted,
             center,
-            visible_diameter=visible_diameter,
+            visible_diameter=body_visible_diameter,
             alpha=alpha,
             alpha_threshold=16
         )
@@ -2227,6 +2350,7 @@ class GameplayScene(BaseScene):
                 visible=False,
                 statistic="slider_checkpoint_hit"
             )
+            self._update_health_target(300)
             self._advance_combo()
             self._add_combo_score(30, combo_weight=30)
             next_index += 1
@@ -2552,6 +2676,7 @@ class GameplayScene(BaseScene):
             visible=False,
             statistic="slider_tick_hit"
         )
+        self._update_health_target(300)
         self._advance_combo()
         self._add_combo_score(10, combo_weight=10)
 
@@ -3025,7 +3150,7 @@ class GameplayScene(BaseScene):
         )
         both_visible_time = max(
             note_start + (note_approach_len * 0.015),
-            next_start
+            next_start + (next_approach_len * 0.08)
         )
         earliest_pre_hit_start = origin_time - max(
             260.0,
@@ -3189,17 +3314,21 @@ class GameplayScene(BaseScene):
                 if judged_time is not None
                 else natural_fade_start
             )
+            fade_out_duration = connection["fade_out_duration"]
+            stale_fade_end = requested_fade_start + fade_out_duration
+            if self.current_time >= stale_fade_end:
+                state["hidden"] = True
+                continue
             if (
                 self.current_time >= requested_fade_start
                 and "fade_start" not in state
             ):
-                state["fade_start"] = self.current_time
+                state["fade_start"] = requested_fade_start
 
             fade_start = state.get("fade_start")
             if state.get("hidden"):
                 continue
 
-            fade_out_duration = connection["fade_out_duration"]
             end_time = (
                 fade_start + fade_out_duration
                 if fade_start is not None
@@ -4377,6 +4506,7 @@ class GameplayScene(BaseScene):
             self.pre_music_started_at += paused_duration
         self.ready_start_time += paused_duration
         self.last_music_sync_check_ms = 0
+        self.music_sync_last_update_tick_ms = 0.0
         if frozen_time is not None:
             self.current_time = float(frozen_time)
         if self.music_started:
@@ -4401,7 +4531,7 @@ class GameplayScene(BaseScene):
 
         self.start_time = new_start
         self.music_playback_offset_ms = float(get_last_start_offset_ms())
-        self.music_sync_correction_ms = 0.0
+        self._reset_music_sync_state()
         self._update_music_sync()
         self.next_note_index = 0
         self.active_notes.clear()
@@ -4688,7 +4818,7 @@ class GameplayScene(BaseScene):
                 self.start_time = pygame.time.get_ticks()
 
             self.music_playback_offset_ms = float(get_last_start_offset_ms())
-            self.music_sync_correction_ms = 0.0
+            self._reset_music_sync_state()
             self.music_started = True
             self._update_music_sync()
             self._publish_current_track_state()
@@ -5003,9 +5133,13 @@ class GameplayScene(BaseScene):
             note["stream_readability_depth"] = min(4.0, depth)
 
     def _build_overlay_dirty_rect(self):
+        approach_extent = (
+            self._approach_contact_radius()
+            + (self.note_visual_radius * self.APPROACH_RADIUS_EXTRA_SCALE)
+        )
         margin = int(
             max(
-                self.scaled_radius * 4.4,
+                approach_extent + 8.0,
                 self.slider_follow_radius,
                 self.slider_path_radius * 2.0
             )
@@ -5048,7 +5182,7 @@ class GameplayScene(BaseScene):
             self.overlay_full_clear_frames -= 1
         else:
             overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
-            approach_overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
+            approach_overlay.fill((0, 0, 0, 0))
         fail_offset_y, fail_alpha_factor = self._fail_object_motion()
         return {
             "overlay": overlay,
@@ -5182,31 +5316,14 @@ class GameplayScene(BaseScene):
             ):
                 continue
 
-            time_left = (
-                note["time"]
-                - self.current_time
-            )
-
-            progress = max(
-                0,
-                min(
-                    1,
-                    time_left
-                    / self.approach_time
-                )
-            )
-
             alpha = self._object_alpha(self._note_alpha(note))
             alpha = int(alpha * fail_alpha_factor)
-            approach_source_alpha = alpha
             alpha = int(alpha * self.HITOBJECT_VISUAL_ALPHA_SCALE)
             slider_ball_alpha = 0
             slider_track_alpha = alpha
             slider_scorepoint_alpha = alpha
             if note["type"] == "slider":
-                slider_ball_alpha = self._object_alpha(
-                    self._slider_ball_alpha(note)
-                )
+                slider_ball_alpha = self._slider_ball_alpha(note)
                 slider_track_base_alpha = self._object_alpha(
                     self._slider_track_alpha(note)
                 )
@@ -5227,36 +5344,23 @@ class GameplayScene(BaseScene):
                 )
                 miss_pop_alpha = int(miss_pop_alpha * fail_alpha_factor)
 
+            scaled_hit_radius = self.note_visual_radius
+            approach_visual = self._approach_visual_state(
+                note,
+                scaled_hit_radius,
+                fail_alpha_factor
+            )
+
             if (
                 alpha <= 0
                 and slider_ball_alpha <= 0
                 and miss_pop_alpha <= 0
+                and approach_visual is None
             ):
                 continue
 
-            scaled_hit_radius = self.note_visual_radius
-
-            approach_radius = int(
-                self._approach_contact_radius()
-                + (
-                    progress
-                    * scaled_hit_radius
-                    * self.APPROACH_RADIUS_EXTRA_SCALE
-                )
-            )
-
-            draw_note_approach = not (
-                (
-                    note["type"] == "slider"
-                    and note.get("head_hit_result") is not None
-                )
-            )
-
-            if alpha > 0 and draw_note_approach:
-                approach_alpha = int(
-                    approach_source_alpha
-                    * (0.42 + (0.58 * self._clamp01(progress)))
-                )
+            if approach_visual is not None:
+                approach_radius, approach_alpha = approach_visual
                 approach_draws.append((
                     (scaled_x, scaled_y),
                     approach_radius,
@@ -5785,12 +5889,12 @@ class GameplayScene(BaseScene):
         if profiler_enabled:
             profiler.start("overlay_composite")
         screen.blit(
-            overlay,
+            approach_overlay,
             self.overlay_dirty_rect,
             self.overlay_dirty_rect
         )
         screen.blit(
-            approach_overlay,
+            overlay,
             self.overlay_dirty_rect,
             self.overlay_dirty_rect
         )
