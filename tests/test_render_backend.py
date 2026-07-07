@@ -5,7 +5,9 @@ import pygame
 
 from rendering.render_backend import (
     GPUTextureCache,
+    ModernGLRenderBackend,
     PygameRenderBackend,
+    RenderBackend,
     RenderCommandBatch,
     create_render_backend,
     _gpu_sprites_enabled_by_default,
@@ -38,6 +40,43 @@ class FakeContext:
 
 class FakeModernGL:
     LINEAR = 1
+    BLEND = 2
+    SRC_ALPHA = 3
+    ONE_MINUS_SRC_ALPHA = 4
+
+
+class FakeBlendContext:
+    def __init__(self):
+        self.enabled = []
+        self.blend_func = None
+
+    def enable(self, flag):
+        self.enabled.append(flag)
+
+
+class FakeSpriteRenderer:
+    def __init__(self, texture_cache=None):
+        self.reset_count = 0
+        self.texture_cache = texture_cache
+
+    def reset_frame_metrics(self):
+        self.reset_count += 1
+
+    def flush_batch(self, backend, batch):
+        drawn = len(batch)
+        backend.last_gpu_sprite_count = drawn
+        backend.last_gpu_flush_count = 1 if drawn else 0
+        backend.last_gpu_texture_upload_count = 2 if drawn else 0
+        batch.clear()
+        return drawn
+
+
+class FakeFailingSpriteRenderer:
+    def reset_frame_metrics(self):
+        return None
+
+    def flush_batch(self, backend, batch):
+        return None
 
 
 class RenderBackendTests(unittest.TestCase):
@@ -222,6 +261,180 @@ class RenderBackendTests(unittest.TestCase):
                     os.environ.pop(name, None)
                 else:
                     os.environ[name] = value
+
+    def test_gameplay_gpu_layers_are_opt_in_until_present_path_is_stable(self):
+        previous_disable = os.environ.get("PYOSU_DISABLE_GPU_GAMEPLAY_LAYERS")
+        previous_enable = os.environ.get("PYOSU_ENABLE_GPU_GAMEPLAY_LAYERS")
+        try:
+            os.environ.pop("PYOSU_DISABLE_GPU_GAMEPLAY_LAYERS", None)
+            os.environ.pop("PYOSU_ENABLE_GPU_GAMEPLAY_LAYERS", None)
+            self.assertFalse(
+                GameplayScene._gpu_gameplay_layers_enabled_by_default()
+            )
+
+            os.environ["PYOSU_ENABLE_GPU_GAMEPLAY_LAYERS"] = "1"
+            self.assertTrue(
+                GameplayScene._gpu_gameplay_layers_enabled_by_default()
+            )
+
+            os.environ["PYOSU_DISABLE_GPU_GAMEPLAY_LAYERS"] = "1"
+            self.assertFalse(
+                GameplayScene._gpu_gameplay_layers_enabled_by_default()
+            )
+
+            os.environ.pop("PYOSU_DISABLE_GPU_GAMEPLAY_LAYERS", None)
+            os.environ["PYOSU_ENABLE_GPU_GAMEPLAY_LAYERS"] = "0"
+            self.assertFalse(
+                GameplayScene._gpu_gameplay_layers_enabled_by_default()
+            )
+        finally:
+            for name, value in (
+                ("PYOSU_DISABLE_GPU_GAMEPLAY_LAYERS", previous_disable),
+                ("PYOSU_ENABLE_GPU_GAMEPLAY_LAYERS", previous_enable),
+            ):
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
+
+    def test_present_layer_queue_accumulates_gpu_metrics_after_frame(self):
+        backend = ModernGLRenderBackend.__new__(ModernGLRenderBackend)
+        RenderBackend.__init__(
+            backend,
+            pygame.Surface((32, 32), pygame.SRCALPHA)
+        )
+        backend.present_frame_surface = True
+        backend._enabled = True
+        backend._ctx = FakeBlendContext()
+        backend._moderngl = FakeModernGL()
+        backend._present_layer_batch = RenderCommandBatch()
+        backend._present_layer_renderer = FakeSpriteRenderer()
+        backend.last_gpu_sprite_count = 1
+        backend.last_gpu_flush_count = 1
+        backend.last_gpu_texture_upload_count = 1
+        source = pygame.Surface((2, 2), pygame.SRCALPHA)
+
+        queued = backend.queue_present_layer_surface(
+            source,
+            (3, 4),
+            atlas_key=("gameplay_layer", "slider_paths")
+        )
+        backend._flush_present_layer_batch()
+
+        self.assertTrue(queued)
+        self.assertEqual(backend.last_present_layer_count, 1)
+        self.assertEqual(backend.last_gpu_sprite_count, 2)
+        self.assertEqual(backend.last_gpu_flush_count, 2)
+        self.assertEqual(backend.last_gpu_texture_upload_count, 3)
+        self.assertEqual(len(backend._present_layer_batch), 0)
+
+    def test_present_layer_batch_moves_commands_atomically(self):
+        backend = ModernGLRenderBackend.__new__(ModernGLRenderBackend)
+        RenderBackend.__init__(
+            backend,
+            pygame.Surface((32, 32), pygame.SRCALPHA)
+        )
+        backend.present_frame_surface = True
+        backend._enabled = True
+        backend._ctx = FakeBlendContext()
+        backend._present_layer_renderer = FakeSpriteRenderer()
+        backend._present_layer_batch = RenderCommandBatch()
+        source = pygame.Surface((2, 2), pygame.SRCALPHA)
+        batch = RenderCommandBatch()
+        batch.add_surface(
+            source,
+            (1, 2),
+            atlas_key=("gameplay_layer", "slider_paths")
+        )
+        batch.add_surface(
+            source,
+            (3, 4),
+            atlas_key=("gameplay_layer", "hitobjects")
+        )
+
+        queued = backend.queue_present_layer_batch(batch)
+
+        self.assertTrue(queued)
+        self.assertEqual(len(batch), 0)
+        self.assertEqual(len(backend._present_layer_batch), 2)
+
+    def test_present_layer_gpu_failure_falls_back_to_cpu_surface(self):
+        target = pygame.Surface((8, 8), pygame.SRCALPHA)
+        target.fill((0, 0, 0, 0))
+        backend = ModernGLRenderBackend.__new__(ModernGLRenderBackend)
+        RenderBackend.__init__(backend, target)
+        backend.present_frame_surface = True
+        backend._enabled = True
+        backend._ctx = FakeBlendContext()
+        backend._moderngl = FakeModernGL()
+        backend._present_layer_renderer = FakeFailingSpriteRenderer()
+        backend._present_layer_batch = RenderCommandBatch()
+        source = pygame.Surface((2, 2), pygame.SRCALPHA)
+        source.fill((255, 0, 0, 255))
+        backend.queue_present_layer_surface(source, (3, 3))
+
+        result = backend._flush_present_layer_batch()
+
+        self.assertFalse(result)
+        self.assertEqual(target.get_at((3, 3)), (255, 0, 0, 255))
+        self.assertEqual(backend.last_gpu_fallback_count, 1)
+        self.assertEqual(len(backend._present_layer_batch), 0)
+
+    def test_prepare_gpu_surface_reuses_preuploaded_texture(self):
+        ctx = FakeContext()
+        backend = ModernGLRenderBackend.__new__(ModernGLRenderBackend)
+        RenderBackend.__init__(
+            backend,
+            pygame.Surface((32, 32), pygame.SRCALPHA)
+        )
+        backend.present_frame_surface = True
+        backend._enabled = True
+        backend._ctx = ctx
+        backend._sprite_renderer = None
+        backend._present_layer_renderer = FakeSpriteRenderer(
+            GPUTextureCache(ctx, moderngl_module=FakeModernGL())
+        )
+        source = pygame.Surface((4, 4), pygame.SRCALPHA)
+
+        first = backend.prepare_gpu_surface(source, key=("slider", "path", 1))
+        second = backend.prepare_gpu_surface(source, key=("slider", "path", 1))
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual(len(ctx.textures), 1)
+
+    def test_gpu_surface_prepare_queue_respects_warm_budget(self):
+        ctx = FakeContext()
+        backend = ModernGLRenderBackend.__new__(ModernGLRenderBackend)
+        RenderBackend.__init__(
+            backend,
+            pygame.Surface((32, 32), pygame.SRCALPHA)
+        )
+        backend.present_frame_surface = True
+        backend._enabled = True
+        backend._ctx = ctx
+        backend._sprite_renderer = None
+        backend._gpu_prepare_queue = []
+        backend._gpu_prepare_keys = set()
+        backend._present_layer_renderer = FakeSpriteRenderer(
+            GPUTextureCache(ctx, moderngl_module=FakeModernGL())
+        )
+        first = pygame.Surface((4, 4), pygame.SRCALPHA)
+        second = pygame.Surface((5, 5), pygame.SRCALPHA)
+
+        self.assertTrue(
+            backend.queue_gpu_surface_prepare(first, key=("slider", 1))
+        )
+        self.assertTrue(
+            backend.queue_gpu_surface_prepare(second, key=("slider", 2))
+        )
+
+        warmed = backend.warm_gpu_surface_cache(max_items=1)
+
+        self.assertEqual(warmed, 1)
+        self.assertEqual(backend.last_gpu_prepare_count, 1)
+        self.assertEqual(backend.last_gpu_prepare_pending, 1)
+        self.assertEqual(len(ctx.textures), 1)
 
     def test_batch_culls_fully_offscreen_surfaces(self):
         backend = PygameRenderBackend(pygame.Surface((8, 8), pygame.SRCALPHA))

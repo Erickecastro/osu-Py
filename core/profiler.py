@@ -59,6 +59,17 @@ class FrameProfiler:
         self.small_font = None
         self.scene_name = None
         self.metrics = {}
+        self.overlay_update_interval = max(
+            0.05,
+            float(os.environ.get("PYOSU_PROFILER_OVERLAY_INTERVAL", "0.25"))
+        )
+        self.overlay_max_rows = max(
+            8,
+            int(os.environ.get("PYOSU_PROFILER_OVERLAY_ROWS", "22"))
+        )
+        self._overlay_surface = None
+        self._overlay_size = None
+        self._overlay_last_update = 0.0
 
     def _reset_scene_samples(self, scene_name):
         if self.scene_name == scene_name:
@@ -68,6 +79,9 @@ class FrameProfiler:
         self.starts.clear()
         self.metrics.clear()
         self.last_report = time.perf_counter()
+        self._overlay_surface = None
+        self._overlay_size = None
+        self._overlay_last_update = 0.0
 
     def toggle(self):
         self.enabled = not self.enabled
@@ -178,6 +192,16 @@ class FrameProfiler:
             self.font = rounded_font(15)
             self.small_font = rounded_font(13)
 
+        now = time.perf_counter()
+        screen_size = screen.get_size()
+        if (
+            self._overlay_surface is not None
+            and self._overlay_size == screen_size
+            and now - self._overlay_last_update < self.overlay_update_interval
+        ):
+            screen.blit(self._overlay_surface, (12, 12))
+            return
+
         lines = [f"F3 profiler | {scene_name} | FPS {fps:5.1f}"]
         for name in self.REPORT_SECTIONS:
             stats = self.stats(name)
@@ -191,7 +215,10 @@ class FrameProfiler:
         text_max_width = width - 20
         lines.extend(self._metric_lines(self.small_font, text_max_width))
 
-        max_lines = max(5, (screen.get_height() - 24) // line_height)
+        max_lines = min(
+            self.overlay_max_rows,
+            max(5, (screen.get_height() - 24) // line_height)
+        )
         if len(lines) > max_lines:
             hidden = len(lines) - max_lines + 1
             lines = lines[:max_lines - 1] + [f"... {hidden} more profiler rows"]
@@ -208,4 +235,7 @@ class FrameProfiler:
             text = font.render(fitted, True, color)
             panel.blit(text, (10, 8 + index * line_height))
 
+        self._overlay_surface = panel
+        self._overlay_size = screen_size
+        self._overlay_last_update = now
         screen.blit(panel, (12, 12))

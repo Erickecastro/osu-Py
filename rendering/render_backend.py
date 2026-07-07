@@ -333,7 +333,7 @@ class ModernGLSpriteRenderer:
                 except Exception:
                     pass
                 self._vao.render(
-                    mode=self.ctx.TRIANGLES,
+                    mode=self.moderngl.TRIANGLES,
                     vertices=len(vertices) // 5,
                 )
                 gpu_flushes += 1
@@ -515,6 +515,10 @@ class RenderBackend:
         self.last_gpu_flush_count = 0
         self.last_gpu_texture_upload_count = 0
         self.last_gpu_fallback_count = 0
+        self.last_gpu_prepare_count = 0
+        self.last_gpu_prepare_pending = 0
+        self.last_present_layer_count = 0
+        self.last_post_present_count = 0
 
     def set_target_surface(self, target_surface: Optional[pygame.Surface]):
         self.target_surface = target_surface
@@ -535,6 +539,10 @@ class RenderBackend:
         self.last_gpu_flush_count = 0
         self.last_gpu_texture_upload_count = 0
         self.last_gpu_fallback_count = 0
+        self.last_gpu_prepare_count = 0
+        self.last_gpu_prepare_pending = 0
+        self.last_present_layer_count = 0
+        self.last_post_present_count = 0
         self._update_atlas_metrics()
 
     def clear(self, color=(0, 0, 0, 0)):
@@ -565,6 +573,15 @@ class RenderBackend:
         ref = self.sprite_atlas.add(surface, key=key)
         self._update_atlas_metrics()
         return ref
+
+    def prepare_gpu_surface(self, surface, key=None, version=None):
+        return False
+
+    def queue_gpu_surface_prepare(self, surface, key=None, version=None):
+        return self.prepare_gpu_surface(surface, key=key, version=version)
+
+    def warm_gpu_surface_cache(self, max_items=2):
+        return 0
 
     def _update_atlas_metrics(self):
         self.last_atlas_pages = self.sprite_atlas.page_count
@@ -610,6 +627,10 @@ class RenderBackend:
             self.last_gpu_flush_count = 0
             self.last_gpu_texture_upload_count = 0
             self.last_gpu_fallback_count = 0
+            self.last_gpu_prepare_count = 0
+            self.last_gpu_prepare_pending = 0
+            self.last_present_layer_count = 0
+            self.last_post_present_count = 0
             return 0
         self._frame_surface_tokens.clear()
 
@@ -652,6 +673,29 @@ class RenderBackend:
     def present(self):
         return None
 
+    def queue_post_present_surface(
+        self,
+        surface,
+        dest,
+        area=None,
+        alpha=None,
+        atlas_key=None
+    ):
+        return False
+
+    def queue_present_layer_surface(
+        self,
+        surface,
+        dest,
+        area=None,
+        alpha=None,
+        atlas_key=None
+    ):
+        return False
+
+    def queue_present_layer_batch(self, batch):
+        return False
+
 
 class PygameRenderBackend(RenderBackend):
     name = "pygame"
@@ -660,22 +704,39 @@ class PygameRenderBackend(RenderBackend):
 class ModernGLRenderBackend(RenderBackend):
     name = "moderngl"
 
-    def __init__(self, target_surface: Optional[pygame.Surface] = None):
+    def __init__(
+        self,
+        target_surface: Optional[pygame.Surface] = None,
+        present_frame_surface=False
+    ):
         super().__init__(target_surface)
         self._enabled = False
         self._ctx = None
         self._program = None
         self._vao = None
         self._vbo = None
+        self._present_program = None
+        self._present_vao = None
+        self._present_vbo = None
+        self._present_texture = None
+        self._present_texture_size = None
         self._textures = {}
         self._moderngl = None
         self._sprite_renderer = None
         self._gpu_sprite_enabled = False
         self._gpu_commands_submitted = False
+        self._gpu_prepare_queue = []
+        self._gpu_prepare_keys = set()
+        self._present_layer_batch = RenderCommandBatch()
+        self._present_layer_renderer = None
+        self._post_present_batch = RenderCommandBatch()
+        self._post_present_renderer = None
+        self.present_frame_surface = bool(present_frame_surface)
         self._initialize()
         self._gpu_sprite_enabled = (
             self._enabled
             and self._ctx is not None
+            and not self.present_frame_surface
             and _gpu_sprites_enabled_by_default()
         )
         if self._gpu_sprite_enabled:
@@ -687,6 +748,20 @@ class ModernGLRenderBackend(RenderBackend):
             except Exception:
                 self._sprite_renderer = None
                 self._gpu_sprite_enabled = False
+        if (
+            self.present_frame_surface
+            and self._enabled
+            and self._ctx is not None
+        ):
+            try:
+                self._present_layer_renderer = ModernGLSpriteRenderer(
+                    self._ctx,
+                    self._moderngl
+                )
+                self._post_present_renderer = self._present_layer_renderer
+            except Exception:
+                self._present_layer_renderer = None
+                self._post_present_renderer = None
 
     def _initialize(self):
         if self.target_surface is None:
@@ -741,10 +816,91 @@ class ModernGLRenderBackend(RenderBackend):
             self._textures = {}
             # keep module reference for enum/consts
             self._moderngl = moderngl
+            if self.present_frame_surface:
+                self._build_present_pipeline()
         except Exception:
             self._enabled = False
             self.gpu_available = False
             self._ctx = None
+
+    def _build_present_pipeline(self):
+        vertex_shader = """
+        #version 330
+        in vec2 in_position;
+        in vec2 in_uv;
+        out vec2 uv;
+        void main() {
+            uv = in_uv;
+            gl_Position = vec4(in_position, 0.0, 1.0);
+        }
+        """
+        fragment_shader = """
+        #version 330
+        uniform sampler2D sampler;
+        in vec2 uv;
+        out vec4 f_color;
+        void main() {
+            f_color = texture(sampler, uv);
+        }
+        """
+        self._present_program = self._ctx.program(
+            vertex_shader=vertex_shader,
+            fragment_shader=fragment_shader,
+        )
+        vertices = array("f", (
+            -1.0, 1.0, 0.0, 0.0,
+            1.0, 1.0, 1.0, 0.0,
+            -1.0, -1.0, 0.0, 1.0,
+            1.0, 1.0, 1.0, 0.0,
+            1.0, -1.0, 1.0, 1.0,
+            -1.0, -1.0, 0.0, 1.0,
+        ))
+        self._present_vbo = self._ctx.buffer(vertices.tobytes())
+        self._present_vao = self._ctx.simple_vertex_array(
+            self._present_program,
+            self._present_vbo,
+            "in_position",
+            "in_uv",
+        )
+
+    def _ensure_present_texture(self, surface):
+        if self._ctx is None or surface is None:
+            return None
+        size = surface.get_size()
+        if self._present_texture is not None and self._present_texture_size == size:
+            return self._present_texture
+
+        if self._present_texture is not None:
+            try:
+                self._present_texture.release()
+            except Exception:
+                pass
+
+        try:
+            self._present_texture = self._ctx.texture(size, 4)
+            self._present_texture_size = size
+            try:
+                self._present_texture.filter = (
+                    self._moderngl.LINEAR,
+                    self._moderngl.LINEAR,
+                )
+            except Exception:
+                pass
+        except Exception:
+            self._present_texture = None
+            self._present_texture_size = None
+        return self._present_texture
+
+    def begin_frame(self):
+        super().begin_frame()
+        self.last_present_layer_count = 0
+        self.last_post_present_count = 0
+        self.last_gpu_prepare_count = 0
+        self.last_gpu_prepare_pending = len(self._gpu_prepare_queue)
+        if self._present_layer_batch is not None:
+            self._present_layer_batch.clear()
+        if self._post_present_batch is not None:
+            self._post_present_batch.clear()
 
     def _pack_vertices(self):
         return [
@@ -780,6 +936,14 @@ class ModernGLRenderBackend(RenderBackend):
             return None
 
     def blit_surface(self, surface, dest, area=None, alpha=None, atlas_key=None):
+        if self.present_frame_surface:
+            return super().blit_surface(
+                surface,
+                dest,
+                area=area,
+                alpha=alpha,
+                atlas_key=atlas_key
+            )
         if not self._enabled or self._ctx is None:
             return super().blit_surface(
                 surface,
@@ -884,7 +1048,7 @@ class ModernGLRenderBackend(RenderBackend):
             except Exception:
                 pass
 
-            self._vao.render(mode=self._ctx.TRIANGLE_STRIP)
+            self._vao.render(mode=self._moderngl.TRIANGLE_STRIP)
             self._gpu_commands_submitted = True
             return
         except Exception:
@@ -897,6 +1061,9 @@ class ModernGLRenderBackend(RenderBackend):
             )
 
     def flush_batch(self, batch):
+        if self.present_frame_surface:
+            return super().flush_batch(batch)
+
         if (
             self._sprite_renderer is not None
             and self._gpu_sprite_enabled
@@ -942,6 +1109,9 @@ class ModernGLRenderBackend(RenderBackend):
         return super().flush_batch(batch)
 
     def present(self):
+        if self.present_frame_surface:
+            return self._present_frame_texture()
+
         if (
             not self._enabled
             or self._ctx is None
@@ -954,6 +1124,281 @@ class ModernGLRenderBackend(RenderBackend):
             self._enabled = False
         finally:
             self._gpu_commands_submitted = False
+
+    def queue_post_present_surface(
+        self,
+        surface,
+        dest,
+        area=None,
+        alpha=None,
+        atlas_key=None
+    ):
+        if (
+            not self.present_frame_surface
+            or not self._enabled
+            or self._ctx is None
+            or self._post_present_renderer is None
+        ):
+            return False
+        self._post_present_batch.add_surface(
+            surface,
+            dest,
+            area=area,
+            alpha=alpha,
+            atlas_key=atlas_key
+        )
+        return True
+
+    def queue_present_layer_surface(
+        self,
+        surface,
+        dest,
+        area=None,
+        alpha=None,
+        atlas_key=None
+    ):
+        if (
+            not self.present_frame_surface
+            or not self._enabled
+            or self._ctx is None
+            or self._present_layer_renderer is None
+        ):
+            return False
+        self._present_layer_batch.add_surface(
+            surface,
+            dest,
+            area=area,
+            alpha=alpha,
+            atlas_key=atlas_key
+        )
+        return True
+
+    def queue_present_layer_batch(self, batch):
+        if (
+            not self.present_frame_surface
+            or not self._enabled
+            or self._ctx is None
+            or self._present_layer_renderer is None
+            or batch is None
+        ):
+            return False
+        if len(batch) <= 0:
+            return True
+        self._present_layer_batch._commands.extend(batch._commands)
+        batch.clear()
+        return True
+
+    def _gpu_prepare_renderer(self):
+        if self.present_frame_surface:
+            return self._present_layer_renderer
+        return self._sprite_renderer
+
+    def queue_gpu_surface_prepare(self, surface, key=None, version=None):
+        if (
+            not self._enabled
+            or self._ctx is None
+            or surface is None
+        ):
+            return False
+
+        renderer = self._gpu_prepare_renderer()
+        if renderer is None:
+            return False
+
+        prepare_key = (
+            key if key is not None else id(surface),
+            surface.get_size(),
+            version
+        )
+        if prepare_key in self._gpu_prepare_keys:
+            return True
+
+        limit = int(os.environ.get("PYOSU_GPU_PREPARE_QUEUE", "768"))
+        limit = max(32, limit)
+        if len(self._gpu_prepare_queue) >= limit:
+            old_surface, old_key, old_version, old_prepare_key = (
+                self._gpu_prepare_queue.pop(0)
+            )
+            self._gpu_prepare_keys.discard(old_prepare_key)
+
+        self._gpu_prepare_queue.append(
+            (surface, key, version, prepare_key)
+        )
+        self._gpu_prepare_keys.add(prepare_key)
+        self.last_gpu_prepare_pending = len(self._gpu_prepare_queue)
+        return True
+
+    def warm_gpu_surface_cache(self, max_items=2):
+        if not self._gpu_prepare_queue:
+            self.last_gpu_prepare_pending = 0
+            return 0
+
+        max_items = max(0, int(max_items))
+        if max_items <= 0:
+            self.last_gpu_prepare_pending = len(self._gpu_prepare_queue)
+            return 0
+
+        count = 0
+        for _ in range(min(max_items, len(self._gpu_prepare_queue))):
+            surface, key, version, prepare_key = self._gpu_prepare_queue.pop(0)
+            self._gpu_prepare_keys.discard(prepare_key)
+            if self.prepare_gpu_surface(surface, key=key, version=version):
+                count += 1
+        self.last_gpu_prepare_count += count
+        self.last_gpu_prepare_pending = len(self._gpu_prepare_queue)
+        return count
+
+    def prepare_gpu_surface(self, surface, key=None, version=None):
+        if (
+            not self._enabled
+            or self._ctx is None
+            or surface is None
+        ):
+            return False
+
+        renderer = self._gpu_prepare_renderer()
+        if renderer is None:
+            return False
+
+        before_uploads = renderer.texture_cache.total_upload_count
+        texture = renderer.texture_cache.get_surface_texture(
+            surface,
+            key=("prepared", key if key is not None else id(surface)),
+            version=version
+        )
+        if texture is None:
+            return False
+
+        upload_delta = (
+            renderer.texture_cache.total_upload_count
+            - before_uploads
+        )
+        self.last_gpu_texture_upload_count += max(0, int(upload_delta))
+        return True
+
+    def _present_frame_texture(self):
+        if (
+            not self._enabled
+            or self._ctx is None
+            or self.target_surface is None
+            or self._present_program is None
+            or self._present_vao is None
+        ):
+            return
+
+        texture = self._ensure_present_texture(self.target_surface)
+        if texture is None:
+            self._enabled = False
+            self.gpu_available = False
+            return
+
+        try:
+            data = _surface_to_rgba_bytes(self.target_surface)
+            texture.write(data)
+            self.last_gpu_texture_upload_count += 1
+            self.last_gpu_sprite_count = 1
+            self.last_gpu_flush_count = 1
+
+            try:
+                self._ctx.screen.use()
+            except Exception:
+                pass
+
+            width, height = self.target_surface.get_size()
+            self._ctx.viewport = (0, 0, width, height)
+            self._ctx.clear(0.0, 0.0, 0.0, 1.0)
+            try:
+                self._ctx.disable(self._moderngl.BLEND)
+            except Exception:
+                pass
+
+            texture.use(location=0)
+            try:
+                self._present_program["sampler"].value = 0
+            except Exception:
+                pass
+            self._present_vao.render(mode=self._moderngl.TRIANGLES)
+            if self._flush_present_layer_batch() is False:
+                data = _surface_to_rgba_bytes(self.target_surface)
+                texture.write(data)
+                self.last_gpu_texture_upload_count += 1
+                try:
+                    self._ctx.disable(self._moderngl.BLEND)
+                except Exception:
+                    pass
+                texture.use(location=0)
+                self._present_vao.render(mode=self._moderngl.TRIANGLES)
+            self._flush_post_present_batch()
+        except Exception:
+            self._enabled = False
+            self.gpu_available = False
+
+    def _flush_sprite_batch_after_present(
+        self,
+        batch,
+        renderer,
+        metric_name,
+        cpu_fallback=False
+    ):
+        if (
+            renderer is None
+            or batch is None
+            or len(batch) <= 0
+        ):
+            return True
+
+        frame_uploads = int(self.last_gpu_texture_upload_count)
+        frame_sprites = int(self.last_gpu_sprite_count)
+        frame_flushes = int(self.last_gpu_flush_count)
+        try:
+            self._ctx.enable(self._moderngl.BLEND)
+            self._ctx.blend_func = (
+                self._moderngl.SRC_ALPHA,
+                self._moderngl.ONE_MINUS_SRC_ALPHA,
+            )
+        except Exception:
+            pass
+
+        try:
+            renderer.reset_frame_metrics()
+            drawn = renderer.flush_batch(
+                self,
+                batch
+            )
+        except Exception:
+            drawn = None
+
+        if drawn is None:
+            self.last_gpu_fallback_count += 1
+            if cpu_fallback and self.target_surface is not None:
+                fallback_drawn = super().flush_batch(batch)
+                setattr(self, metric_name, 0)
+                return False if fallback_drawn > 0 else True
+            batch.clear()
+            return False
+
+        setattr(self, metric_name, int(drawn))
+        overlay_uploads = int(self.last_gpu_texture_upload_count)
+        overlay_flushes = int(self.last_gpu_flush_count)
+        self.last_gpu_sprite_count = frame_sprites + int(drawn)
+        self.last_gpu_flush_count = frame_flushes + max(1, overlay_flushes)
+        self.last_gpu_texture_upload_count = frame_uploads + overlay_uploads
+        return True
+
+    def _flush_present_layer_batch(self):
+        return self._flush_sprite_batch_after_present(
+            self._present_layer_batch,
+            self._present_layer_renderer,
+            "last_present_layer_count",
+            cpu_fallback=True
+        )
+
+    def _flush_post_present_batch(self):
+        return self._flush_sprite_batch_after_present(
+            self._post_present_batch,
+            self._post_present_renderer,
+            "last_post_present_count"
+        )
 
 
 def _env_flag_enabled(name):
@@ -976,14 +1421,20 @@ def _gpu_sprites_enabled_by_default():
     return True
 
 
-def create_render_backend(target_surface: Optional[pygame.Surface] = None):
+def create_render_backend(
+    target_surface: Optional[pygame.Surface] = None,
+    present_frame_surface=False
+):
     if target_surface is None:
         return PygameRenderBackend(target_surface)
 
     if _env_flag_enabled("PYOSU_DISABLE_MODERNGL"):
         return PygameRenderBackend(target_surface)
 
-    backend = ModernGLRenderBackend(target_surface)
+    backend = ModernGLRenderBackend(
+        target_surface,
+        present_frame_surface=present_frame_surface
+    )
     if getattr(backend, "_enabled", False):
         return backend
 

@@ -29,6 +29,20 @@ class FrameProfilerTests(unittest.TestCase):
         self.assertGreaterEqual(len(lines), 1)
         self.assertTrue(all(line.startswith("metrics") for line in lines))
 
+    def test_overlay_reuses_cached_surface_between_refreshes(self):
+        pygame = __import__("pygame")
+        pygame.font.init()
+        profiler = FrameProfiler(enabled=True)
+        profiler.overlay_update_interval = 60.0
+        profiler.add("frame", 1.0)
+        screen = pygame.Surface((640, 480))
+
+        profiler.draw_overlay(screen, "GameplayScene", 120.0)
+        first_surface = profiler._overlay_surface
+        profiler.draw_overlay(screen, "GameplayScene", 121.0)
+
+        self.assertIs(profiler._overlay_surface, first_surface)
+
     def test_stats_include_p50_and_p99(self):
         profiler = FrameProfiler(enabled=True)
         for value in (1.0, 2.0, 3.0, 4.0):

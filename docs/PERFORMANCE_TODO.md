@@ -19,6 +19,7 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Keep heavy cache warmup out of active/near-visible gameplay frames.
 - [x] Keep background warmup out of active gameplay frames.
 - [x] Warm only the active gameplay background size during scene startup.
+- [x] Load gameplay backgrounds asynchronously and cache the scaled surface before releasing startup.
 - [x] Move initial background/slider/reveal/followpoint warmups out of GameplayScene construction and into Ready-frame slices.
 - [x] Replace gameplay sprite multipass scaling with fast cached smoothscale to prevent first-use stalls.
 - [ ] Remove remaining render-time geometry fallbacks after profiler confirms all slider caches are ready.
@@ -64,6 +65,7 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Keep approach-circle shrink linear across the full AR preempt window so contact timing is uniform.
 - [x] Fully clear the approach-circle layer each frame so shrinking rings cannot leave stale pixels.
 - [x] Make followpoint fade timing deterministic after frame-time spikes so stale links cannot reappear.
+- [x] Cache followpoint segment centers during preprocessing so dense links do less per-frame math.
 - [x] Preserve the active sliderball at full PNG opacity instead of inheriting hitobject alpha.
 - [ ] Visually compare stacked notes and approach-circle size against osu!lazer.
 - [x] Support slider reengage when the hit key was already held before entering the followcircle.
@@ -92,22 +94,39 @@ This checklist tracks the CPU, input-latency, and renderer work needed to move t
 - [x] Batch sprite commands by texture/atlas behind a diagnostic ModernGL sprite path.
 - [x] Promote backend-routed HUD/cursor sprites to the GPU sprite path when ModernGL is active.
 - [x] Avoid per-frame command-list copying in the ModernGL sprite flush path.
+- [x] Add a safe OpenGL window mode that falls back to the legacy Pygame display.
+- [x] Retry OpenGL presentation as borderless fullscreen before falling back to Pygame.
+- [x] Present the CPU-composited frame through a fullscreen ModernGL texture bridge.
+- [x] Promote cursor/trail to a post-present GPU overlay when the OpenGL texture bridge is active.
+- [x] Add an ordered GPU present-layer queue for future FBO/gameplay layer composition.
+- [x] Add a budgeted GPU texture-prepare queue so slider path preuploads do not spike one frame.
+- [x] Add an opt-in guarded GPU gameplay-layer composite path for active gameplay frames.
+- [x] Promote guarded GPU gameplay-layer composition to default-on when the OpenGL bridge is active.
+- [x] Add CPU re-present fallback when opt-in GPU gameplay-layer composition fails.
 - [ ] Move overlay-bound followpoints and hitobject sprites to a GPU/FBO sprite path.
-- [ ] Split gameplay overlay into explicit FBO-ready layers for slider paths, hitobjects, approach circles, followpoints, and indicators.
+- [x] Split gameplay overlay into explicit FBO-ready layers for hitobjects, approach circles, followpoints, and indicators.
+- [x] Split slider path rendering into its own FBO-ready layer without changing draw order.
+- [x] Route gameplay layer compositing through backend batches so layers can move to GPU/FBO incrementally.
+- [x] Queue cached slider path surfaces for ModernGL texture preupload during slider warmup/registration.
 - [ ] Move cached slider path textures to GPU-backed draw commands.
 - [x] Add a read-only frame graph showing background, hitobjects, sliders, followpoints, HUD, cursor, and debug costs separately.
 
 ## ModernGL Rollout
 
-- [x] Try ModernGL by default when available.
+- [x] Keep the OpenGL texture-bridge presentation opt-in while it still uploads the CPU frame each present.
 - [x] Fall back silently to Pygame when ModernGL is unavailable or unsupported.
 - [x] Support `PYOSU_DISABLE_MODERNGL=1` for diagnostics.
+- [x] Support `PYOSU_ENABLE_OPENGL_WINDOW=1` for testing the experimental OpenGL presentation window.
 - [x] Add profiler/debug metrics showing active render backend, GPU availability, display Hz, FPS target, and presentation mode.
+- [x] Add profiler diagnostics for OpenGL window/backend fallback reasons.
 - [x] Add profiler counters for render batch command count and backend name.
+- [x] Cache the on-screen profiler overlay so debug rendering does not dominate gameplay frame time.
 - [ ] Add visual parity screenshots comparing Pygame and ModernGL output.
 - [x] Enable real ModernGL sprite drawing behind `PYOSU_ENABLE_GPU_SPRITES=1` after destination/alpha parity scaffolding.
 - [x] Implement the first real ModernGL sprite path for cached/atlas sprites behind a diagnostic flag.
 - [x] Promote ModernGL sprite batching from diagnostic opt-in to default-on when the backend is available.
+- [x] Add `PYOSU_DISABLE_OPENGL_WINDOW=1` fallback for diagnosing OpenGL presentation issues.
+- [ ] Replace the CPU-frame texture bridge with a true FBO/sprite render path before enabling OpenGL presentation by default.
 - [ ] Promote followpoints to ModernGL after overlay/FBO parity passes.
 - [x] Add a backend smoke test that verifies GPU texture upload/reuse without enabling it in gameplay.
 

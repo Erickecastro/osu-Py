@@ -42,6 +42,7 @@ from core.gameplay_state import (
 )
 from core.spinner import SpinnerManager
 from rendering.effects import GameplayEffectsRenderer
+from rendering.frame_layers import FrameLayerStack
 from rendering.hud import GameplayHUDRenderer
 from rendering.primitives import (
     aa_circle_surface,
@@ -87,6 +88,21 @@ class GameplayScene(BaseScene):
         (66, 198, 221),
         (224, 73, 73)
     )
+
+    @staticmethod
+    def _env_enabled(name, default=False):
+        value = os.environ.get(name)
+        if value is None or not value.strip():
+            return bool(default)
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    @classmethod
+    def _gpu_gameplay_layers_enabled_by_default(cls):
+        if cls._env_enabled("PYOSU_DISABLE_GPU_GAMEPLAY_LAYERS"):
+            return False
+        if "PYOSU_ENABLE_GPU_GAMEPLAY_LAYERS" in os.environ:
+            return cls._env_enabled("PYOSU_ENABLE_GPU_GAMEPLAY_LAYERS")
+        return False
 
     def __init__(self, game, beatmap):
 
@@ -137,6 +153,18 @@ class GameplayScene(BaseScene):
         self.slider_reveal_cache_keys = set()
         self.image_surface_cache = {}
         self.tinted_surface_cache = {}
+        self.render_layers = FrameLayerStack(
+            (
+                "approach",
+                "slider_paths",
+                "hitobjects",
+                "followpoints",
+                "indicators"
+            )
+        )
+        self.gpu_gameplay_layers_requested = (
+            self._gpu_gameplay_layers_enabled_by_default()
+        )
         self.overlay_surface = None
         self.overlay_surface_size = None
         self.approach_overlay_surface = None
@@ -148,6 +176,8 @@ class GameplayScene(BaseScene):
         self.background_surface = None
         self.background_surface_size = None
         self.background_surface_cache = {}
+        self.background_load_future = None
+        self.background_load_executor = None
         self.render_backend = getattr(game, "render_backend", PygameRenderBackend())
         self.slider_surface_fallbacks_frame = 0
         self.slider_reveal_fallbacks_frame = 0
@@ -719,6 +749,18 @@ class GameplayScene(BaseScene):
         self.overlay_surface_size = None
         self.approach_overlay_surface = None
         self.approach_overlay_surface_size = None
+        self.render_layers = FrameLayerStack(
+            (
+                "approach",
+                "slider_paths",
+                "hitobjects",
+                "followpoints",
+                "indicators"
+            )
+        )
+        self.gpu_gameplay_layers_requested = (
+            self._gpu_gameplay_layers_enabled_by_default()
+        )
         self.background_surface = None
         self.background_surface_size = None
         self.center_overlay_shade = None
@@ -1078,6 +1120,13 @@ class GameplayScene(BaseScene):
             + self.audio_offset_ms
         )
 
+    def _raw_clock_music_time_from_tick(self, tick_ms):
+        return (
+            float(tick_ms)
+            - float(self.start_time)
+            + self.audio_offset_ms
+        )
+
     def _mixer_music_time(self):
         if not self.music_started:
             return None
@@ -1137,30 +1186,38 @@ class GameplayScene(BaseScene):
         if tick_ms is None:
             tick_ms = pygame.time.get_ticks()
 
-        clock_time = self._clock_music_time_from_tick(tick_ms)
+        raw_clock_time = self._raw_clock_music_time_from_tick(tick_ms)
         mixer_time = self._mixer_music_time()
-        should_check_mixer = (
-            mixer_time is not None
-            and pygame.mixer.music.get_busy()
-            and (
-                self.last_music_sync_check_ms <= 0
-                or tick_ms - self.last_music_sync_check_ms >= 72
-            )
-        )
-        if should_check_mixer:
+        if mixer_time is not None:
             self.last_music_sync_check_ms = tick_ms
-            drift = mixer_time - clock_time
+            drift = mixer_time - raw_clock_time
             self.music_sync_last_drift_ms = drift
-            abs_drift = abs(drift)
-            target = self.music_sync_correction_ms + drift
-            if (
-                abs_drift >= self.music_sync_snap_threshold_ms
-                and not self.active_notes
-            ):
-                self.music_sync_correction_ms = target
-                self.music_sync_target_correction_ms = target
-            elif abs_drift >= 2.5:
-                self.music_sync_target_correction_ms = target
+            self.music_sync_correction_ms = drift
+            self.music_sync_target_correction_ms = drift
+
+            next_time = max(
+                -float(self.pre_music_lead_in_ms),
+                float(mixer_time)
+            )
+            # Guard only against tiny backwards jitter. Forward movement must stay
+            # tied to the audio clock, otherwise visual timing can drift after
+            # stutters and then slowly "catch up" out of rhythm.
+            if self.music_started and next_time + 1.0 < self.current_time:
+                next_time = self.current_time
+
+            self.current_time = next_time
+            profiler = getattr(getattr(self, "game", None), "profiler", None)
+            if profiler is not None and getattr(profiler, "enabled", False):
+                profiler.set_metric(
+                    "music_sync_drift",
+                    round(float(self.music_sync_last_drift_ms), 2)
+                )
+                profiler.set_metric(
+                    "music_sync_correction",
+                    round(float(self.music_sync_correction_ms), 2)
+                )
+                profiler.set_metric("music_sync_source", "audio")
+            return self.current_time
 
         self._slew_music_sync_correction(tick_ms)
         clock_time = self._clock_music_time_from_tick(tick_ms)
@@ -1182,6 +1239,7 @@ class GameplayScene(BaseScene):
                 "music_sync_correction",
                 round(float(self.music_sync_correction_ms), 2)
             )
+            profiler.set_metric("music_sync_source", "clock")
         return self.current_time
 
     def _slider_end_time(self, note):
@@ -1676,10 +1734,15 @@ class GameplayScene(BaseScene):
         if cache_key is None or surface is None:
             return
         width, height = surface.get_size()
-        self._register_sprite_atlas(
-            surface,
-            ("slider", "path", cache_key, width, height)
-        )
+        atlas_key = ("slider", "path", cache_key, width, height)
+        self._register_sprite_atlas(surface, atlas_key)
+        backend = getattr(self, "render_backend", None)
+        queue_gpu_prepare = getattr(backend, "queue_gpu_surface_prepare", None)
+        if callable(queue_gpu_prepare):
+            try:
+                queue_gpu_prepare(surface, key=atlas_key)
+            except Exception:
+                pass
 
     def _draw_aa_circle(
         self,
@@ -3237,6 +3300,13 @@ class GameplayScene(BaseScene):
         minimum_segments = 2
         if segment_count < minimum_segments:
             return None
+        centers = tuple(
+            (
+                start[0] + edge_dx * (point_index / (segment_count + 1)),
+                start[1] + edge_dy * (point_index / (segment_count + 1))
+            )
+            for point_index in range(1, segment_count + 1)
+        )
 
         return {
             "target": next_note.get("render_index", index + 1),
@@ -3249,9 +3319,11 @@ class GameplayScene(BaseScene):
             "start": start,
             "dx": edge_dx,
             "dy": edge_dy,
+            "end": (start[0] + edge_dx, start[1] + edge_dy),
             "distance": distance,
             "angle": -math.degrees(math.atan2(uy, ux)),
-            "count": segment_count
+            "count": segment_count,
+            "centers": centers
         }
 
     def _note_judged_time(self, note):
@@ -3277,7 +3349,9 @@ class GameplayScene(BaseScene):
     def _draw_followpoints(self, target):
         scaled = self.followpoint_segment_surface
         if scaled is None or len(self.notes) < 2:
-            return
+            return 0
+
+        drawn = 0
 
         start_index = max(
             0,
@@ -3367,9 +3441,7 @@ class GameplayScene(BaseScene):
                 continue
 
             start = connection["start"]
-            dx = connection["dx"]
-            dy = connection["dy"]
-            segment_end = (start[0] + dx, start[1] + dy)
+            segment_end = connection["end"]
             segment_radius = max(
                 self.followpoint_visual_radius,
                 self.scaled_radius * 0.55
@@ -3393,8 +3465,8 @@ class GameplayScene(BaseScene):
             count = connection["count"]
             sequence_smoothing = connection["sequence_smoothing"]
             reveal_head = progress * (count + 7)
-            for point_index in range(1, count + 1):
-                t = point_index / (count + 1)
+            centers = connection["centers"]
+            for point_index, center in enumerate(centers, start=1):
                 appear = self._clamp01(
                     (reveal_head - point_index + 2)
                     / sequence_smoothing
@@ -3406,16 +3478,15 @@ class GameplayScene(BaseScene):
                 if point_alpha <= 0:
                     continue
 
-                center = (
-                    start[0] + dx * t,
-                    start[1] + dy * t
-                )
                 self._blit_centered(
                     target,
                     rotated,
                     center,
                     alpha=point_alpha
                 )
+                drawn += 1
+
+        return drawn
 
     def _build_skin_cache_warm_jobs(self):
         jobs = []
@@ -3951,11 +4022,26 @@ class GameplayScene(BaseScene):
         return True
 
     def _background_cache_ready(self):
-        return (
-            not self.background_path
-            or self.background_source is not None
-            or self.background_load_attempted
-        )
+        self._collect_background_load_result()
+        if not self.background_path:
+            return True
+        if self.background_load_attempted and self.background_source is None:
+            return True
+        if self.background_source is None:
+            return False
+        return self._background_scaled_ready()
+
+    def _background_scaled_ready(self):
+        for screen_w, screen_h in self._background_warm_sizes():
+            cache_key = (
+                int(screen_w),
+                int(screen_h),
+                int(self.background_dim_alpha),
+                "v4_fast_background_cache"
+            )
+            if cache_key not in self.background_surface_cache:
+                return False
+        return True
 
     def _startup_cache_status(self, horizon_ms=None):
         if horizon_ms is None:
@@ -4379,9 +4465,11 @@ class GameplayScene(BaseScene):
 
     def _warm_background_surface(self):
         if (
-            self.background_source is not None
-            or self.background_load_attempted
-            or not self.background_path
+            not self.background_path
+            or (
+                self.background_load_attempted
+                and self.background_source is None
+            )
         ):
             return
 
@@ -4390,18 +4478,59 @@ class GameplayScene(BaseScene):
         if profiler_enabled:
             profiler.start("background_warm")
 
-        self.background_load_attempted = True
         try:
-            self.background_source = pygame.image.load(
-                self.background_path
-            ).convert_alpha()
-            for size in self._background_warm_sizes():
-                self._scaled_background(size)
-        except pygame.error:
-            self.background_source = None
+            self._collect_background_load_result()
+            if self.background_source is not None:
+                for size in self._background_warm_sizes():
+                    self._scaled_background(size)
+                return
+
+            if self.background_load_attempted:
+                return
+
+            if self.background_load_future is None:
+                executor = self.slider_cache_executor
+                if executor is None:
+                    if self.background_load_executor is None:
+                        self.background_load_executor = ThreadPoolExecutor(
+                            max_workers=1,
+                            thread_name_prefix="pyosu-bg-cache"
+                        )
+                    executor = self.background_load_executor
+                self.background_load_future = executor.submit(
+                    pygame.image.load,
+                    self.background_path
+                )
+                return
+
+            if not self.background_load_future.done():
+                return
+
+            self._collect_background_load_result()
+            if self.background_source is not None:
+                for size in self._background_warm_sizes():
+                    self._scaled_background(size)
         finally:
             if profiler_enabled:
                 profiler.end("background_warm")
+
+    def _collect_background_load_result(self):
+        future = getattr(self, "background_load_future", None)
+        if future is None or not future.done():
+            return
+
+        self.background_load_future = None
+        self.background_load_attempted = True
+        try:
+            loaded = future.result()
+        except Exception:
+            self.background_source = None
+            return
+
+        try:
+            self.background_source = loaded.convert()
+        except pygame.error:
+            self.background_source = loaded
 
     def _background_warm_sizes(self):
         sizes = []
@@ -4426,7 +4555,7 @@ class GameplayScene(BaseScene):
             screen_w,
             screen_h,
             int(self.background_dim_alpha),
-            "v3_background_cache"
+            "v4_fast_background_cache"
         )
         cached = self.background_surface_cache.get(cache_key)
         if cached is not None:
@@ -4444,9 +4573,16 @@ class GameplayScene(BaseScene):
             max(1, int(image_h * scale))
         )
 
-        from core.assets import scale_image_high_quality
-        # keep alpha and pixel fidelity by using convert_alpha()
-        scaled = scale_image_high_quality(source, target_size).convert_alpha()
+        try:
+            scaled = pygame.transform.smoothscale(
+                source,
+                target_size
+            ).convert()
+        except pygame.error:
+            scaled = pygame.transform.scale(
+                source,
+                target_size
+            ).convert()
         position = (
             (screen_w - target_size[0]) // 2,
             (screen_h - target_size[1]) // 2
@@ -5157,36 +5293,39 @@ class GameplayScene(BaseScene):
 
     def _prepare_render_frame_state(self, screen):
         screen_size = screen.get_size()
-        if self.overlay_surface is None or self.overlay_surface_size != screen_size:
-            self.overlay_surface = pygame.Surface(
-                screen_size,
-                pygame.SRCALPHA
-            ).convert_alpha()
-            self.overlay_surface_size = screen_size
+        self.render_layers.ensure(screen_size)
 
-        if (
-            self.approach_overlay_surface is None
-            or self.approach_overlay_surface_size != screen_size
-        ):
-            self.approach_overlay_surface = pygame.Surface(
-                screen_size,
-                pygame.SRCALPHA
-            ).convert_alpha()
-            self.approach_overlay_surface_size = screen_size
+        overlay = self.render_layers.surface("hitobjects")
+        approach_overlay = self.render_layers.surface("approach")
+        slider_path_overlay = self.render_layers.surface("slider_paths")
+        followpoint_overlay = self.render_layers.surface("followpoints")
+        indicator_overlay = self.render_layers.surface("indicators")
+        self.overlay_surface = overlay
+        self.overlay_surface_size = screen_size
+        self.approach_overlay_surface = approach_overlay
+        self.approach_overlay_surface_size = screen_size
 
-        overlay = self.overlay_surface
-        approach_overlay = self.approach_overlay_surface
         if self.overlay_full_clear_frames > 0:
-            overlay.fill((0, 0, 0, 0))
-            approach_overlay.fill((0, 0, 0, 0))
+            self.render_layers.clear_all()
             self.overlay_full_clear_frames -= 1
         else:
-            overlay.fill((0, 0, 0, 0), self.overlay_dirty_rect)
-            approach_overlay.fill((0, 0, 0, 0))
+            self.render_layers.clear_names(
+                (
+                    "slider_paths",
+                    "hitobjects",
+                    "followpoints",
+                    "indicators"
+                ),
+                rect=self.overlay_dirty_rect
+            )
+            self.render_layers.clear_named("approach")
         fail_offset_y, fail_alpha_factor = self._fail_object_motion()
         return {
             "overlay": overlay,
             "approach_overlay": approach_overlay,
+            "slider_path_overlay": slider_path_overlay,
+            "followpoint_overlay": followpoint_overlay,
+            "indicator_overlay": indicator_overlay,
             "fail_offset_y": fail_offset_y,
             "fail_alpha_factor": fail_alpha_factor,
         }
@@ -5202,6 +5341,21 @@ class GameplayScene(BaseScene):
         )
         note["scaled_pos"] = pos
         return pos
+
+    def _can_queue_gameplay_layers_to_gpu(self):
+        if not self.gpu_gameplay_layers_requested:
+            return False
+        backend = getattr(self, "render_backend", None)
+        if (
+            backend is None
+            or not bool(getattr(backend, "present_frame_surface", False))
+            or getattr(backend, "_present_layer_renderer", None) is None
+            or self.paused
+            or self.failed
+            or self._skip_button_visible_now()
+        ):
+            return False
+        return callable(getattr(backend, "queue_present_layer_batch", None))
 
     def record_slider_surface_fallback(self, cache_key):
         self.slider_surface_fallbacks_frame += 1
@@ -5275,10 +5429,18 @@ class GameplayScene(BaseScene):
         render_state = self._prepare_render_frame_state(screen)
         overlay = render_state["overlay"]
         approach_overlay = render_state["approach_overlay"]
+        slider_path_overlay = render_state["slider_path_overlay"]
+        followpoint_overlay = render_state["followpoint_overlay"]
+        indicator_overlay = render_state["indicator_overlay"]
         fail_offset_y = render_state["fail_offset_y"]
         fail_alpha_factor = render_state["fail_alpha_factor"]
 
         slider_render_elapsed = 0.0
+        approach_layer_used = False
+        slider_paths_layer_used = False
+        hitobjects_layer_used = False
+        followpoints_layer_used = False
+        indicators_layer_used = False
         if profiler_enabled:
             profiler.start("hitobjects_render")
 
@@ -5295,6 +5457,7 @@ class GameplayScene(BaseScene):
                 if profiler_enabled:
                     spinner_start = time.perf_counter()
                 self.spinner_renderer.draw(overlay, note)
+                hitobjects_layer_used = True
                 if profiler_enabled:
                     profiler.add(
                         "spinner_render",
@@ -5369,6 +5532,7 @@ class GameplayScene(BaseScene):
                 ))
 
             if note["type"] == "circle":
+                hitobjects_layer_used = True
                 circle_alpha = self._boost_hitcircle_alpha(alpha)
                 circle_color = note.get(
                     "combo_color",
@@ -5433,6 +5597,13 @@ class GameplayScene(BaseScene):
                     )
 
             elif note["type"] == "slider":
+                slider_paths_layer_used = True
+                hitobjects_layer_used = (
+                    hitobjects_layer_used
+                    or alpha > 0
+                    or slider_ball_alpha > 0
+                    or slider_scorepoint_alpha > 0
+                )
 
                 slider_points = note.get("scaled_slider_points")
                 if slider_points is None:
@@ -5527,7 +5698,7 @@ class GameplayScene(BaseScene):
                 if profiler_enabled:
                     slider_start = time.perf_counter()
                 self.slider_renderer.draw(
-                    overlay,
+                    slider_path_overlay,
                     slider_draw_points,
                     alpha=slider_track_alpha,
                     object_color=note.get("combo_color", (0, 150, 255)),
@@ -5750,6 +5921,7 @@ class GameplayScene(BaseScene):
                             alpha=slider_ball_alpha
                         )
 
+        approach_layer_used = bool(approach_draws)
         for center, approach_radius, approach_alpha, approach_color in approach_draws:
             if not self._draw_approach_skin(
                 approach_overlay,
@@ -5773,7 +5945,9 @@ class GameplayScene(BaseScene):
         if not self.failed:
             if profiler_enabled:
                 profiler.start("followpoints_render")
-            self._draw_followpoints(overlay)
+            followpoints_layer_used = self._draw_followpoints(
+                followpoint_overlay
+            ) > 0
             if profiler_enabled:
                 profiler.end("followpoints_render")
 
@@ -5801,6 +5975,7 @@ class GameplayScene(BaseScene):
                     if self.current_time < indicator["show_time"]:
                         continue
 
+                    indicators_layer_used = True
                     elapsed = self.current_time - indicator["show_time"]
                     progress = self._clamp01(
                         elapsed / self.miss_indicator_duration
@@ -5821,7 +5996,7 @@ class GameplayScene(BaseScene):
                         text = self.spinner_bonus_text_surface
                         text.set_alpha(alpha)
                         bonus_y = y - int(elapsed * 0.08)
-                        overlay.blit(
+                        indicator_overlay.blit(
                             text,
                             text.get_rect(center=(int(x), int(bonus_y)))
                         )
@@ -5834,7 +6009,7 @@ class GameplayScene(BaseScene):
                     )
                     if image is not None:
                         self._draw_image_centered(
-                            overlay,
+                            indicator_overlay,
                             image,
                             (x, y),
                             diameter=self.scaled_radius * 1.28,
@@ -5847,14 +6022,14 @@ class GameplayScene(BaseScene):
                     width = max(2, int(2 * eased))
 
                     pygame.draw.line(
-                        overlay,
+                        indicator_overlay,
                         (255, 255, 255, alpha),
                         (x - half, y - half),
                         (x + half, y + half),
                         width
                     )
                     pygame.draw.line(
-                        overlay,
+                        indicator_overlay,
                         (255, 255, 255, alpha),
                         (x - half, y + half),
                         (x + half, y - half),
@@ -5888,16 +6063,50 @@ class GameplayScene(BaseScene):
 
         if profiler_enabled:
             profiler.start("overlay_composite")
-        screen.blit(
-            approach_overlay,
-            self.overlay_dirty_rect,
-            self.overlay_dirty_rect
+        layer_batch = self.render_backend.create_batch()
+        layer_names = []
+        if approach_layer_used:
+            layer_names.append("approach")
+        if slider_paths_layer_used:
+            layer_names.append("slider_paths")
+        if hitobjects_layer_used:
+            layer_names.append("hitobjects")
+        if followpoints_layer_used:
+            layer_names.append("followpoints")
+        if indicators_layer_used:
+            layer_names.append("indicators")
+        self.render_layers.composite(
+            screen,
+            layer_names,
+            rect=self.overlay_dirty_rect,
+            batch=layer_batch,
+            atlas_key_prefix="gameplay_layer"
         )
-        screen.blit(
-            overlay,
-            self.overlay_dirty_rect,
-            self.overlay_dirty_rect
-        )
+        layer_command_count = len(layer_batch)
+        gpu_layers_used = False
+        if self._can_queue_gameplay_layers_to_gpu():
+            queue_layers = getattr(
+                self.render_backend,
+                "queue_present_layer_batch",
+                None
+            )
+            try:
+                gpu_layers_used = bool(queue_layers(layer_batch))
+            except Exception:
+                gpu_layers_used = False
+        if not gpu_layers_used:
+            self.render_backend.flush_batch(layer_batch)
+        if profiler_enabled:
+            profiler.set_metric("frame_layers", len(layer_names))
+            profiler.set_metric("gpu_gameplay_layers", int(gpu_layers_used))
+            profiler.set_metric(
+                "layer_cmds",
+                layer_command_count
+            )
+            profiler.set_metric(
+                "layer_runs",
+                getattr(layer_batch, "last_atlas_run_count", 0)
+            )
         if profiler_enabled:
             profiler.end("overlay_composite")
 
@@ -6171,6 +6380,14 @@ class GameplayScene(BaseScene):
         screen.blit(text, rect)
 
     def destroy(self):
+
+        self.background_load_future = None
+        if self.background_load_executor is not None:
+            self.background_load_executor.shutdown(
+                wait=False,
+                cancel_futures=True
+            )
+            self.background_load_executor = None
 
         if self.slider_cache_executor is not None:
             self.slider_cache_executor.shutdown(

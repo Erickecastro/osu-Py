@@ -72,12 +72,23 @@ class CursorRenderer:
         if len(live_trail) > self.trail_max_points:
             del live_trail[:-self.trail_max_points]
 
-    def draw(self, screen, pos=None, draw_trail=True, backend=None):
+    def draw(
+        self,
+        screen,
+        pos=None,
+        draw_trail=True,
+        backend=None,
+        post_present=False
+    ):
         if pos is not None:
             self.pos = pos
 
         if draw_trail:
-            self._draw_trail(screen, backend=backend)
+            self._draw_trail(
+                screen,
+                backend=backend,
+                post_present=post_present
+            )
 
         self._blit_centered(
             screen,
@@ -86,10 +97,11 @@ class CursorRenderer:
             alpha=None,
             scale=self.cursor_base_scale * self.user_scale,
             backend=backend,
-            atlas_key=("cursor", "main")
+            atlas_key=("cursor", "main"),
+            post_present=post_present
         )
 
-    def _draw_trail(self, screen, backend=None):
+    def _draw_trail(self, screen, backend=None, post_present=False):
         for entry in self.trail:
             entry_pos, entry_age = entry
             progress = self._clamp01(
@@ -110,7 +122,8 @@ class CursorRenderer:
                 alpha=alpha,
                 scale=self.trail_base_scale * self.user_scale * scale,
                 backend=backend,
-                atlas_key=("cursor", "trail")
+                atlas_key=("cursor", "trail"),
+                post_present=post_present
             )
 
     def _load_asset(self, filename):
@@ -127,7 +140,8 @@ class CursorRenderer:
         alpha=255,
         scale=1.0,
         backend=None,
-        atlas_key=None
+        atlas_key=None,
+        post_present=False
     ):
         if image is None:
             return
@@ -167,6 +181,15 @@ class CursorRenderer:
                     render_image.get_width(),
                     render_image.get_height()
                 )
+            if post_present:
+                queue = getattr(backend, "queue_post_present_surface", None)
+                if callable(queue) and queue(
+                    render_image,
+                    rect,
+                    alpha=alpha,
+                    atlas_key=key
+                ):
+                    return
             backend.blit_surface(
                 render_image,
                 rect,

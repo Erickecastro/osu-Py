@@ -20,6 +20,41 @@ class DisplayConfigTests(unittest.TestCase):
         with patch("core.game.FULLSCREEN_MODE", "exclusive"):
             self.assertEqual(Game._fullscreen_mode(game), "exclusive")
 
+    def test_opengl_window_is_opt_in_while_texture_bridge_is_experimental(self):
+        game = object.__new__(Game)
+        game.opengl_window_failed = False
+
+        with patch.dict(
+            "os.environ",
+            {
+                "PYOSU_ENABLE_OPENGL_WINDOW": "",
+                "PYOSU_FORCE_MODERNGL": "",
+                "PYOSU_DISABLE_OPENGL_WINDOW": "",
+                "PYOSU_DISABLE_MODERNGL": "",
+            },
+            clear=False
+        ):
+            self.assertFalse(Game._should_use_opengl_window(game))
+            self.assertEqual(
+                game.opengl_window_status,
+                "disabled_window_default"
+            )
+
+    def test_opengl_window_opt_in_checks_moderngl_availability(self):
+        game = object.__new__(Game)
+        game.opengl_window_failed = False
+
+        with patch.dict(
+            "os.environ",
+            {"PYOSU_ENABLE_OPENGL_WINDOW": "1"},
+            clear=False
+        ), patch.dict(
+            "sys.modules",
+            {"moderngl": object()}
+        ):
+            self.assertTrue(Game._should_use_opengl_window(game))
+            self.assertEqual(game.opengl_window_status, "ready")
+
 
 if __name__ == "__main__":
     unittest.main()

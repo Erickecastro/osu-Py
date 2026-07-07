@@ -175,7 +175,8 @@ py -3.12 main.py
 - `PYOSU_BUSY_FRAME_PACER=1`: uses `tick_busy_loop`, reducing frame-time variance at the cost of higher CPU usage.
 - `PYOSU_FULLSCREEN_MODE`: controls fullscreen presentation. The default is `desktop`/borderless, which keeps the monitor desktop refresh mode. Use `exclusive` only when you explicitly want SDL to switch display modes.
 - `PYOSU_LOW_LATENCY_RENDER=1`: enables the low-latency render path and keeps the frame pipeline lighter.
-- `PYOSU_FORCE_MODERNGL=1`: forces the optional ModernGL backend when the OpenGL context is available.
+- `PYOSU_ENABLE_OPENGL_WINDOW=1`: enables the experimental OpenGL presentation window. Keep this off for normal play until the FBO/GPU renderer path is complete.
+- `PYOSU_FORCE_MODERNGL=1`: forces the optional ModernGL/OpenGL path when the context is available.
 - `PYOSU_DISABLE_MODERNGL=1`: forces the safe Pygame backend for diagnostics.
 
 ## Building the Windows Executable

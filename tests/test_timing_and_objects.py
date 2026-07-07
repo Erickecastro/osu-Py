@@ -217,7 +217,7 @@ class TimingAndObjectTests(unittest.TestCase):
 
         self.assertGreater(scene._fade_in_progress(note), 0.50)
 
-    def test_music_sync_drift_slews_without_large_visual_jump(self):
+    def test_music_sync_uses_audio_clock_as_authoritative_time(self):
         scene = object.__new__(GameplayScene)
         scene.start_time = 0.0
         scene.current_time = 1000.0
@@ -242,13 +242,14 @@ class TimingAndObjectTests(unittest.TestCase):
             return_value=True
         ):
             scene._update_music_sync(tick_ms=1000.0)
-            self.assertLess(scene.music_sync_correction_ms, 1.0)
+            self.assertEqual(scene.music_sync_correction_ms, 60.0)
             self.assertEqual(scene.music_sync_target_correction_ms, 60.0)
-            self.assertLess(scene.current_time, 1002.0)
+            self.assertEqual(scene.current_time, 1060.0)
 
+            scene._mixer_music_time = lambda: 1076.0
             scene._update_music_sync(tick_ms=1016.0)
-            self.assertLess(scene.music_sync_correction_ms, 5.0)
-            self.assertLess(scene.current_time, 1022.0)
+            self.assertEqual(scene.music_sync_correction_ms, 60.0)
+            self.assertEqual(scene.current_time, 1076.0)
 
     def test_startup_cache_mask_blocks_until_critical_assets_are_ready(self):
         scene = object.__new__(GameplayScene)

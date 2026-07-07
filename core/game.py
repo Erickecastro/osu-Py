@@ -1,3 +1,5 @@
+import os
+
 import pygame
 import pygame_gui
 
@@ -64,6 +66,11 @@ class Game:
         # -------------------------
         self.fullscreen = True
         self.window_mode = "unknown"
+        self.display_surface = None
+        self.opengl_window_active = False
+        self.opengl_window_failed = False
+        self.opengl_window_status = "not_checked"
+        self.opengl_backend_status = "not_checked"
 
         self.create_window()
         self.display_refresh_rate = self._detect_display_refresh_rate()
@@ -103,7 +110,8 @@ class Game:
         self.gameplay_dim = clamp_gameplay_dim(self.settings.gameplay_dim)
         self.cursor_renderer = CursorRenderer(user_scale=self.cursor_scale)
         self._last_cursor_scene = None
-        self.render_backend = create_render_backend(self.screen)
+        self.render_backend = None
+        self._recreate_render_backend()
         pygame.mouse.set_visible(False)
         pygame.event.set_blocked(pygame.MOUSEMOTION)
         self.mouse_motion_blocked = True
@@ -207,7 +215,58 @@ class Game:
         height = int(getattr(info, "current_h", 0) or 720)
         return width, height
 
-    def create_window(self):
+    def _env_flag_enabled(self, name):
+        value = os.environ.get(name, "")
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+
+    def _should_use_opengl_window(self):
+        if self._env_flag_enabled("PYOSU_DISABLE_OPENGL_WINDOW"):
+            self.opengl_window_status = "disabled_window_env"
+            return False
+        if self._env_flag_enabled("PYOSU_DISABLE_MODERNGL"):
+            self.opengl_window_status = "disabled_moderngl_env"
+            return False
+        if not (
+            self._env_flag_enabled("PYOSU_ENABLE_OPENGL_WINDOW")
+            or self._env_flag_enabled("PYOSU_FORCE_MODERNGL")
+        ):
+            self.opengl_window_status = "disabled_window_default"
+            return False
+        if self.opengl_window_failed and not self._env_flag_enabled("PYOSU_FORCE_MODERNGL"):
+            self.opengl_window_status = "previous_failure"
+            return False
+        try:
+            import moderngl  # type: ignore  # noqa: F401
+        except ImportError:
+            self.opengl_window_status = "missing_moderngl"
+            return False
+        self.opengl_window_status = "ready"
+        return True
+
+    def _configure_opengl_attributes(self):
+        attributes = (
+            ("GL_CONTEXT_MAJOR_VERSION", 3),
+            ("GL_CONTEXT_MINOR_VERSION", 3),
+            ("GL_DOUBLEBUFFER", 1),
+            ("GL_DEPTH_SIZE", 0),
+        )
+        for name, value in attributes:
+            attr = getattr(pygame, name, None)
+            if attr is None:
+                continue
+            try:
+                pygame.display.gl_set_attribute(attr, value)
+            except pygame.error:
+                pass
+
+    def _create_frame_surface(self, size):
+        size = (max(1, int(size[0])), max(1, int(size[1])))
+        try:
+            return pygame.Surface(size).convert()
+        except pygame.error:
+            return pygame.Surface(size)
+
+    def create_window(self, force_pygame=False):
         previous_window_mode = getattr(self, "window_mode", "unknown")
         flags = pygame.DOUBLEBUF
 
@@ -236,6 +295,62 @@ class Game:
                 except pygame.error:
                     pass
 
+        self.opengl_window_active = False
+        use_opengl = (not force_pygame) and self._should_use_opengl_window()
+        if use_opengl:
+            attempts = [
+                (size, flags | pygame.OPENGL, self.window_mode, "primary")
+            ]
+            if self.fullscreen and self.window_mode in {"desktop", "exclusive"}:
+                attempts.append(
+                    (
+                        self._desktop_size(),
+                        pygame.DOUBLEBUF | pygame.NOFRAME | pygame.OPENGL,
+                        "borderless",
+                        "borderless_retry"
+                    )
+                )
+
+            last_error = None
+            for attempt_size, attempt_flags, attempt_mode, label in attempts:
+                try:
+                    self._configure_opengl_attributes()
+                    display_surface = pygame.display.set_mode(
+                        attempt_size,
+                        attempt_flags,
+                        vsync=0,
+                        depth=32
+                    )
+                    self.display_surface = display_surface
+                    self.opengl_window_active = True
+                    self.opengl_window_status = (
+                        "active"
+                        if label == "primary"
+                        else f"active:{label}"
+                    )
+                    self.window_mode = attempt_mode
+                    self.screen = self._create_frame_surface(
+                        display_surface.get_size()
+                    )
+                    pygame.display.set_caption("PyOsu")
+                    self.WIDTH = self.screen.get_width()
+                    self.HEIGHT = self.screen.get_height()
+                    return
+                except (pygame.error, TypeError) as exc:
+                    last_error = exc
+                    try:
+                        pygame.display.quit()
+                        pygame.display.init()
+                    except pygame.error:
+                        pass
+
+            self.opengl_window_failed = True
+            self.opengl_window_status = (
+                f"window_error:{type(last_error).__name__}"
+                if last_error is not None
+                else "window_error:unknown"
+            )
+
         try:
             self.screen = pygame.display.set_mode(
                 size,
@@ -248,11 +363,56 @@ class Game:
                 size,
                 flags
             )
+        self.display_surface = self.screen
         pygame.display.set_caption("PyOsu")
 
         self.WIDTH = self.screen.get_width()
 
         self.HEIGHT = self.screen.get_height()
+
+    def _attach_backend_to_current_scene(self):
+        scene_manager = getattr(self, "scene_manager", None)
+        current_scene = getattr(scene_manager, "current_scene", None)
+        if current_scene is not None and hasattr(current_scene, "render_backend"):
+            current_scene.render_backend = self.render_backend
+
+    def _recreate_render_backend(self):
+        self.render_backend = create_render_backend(
+            self.screen,
+            present_frame_surface=self.opengl_window_active
+        )
+        self.opengl_backend_status = "pygame"
+        if (
+            self.opengl_window_active
+            and not bool(getattr(self.render_backend, "_enabled", False))
+        ):
+            self.opengl_window_failed = True
+            self.opengl_backend_status = "backend_disabled"
+            self.create_window(force_pygame=True)
+            self.render_backend = create_render_backend(
+                self.screen,
+                present_frame_surface=False
+            )
+        elif self.opengl_window_active:
+            self.opengl_backend_status = "active"
+        self._attach_backend_to_current_scene()
+
+    def _fallback_to_pygame_window(self):
+        if not self.opengl_window_active:
+            return
+        self.opengl_window_failed = True
+        self.opengl_window_status = "runtime_fallback"
+        self.opengl_backend_status = "runtime_fallback"
+        self.create_window(force_pygame=True)
+        self._recreate_render_backend()
+        self.display_refresh_rate = self._detect_display_refresh_rate()
+        self.FPS = self._resolve_target_fps()
+        self.mouse_pos = self._clamp_mouse_pos(self.mouse_pos)
+        self.ui_manager = pygame_gui.UIManager(
+            (self.WIDTH, self.HEIGHT)
+        )
+        self._notify_resize()
+        self.sync_input_mode(self.mouse_pos)
 
     # -------------------------
     # TOGGLE FULLSCREEN
@@ -262,7 +422,7 @@ class Game:
         self.fullscreen = not self.fullscreen
 
         self.create_window()
-        self._sync_render_backend_target()
+        self._recreate_render_backend()
         self.display_refresh_rate = self._detect_display_refresh_rate()
         self.FPS = self._resolve_target_fps()
         self.mouse_pos = self._clamp_mouse_pos(self.mouse_pos)
@@ -328,6 +488,7 @@ class Game:
                 setter(self.screen)
             else:
                 backend.target_surface = self.screen
+        self._attach_backend_to_current_scene()
 
     def _notify_resize(self):
         if hasattr(self.scene_manager, "on_resize"):
@@ -353,11 +514,18 @@ class Game:
                 current_scene.on_resize()
 
     def _sync_display_size(self):
-        size = self.screen.get_size()
+        display_surface = (
+            self.display_surface
+            if self.opengl_window_active and self.display_surface is not None
+            else self.screen
+        )
+        size = display_surface.get_size()
         if size == (self.WIDTH, self.HEIGHT):
             return
 
         self.WIDTH, self.HEIGHT = size
+        if self.opengl_window_active:
+            self.screen = self._create_frame_surface(size)
         self._sync_render_backend_target()
         self.mouse_pos = self._clamp_mouse_pos(self.mouse_pos)
         self.ui_manager = pygame_gui.UIManager(size)
@@ -784,6 +952,9 @@ class Game:
             begin_frame = getattr(backend, "begin_frame", None)
             if callable(begin_frame):
                 begin_frame()
+            warm_gpu = getattr(backend, "warm_gpu_surface_cache", None)
+            if callable(warm_gpu):
+                warm_gpu(max_items=2)
 
         if clear_for_transition:
             self.screen.fill((0, 0, 0))
@@ -793,32 +964,38 @@ class Game:
         self.scene_manager.render(
             self.screen
         )
-        if backend is not None:
-            if profiler_enabled:
-                self.profiler.start("backend_present")
-            backend.present()
-            if profiler_enabled:
-                self.profiler.end("backend_present")
-            if profiler_enabled:
-                self.profiler.set_metric("backend", getattr(backend, "name", "pygame"))
-                self.profiler.set_metric("gpu", int(bool(getattr(backend, "gpu_available", False))))
-                self.profiler.set_metric("batch", getattr(backend, "last_flush_count", 0))
-                self.profiler.set_metric("surfaces", getattr(backend, "last_unique_surface_count", 0))
-                self.profiler.set_metric("culled", getattr(backend, "last_culled_count", 0))
-                self.profiler.set_metric("atlas_pages", getattr(backend, "last_atlas_pages", 0))
-                self.profiler.set_metric("atlas_sprites", getattr(backend, "last_atlas_sprites", 0))
-                self.profiler.set_metric("atlas_cmds", getattr(backend, "last_atlas_command_count", 0))
-                self.profiler.set_metric("atlas_groups", getattr(backend, "last_atlas_group_count", 0))
-                self.profiler.set_metric("atlas_runs", getattr(backend, "last_atlas_run_count", 0))
-                self.profiler.set_metric("batchable", getattr(backend, "last_batchable_command_count", 0))
-                self.profiler.set_metric("gpu_sprites", getattr(backend, "last_gpu_sprite_count", 0))
-                self.profiler.set_metric("gpu_flushes", getattr(backend, "last_gpu_flush_count", 0))
-                self.profiler.set_metric("gpu_uploads", getattr(backend, "last_gpu_texture_upload_count", 0))
-                self.profiler.set_metric("gpu_fallbacks", getattr(backend, "last_gpu_fallback_count", 0))
-                self.profiler.set_metric("gpu_sprite_path", int(bool(getattr(backend, "_gpu_sprite_enabled", False))))
-                self.profiler.set_metric("hz", self.display_refresh_rate or 0)
-                self.profiler.set_metric("target", self.FPS)
-                self.profiler.set_metric("mode", self.window_mode)
+        if backend is not None and profiler_enabled:
+            self.profiler.set_metric("backend", getattr(backend, "name", "pygame"))
+            self.profiler.set_metric("gpu", int(bool(getattr(backend, "gpu_available", False))))
+            self.profiler.set_metric("batch", getattr(backend, "last_flush_count", 0))
+            self.profiler.set_metric("surfaces", getattr(backend, "last_unique_surface_count", 0))
+            self.profiler.set_metric("culled", getattr(backend, "last_culled_count", 0))
+            self.profiler.set_metric("atlas_pages", getattr(backend, "last_atlas_pages", 0))
+            self.profiler.set_metric("atlas_sprites", getattr(backend, "last_atlas_sprites", 0))
+            self.profiler.set_metric("atlas_cmds", getattr(backend, "last_atlas_command_count", 0))
+            self.profiler.set_metric("atlas_groups", getattr(backend, "last_atlas_group_count", 0))
+            self.profiler.set_metric("atlas_runs", getattr(backend, "last_atlas_run_count", 0))
+            self.profiler.set_metric("batchable", getattr(backend, "last_batchable_command_count", 0))
+            self.profiler.set_metric("gpu_sprites", getattr(backend, "last_gpu_sprite_count", 0))
+            self.profiler.set_metric("gpu_flushes", getattr(backend, "last_gpu_flush_count", 0))
+            self.profiler.set_metric("gpu_uploads", getattr(backend, "last_gpu_texture_upload_count", 0))
+            self.profiler.set_metric("gpu_fallbacks", getattr(backend, "last_gpu_fallback_count", 0))
+            self.profiler.set_metric("gpu_prepare", getattr(backend, "last_gpu_prepare_count", 0))
+            self.profiler.set_metric("gpu_prepq", getattr(backend, "last_gpu_prepare_pending", 0))
+            self.profiler.set_metric("gpu_layers", getattr(backend, "last_present_layer_count", 0))
+            self.profiler.set_metric("gpu_sprite_path", int(bool(getattr(backend, "_gpu_sprite_enabled", False))))
+            self.profiler.set_metric("opengl_window", int(bool(self.opengl_window_active)))
+            self.profiler.set_metric(
+                "opengl_status",
+                getattr(self, "opengl_window_status", "unknown")
+            )
+            self.profiler.set_metric(
+                "opengl_backend",
+                getattr(self, "opengl_backend_status", "unknown")
+            )
+            self.profiler.set_metric("hz", self.display_refresh_rate or 0)
+            self.profiler.set_metric("target", self.FPS)
+            self.profiler.set_metric("mode", self.window_mode)
         if profiler_enabled:
             self.profiler.end("scene_render")
 
@@ -852,14 +1029,61 @@ class Game:
             loading_transition = bool(
                 getattr(self.scene_manager, "is_cursor_trail_suppressed", lambda: False)()
             )
+            post_present_cursor = bool(
+                self.opengl_window_active
+                and backend is not None
+                and bool(getattr(backend, "present_frame_surface", False))
+                and getattr(backend, "_post_present_renderer", None) is not None
+            )
             self.cursor_renderer.draw(
                 self.screen,
                 self.mouse_pos,
                 draw_trail=not loading_transition,
-                backend=backend
+                backend=backend,
+                post_present=post_present_cursor
             )
             if profiler_enabled:
                 self.profiler.end("cursor_draw")
+
+        if backend is not None:
+            if profiler_enabled:
+                self.profiler.start("backend_present")
+            backend.present()
+            if profiler_enabled:
+                self.profiler.end("backend_present")
+                self.profiler.set_metric(
+                    "gpu_post",
+                    getattr(backend, "last_post_present_count", 0)
+                )
+                self.profiler.set_metric(
+                    "gpu_layers",
+                    getattr(backend, "last_present_layer_count", 0)
+                )
+                self.profiler.set_metric(
+                    "gpu_sprites",
+                    getattr(backend, "last_gpu_sprite_count", 0)
+                )
+                self.profiler.set_metric(
+                    "gpu_flushes",
+                    getattr(backend, "last_gpu_flush_count", 0)
+                )
+                self.profiler.set_metric(
+                    "gpu_uploads",
+                    getattr(backend, "last_gpu_texture_upload_count", 0)
+                )
+                self.profiler.set_metric(
+                    "gpu_prepare",
+                    getattr(backend, "last_gpu_prepare_count", 0)
+                )
+                self.profiler.set_metric(
+                    "gpu_prepq",
+                    getattr(backend, "last_gpu_prepare_pending", 0)
+                )
+            if (
+                self.opengl_window_active
+                and not bool(getattr(backend, "_enabled", True))
+            ):
+                self._fallback_to_pygame_window()
 
         if profiler_enabled:
             self.profiler.start("flip")
