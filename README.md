@@ -303,11 +303,11 @@ py -3.12 main.py
 ## Known Limitations
 
 - `.osu` compatibility currently covers the gameplay systems implemented by the project.
-- `.osb` storyboards may exist in beatmap folders, but there is no complete storyboard system yet.
-- Online osu! services, login, multiplayer, and official score submission are not implemented.
-- The project does not implement every official osu! mode, rule, mod, or online system.
+- `.osb` storyboards may exist in beatmap folders, but there is no complete storyboard system.
+- Online osu! services, login, multiplayer, and official score submission are not implemented. 
+- The project does not implement every official osu! modes, rule, mod, or online system.
 - Some skin/beatmap PNGs may emit `libpng warning: iCCP: known incorrect sRGB profile`; this usually does not affect gameplay.
 
-## License and Disclaimer
+## Disclaimer
 
 This project is fan-made, educational, and non-commercial. It is not affiliated with, endorsed by, or associated with the official osu! game, its developers, or its publishers.
